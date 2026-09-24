@@ -7,12 +7,12 @@
     <parent>
         <groupId>io.github.yuku123</groupId>
         <artifactId>z-bot</artifactId>
-        <version>0.1.0</version>
+        <version>0.2.0</version>
     </parent>
 
     <groupId>io.github.yuku123</groupId>
     <artifactId>z-bot-core</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
 
     <name>z-bot-core</name>
@@ -63,7 +63,11 @@
             <artifactId>z-agent-kernel-formatter</artifactId>
         </dependency>
 
-        <!-- LLM HTTP client (kernel-llm 内部已经引 OkHttp, 这里 transitive 复用) -->
+        <!-- LLM HTTP client (kernel-llm 内部已经引 OkHttp, 这里显式声明供 BotCenterClient 复用) -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -72,8 +76,16 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
+        <!-- 应用侧日志实现：只引 api 会让可执行 jar 启动时打 "NOP logger" 警告。
+             optional 保证它不进传递依赖，把 z-bot-core 当库用的工程仍用自己的绑定。 -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>runtime</scope>
+            <optional>true</optional>
+        </dependency>
 
-        <!-- CLI 命令解析 (轻量, 避免 picocli 这种重依赖) -->
+        <!-- CLI 命令解析 -->
         <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>

@@ -7,12 +7,12 @@
     <parent>
         <groupId>io.github.yuku123</groupId>
         <artifactId>z-bot</artifactId>
-        <version>0.1.0</version>
+        <version>0.2.0</version>
     </parent>
 
     <groupId>io.github.yuku123</groupId>
     <artifactId>z-bot-desktop-packager</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>pom</packaging>
 
     <name>z-bot-desktop-packager</name>
@@ -38,7 +38,7 @@
                 <configuration>
                     <skip>${jpackage.skip}</skip>
                     <appName>z-bot</appName>
-                    <appVersion>0.1.0</appVersion>
+                    <appVersion>0.2.0</appVersion>
                     <vendor>z-team</vendor>
                     <destination>dist</destination>
                     <input>${project.basedir}/../z-bot-core/target</input>

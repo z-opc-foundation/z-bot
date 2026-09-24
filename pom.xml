@@ -57,12 +57,18 @@
     </modules>
 
     <properties>
-        <revision>0.1.0</revision>
+        <revision>0.2.0</revision>
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <z-agent-kernel.version>${revision}</z-agent-kernel.version>
+        <!--
+            kernel 版本独立于 z-bot 自身 revision: z-bot 是 kernel 的消费方,
+            必须跟 kernel 的发布线走 (0.1.1 起 kernel-tool 才带 ToolArguments).
+        -->
+        <z-agent-kernel.version>0.1.1</z-agent-kernel.version>
+        <okhttp.version>4.12.0</okhttp.version>
+        <jackson.version>2.13.5</jackson.version>
     </properties>
 
     <dependencyManagement>
@@ -123,6 +129,21 @@
                 <groupId>io.github.yuku123</groupId>
                 <artifactId>z-agent-kernel-formatter</artifactId>
                 <version>${z-agent-kernel.version}</version>
+            </dependency>
+
+            <!--
+                kernel-llm 内部引 okhttp 4.12.0; z-bot 的 BotCenterClient 也直接用 okhttp,
+                显式 pin 同一版本, 避免 spring-boot-dependencies 的 4.9.x 就近覆盖.
+            -->
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp</artifactId>
+                <version>${okhttp.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${jackson.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
