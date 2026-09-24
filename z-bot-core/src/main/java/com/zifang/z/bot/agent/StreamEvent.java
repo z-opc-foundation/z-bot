@@ -32,6 +32,8 @@ public abstract class StreamEvent {
         FINAL_DELTA,
         /** agent 结束（终止标记） */
         DONE,
+        /** 用户 steer 插话被注入消息流 */
+        STEER,
         /** 不可恢复错误 */
         ERROR
     }
@@ -159,6 +161,24 @@ public abstract class StreamEvent {
         @Override
         public String toString() {
             return "Done(steps=" + totalSteps + ", replyLen=" + reply.length() + ")";
+        }
+    }
+
+    public static final class SteerInjected extends StreamEvent {
+        public final String text;
+
+        public SteerInjected(String text) {
+            this.text = text == null ? "" : text;
+        }
+
+        @Override
+        public Kind kind() {
+            return Kind.STEER;
+        }
+
+        @Override
+        public String toString() {
+            return "SteerInjected(" + text + ")";
         }
     }
 

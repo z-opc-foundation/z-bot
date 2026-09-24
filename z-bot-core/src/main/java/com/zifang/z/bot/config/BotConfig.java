@@ -2,8 +2,10 @@ package com.zifang.z.bot.config;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
@@ -32,9 +34,19 @@ public final class BotConfig {
     private String model;
     private int maxSteps = 50;
     private int maxTokens = 8192;
+    /** 整个会话轮的累计 token 预算（kernel IterationBudget 口径），与单次请求的 maxTokens 区分。 */
+    private long tokenBudget = 400_000L;
     private double temperature = 0.7;
     private String toolChoice = "required";
     private String execConfirmMode = "dangerous";
+    /** exec 免确认命令前缀白名单（用户逐条授权的持久化产物，来自 agent.exec.confirm.whitelist）。 */
+    private List<String> execConfirmWhitelist = new ArrayList<String>();
+    /** LLM 调用可重试错误（429/5xx/超时）的额外重试次数。 */
+    private int retryMaxAttempts = 2;
+    /** 重试退避基数（毫秒），第 n 次重试等待 backoff * n。 */
+    private long retryBackoffMs = 1000L;
+    /** 主模型重试耗尽后的降级模型 id 列表（llm.fallback.models，逗号分隔）。 */
+    private List<String> fallbackModels = new ArrayList<String>();
     private String centerUrl;
     private String appCode = "default-chat";
     private boolean loaded;
@@ -100,6 +112,10 @@ public final class BotConfig {
         if (!maxTokens.isEmpty()) {
             this.maxTokens = parseInt(maxTokens, this.maxTokens);
         }
+        String tokenBudget = trim(props.getProperty("agent.token.budget"));
+        if (!tokenBudget.isEmpty()) {
+            this.tokenBudget = parseLong(tokenBudget, this.tokenBudget);
+        }
         String temperature = trim(props.getProperty("agent.temperature"));
         if (!temperature.isEmpty()) {
             this.temperature = parseDouble(temperature, this.temperature);
@@ -112,6 +128,16 @@ public final class BotConfig {
         if (!execConfirm.isEmpty()) {
             this.execConfirmMode = execConfirm;
         }
+        this.execConfirmWhitelist = splitList(props.getProperty("agent.exec.confirm.whitelist"));
+        String retryMax = trim(props.getProperty("llm.retry.max"));
+        if (!retryMax.isEmpty()) {
+            this.retryMaxAttempts = parseInt(retryMax, this.retryMaxAttempts);
+        }
+        String retryBackoff = trim(props.getProperty("llm.retry.backoff.ms"));
+        if (!retryBackoff.isEmpty()) {
+            this.retryBackoffMs = parseLong(retryBackoff, this.retryBackoffMs);
+        }
+        this.fallbackModels = splitList(props.getProperty("llm.fallback.models"));
         this.centerUrl = trim(props.getProperty("center.url"));
         String appCode = trim(props.getProperty("center.app.code"));
         if (!appCode.isEmpty()) {
@@ -238,6 +264,10 @@ public final class BotConfig {
         return maxTokens;
     }
 
+    public long getTokenBudget() {
+        return tokenBudget;
+    }
+
     public double getTemperature() {
         return temperature;
     }
@@ -249,6 +279,27 @@ public final class BotConfig {
     /** {@code agent.exec.confirm}：off / dangerous / all，决定 exec 工具何时要求人工确认。 */
     public String getExecConfirmMode() {
         return execConfirmMode;
+    }
+
+    public List<String> getExecConfirmWhitelist() {
+        return Collections.unmodifiableList(execConfirmWhitelist);
+    }
+
+    public void setExecConfirmWhitelist(List<String> whitelist) {
+        this.execConfirmWhitelist = whitelist == null
+                ? new ArrayList<String>() : new ArrayList<String>(whitelist);
+    }
+
+    public int getRetryMaxAttempts() {
+        return retryMaxAttempts;
+    }
+
+    public long getRetryBackoffMs() {
+        return retryBackoffMs;
+    }
+
+    public List<String> getFallbackModels() {
+        return Collections.unmodifiableList(fallbackModels);
     }
 
     public void setToolChoice(String toolChoice) {
@@ -300,6 +351,25 @@ public final class BotConfig {
         } catch (NumberFormatException e) {
             return d;
         }
+    }
+
+    private static long parseLong(String v, long d) {
+        try {
+            return Long.parseLong(v);
+        } catch (NumberFormatException e) {
+            return d;
+        }
+    }
+
+    /** 逗号分隔列表 → List<String>（trim、去空）。 */
+    private static List<String> splitList(String v) {
+        List<String> out = new ArrayList<String>();
+        for (String s : trim(v).split(",")) {
+            if (!s.trim().isEmpty()) {
+                out.add(s.trim());
+            }
+        }
+        return out;
     }
 
     private static double parseDouble(String v, double d) {

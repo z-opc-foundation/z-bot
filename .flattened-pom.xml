@@ -66,7 +66,7 @@
             kernel 版本独立于 z-bot 自身 revision: z-bot 是 kernel 的消费方,
             必须跟 kernel 的发布线走 (0.1.1 起 kernel-tool 才带 ToolArguments).
         -->
-        <z-agent-kernel.version>0.1.1</z-agent-kernel.version>
+        <z-agent-kernel.version>0.2.0</z-agent-kernel.version>
         <okhttp.version>4.12.0</okhttp.version>
         <jackson.version>2.13.5</jackson.version>
     </properties>
@@ -123,6 +123,11 @@
             <dependency>
                 <groupId>io.github.yuku123</groupId>
                 <artifactId>z-agent-kernel-workspace</artifactId>
+                <version>${z-agent-kernel.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-agent-kernel-agent</artifactId>
                 <version>${z-agent-kernel.version}</version>
             </dependency>
             <dependency>

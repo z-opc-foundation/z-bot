@@ -2,6 +2,9 @@ package com.zifang.z.bot.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.z.agent.kernel.agent.AgentContext;
+import com.zifang.z.agent.kernel.agent.InterruptFlag;
+import com.zifang.z.agent.kernel.agent.IterationBudget;
 import com.zifang.z.agent.kernel.llm.ChatCompletionsRequest;
 import com.zifang.z.agent.kernel.llm.ChatCompletionsResponse;
 import com.zifang.z.agent.kernel.llm.LlmProvider;
@@ -12,6 +15,7 @@ import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
 import com.zifang.z.bot.llm.LlmRouter;
+import com.zifang.z.bot.llm.ResilientLlmProvider;
 import com.zifang.z.bot.session.SessionManager;
 import com.zifang.z.bot.tool.BuiltinTools;
 import com.zifang.z.bot.tool.Confirmations;
@@ -27,6 +31,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -77,7 +85,11 @@ public class BotAgent {
     private final double temperature;
 
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private volatile boolean stopped;
+    /**
+     * kernel 0.2.0 的显式运行状态：预算 / 中断 / steer 队列都在这里。
+     * 中断是协作式的 — 只在迭代与工具边界经 {@code checkpoint()} 生效。
+     */
+    private final AgentContext context;
     /** 被 {@link ToolConfirmationNeeded} 暂停的那次调用；确认后要用它回灌 tool 结果。 */
     private volatile ToolCall pendingConfirmation;
 
@@ -93,7 +105,9 @@ public class BotAgent {
         this.maxTokens = b.maxTokens;
         this.temperature = b.temperature;
         this.memory = new ConversationMemory(buildSystemPrompt(b.systemPrompt, b.toolkit));
-        this.provider = b.provider != null ? b.provider : LlmRouter.create(b.config.activeProvider());
+        this.context = AgentContext.root(new IterationBudget(b.maxSteps, b.tokenBudget));
+        this.provider = b.provider != null ? Builder.wrapResilient(b.provider, b.config)
+                : Builder.wrapResilient(LlmRouter.create(b.config.activeProvider()), b.config);
 
         if (centerClient != null && centerClient.isEnabled()) {
             this.lifecycle = registerAndStartLifecycle(centerClient, b.appCode);
@@ -127,16 +141,16 @@ public class BotAgent {
     /**
      * 阻塞跑完整个 ReAct 循环，事件同步回抛给 {@code listener}。
      *
-     * @return 最终回复；需确认时为 {@code WAIT_CONFIRM:tool|args|reason}；达到步数上限时为提示文案
+     * @return 最终回复；需确认时为 {@code WAIT_CONFIRM:tool|args|reason}；被打断时为「已中止」；预算耗尽时为提示文案
      */
     public String chat(String userMessage, StreamListener listener) {
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("BotAgent 正在运行中");
         }
         StreamListener l = listener == null ? StreamListener.NOOP : listener;
-        stopped = false;
+        context.interrupt().reset();
         pendingConfirmation = null;
-        memory.add(Msg.user(userMessage));
+        memory.add(Msg.user(mergeQueued(userMessage)));
         try {
             String reply = runReActLoop(userMessage, l);
             persistSession();
@@ -146,17 +160,39 @@ public class BotAgent {
             String wait = WAIT_CONFIRM_PREFIX + e.getToolName() + "|" + e.getToolArgs() + "|" + e.getReason();
             persistSession();
             return wait;
+        } catch (InterruptFlag.AgentInterruptedException e) {
+            String aborted = "已中止：" + e.getMessage();
+            listener.onEvent(new StreamEvent.Done(aborted, context.budget().apiCalls(), null, null));
+            persistSession();
+            return aborted;
         } finally {
             running.set(false);
         }
     }
 
+    /** 空闲期间排队的插话（/queue 语义）并入本次用户消息开头。 */
+    private String mergeQueued(String userMessage) {
+        List<String> queued = context.steer().drain();
+        if (queued.isEmpty()) {
+            return userMessage;
+        }
+        StringBuilder sb = new StringBuilder(userMessage == null ? "" : userMessage);
+        for (String q : queued) {
+            sb.append("\n[User queued]: ").append(q);
+        }
+        return sb.toString();
+    }
+
     private String runReActLoop(String userMessage, StreamListener listener) {
-        for (int step = 1; step <= maxSteps; step++) {
+        IterationBudget budget = context.budget();
+        int step = 0;
+        while (budget.canCall()) {
+            maybeAnnounceGrace(budget);
+            budget.onCall();
+            step++;
             listener.onEvent(new StreamEvent.StepStart(step));
-            if (stopped) {
-                return "已中止。";
-            }
+            context.interrupt().checkpoint();
+            injectSteer(listener);
             ChatCompletionsResponse response;
             try {
                 response = provider.chat(buildRequest());
@@ -165,6 +201,7 @@ public class BotAgent {
                 listener.onEvent(new StreamEvent.ErrorEvent(e));
                 return "Error: " + e.getMessage();
             }
+            recordUsage(budget, response);
 
             Msg assistant = response.toAssistantMsg();
             if (!assistant.getToolCalls().isEmpty()) {
@@ -172,21 +209,16 @@ public class BotAgent {
                     listener.onEvent(new StreamEvent.ThoughtDelta(assistant.getContent()));
                 }
                 memory.add(assistant);
-                String terminal = null;
                 for (ToolCall tc : assistant.getToolCalls()) {
                     String name = tc.getName() == null ? "?" : tc.getName();
-                    String argsJson = tc.getArgumentsJson() == null ? "{}" : tc.getArgumentsJson();
                     if ("final_answer".equals(name) || "final".equals(name)) {
-                        terminal = finalAnswerOf(argsJson, assistant.getContent());
+                        String terminal = finalAnswerOf(tc.getArgumentsJson(), assistant.getContent());
                         memory.add(Msg.assistant(terminal));
-                        break;
+                        finish(listener, terminal, step, response);
+                        return terminal;
                     }
-                    executeToolCall(tc, name, argsJson, listener);
                 }
-                if (terminal != null) {
-                    finish(listener, terminal, step, response);
-                    return terminal;
-                }
+                executeBatch(assistant.getToolCalls(), listener);
                 continue;
             }
 
@@ -212,9 +244,44 @@ public class BotAgent {
             finish(listener, content, step, response);
             return content;
         }
-        String exhausted = "已达到最大步数限制(" + maxSteps + ")，请简化您的请求。";
-        listener.onEvent(new StreamEvent.Done(exhausted, maxSteps, null, null));
+        String exhausted = "已达到预算上限(steps=" + budget.apiCalls() + "/" + budget.maxIterations()
+                + ", tokens=" + budget.tokensUsed() + "/" + budget.maxTokens() + ")，请简化您的请求。";
+        listener.onEvent(new StreamEvent.Done(exhausted, budget.apiCalls(), null, null));
         return exhausted;
+    }
+
+    /** 预算耗尽走 grace 通道时给模型的收尾指令（对齐 hermes 的 grace call）。 */
+    private void maybeAnnounceGrace(IterationBudget budget) {
+        boolean underLimits = budget.apiCalls() < budget.maxIterations()
+                && budget.tokensUsed() < budget.maxTokens();
+        if (!underLimits) {
+            memory.add(Msg.user("[system] 预算即将耗尽(steps=" + budget.apiCalls() + "/" + budget.maxIterations()
+                    + ", tokens=" + budget.tokensUsed() + "/" + budget.maxTokens()
+                    + ")，这是最后一次收尾机会：请立即总结当前进展并直接给出面向用户的最终答案，不要再调用工具。"));
+        }
+    }
+
+    private void recordUsage(IterationBudget budget, ChatCompletionsResponse response) {
+        if (response != null && response.getUsage() != null) {
+            budget.recordTokens(response.getUsage().getPromptTokens(), response.getUsage().getCompletionTokens());
+        }
+    }
+
+    /** 运行中排队的用户插话在工具间隙注入消息流（/steer 语义）。 */
+    private void injectSteer(StreamListener listener) {
+        List<String> pending = context.steer().drain();
+        if (pending.isEmpty()) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String p : pending) {
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append("[User steer]: ").append(p);
+        }
+        listener.onEvent(new StreamEvent.SteerInjected(sb.toString()));
+        memory.add(Msg.user(sb.toString()));
     }
 
     private void executeToolCall(ToolCall tc, String name, String argsJson, StreamListener listener) {
@@ -223,15 +290,87 @@ public class BotAgent {
         String callId = tc.getId() == null || tc.getId().isEmpty()
                 ? ("call_" + name + "_" + System.currentTimeMillis()) : tc.getId();
         ToolResult result = toolkit.execute(name, args);
+        emitToolResult(new ToolCall(callId, name, argsJson), result, listener);
+    }
+
+    /** 工具结果回灌记忆 + 回抛事件；需要确认时设置 pendingConfirmation 并抛出暂停信号。 */
+    private void emitToolResult(ToolCall effectiveCall, ToolResult result, StreamListener listener) {
+        String name = effectiveCall.getName();
         if (Confirmations.isRequired(result)) {
-            pendingConfirmation = new ToolCall(callId, name, argsJson);
+            pendingConfirmation = effectiveCall;
             listener.onEvent(new StreamEvent.ToolResult(name, null, Confirmations.reason(result), false));
-            throw new ToolConfirmationNeeded(name, argsJson, Confirmations.reason(result));
+            throw new ToolConfirmationNeeded(name,
+                    effectiveCall.getArgumentsJson() == null ? "{}" : effectiveCall.getArgumentsJson(),
+                    Confirmations.reason(result));
         }
         String output = result.getContent() == null ? "" : result.getContent();
-        memory.add(Msg.toolResult(callId, output));
+        memory.add(Msg.toolResult(effectiveCall.getId(), output));
         listener.onEvent(new StreamEvent.ToolResult(name, output,
                 result.isError() ? output : null, !result.isError()));
+    }
+
+    /**
+     * 一个工具批次调度：批内全部 parallel-safe（只读）才并发执行，否则按原顺序串行。
+     *
+     * <p>并行批次的事件时序保持对 listener 单线程回调：请求事件先按序广播，
+     * 结果在收集阶段按原顺序回灌，避免 SSE/终端渲染交错。</p>
+     */
+    private void executeBatch(List<ToolCall> calls, StreamListener listener) {
+        boolean allParallelSafe = calls.size() > 1;
+        for (ToolCall tc : calls) {
+            if (!toolkit.isParallelSafe(tc.getName())) {
+                allParallelSafe = false;
+                break;
+            }
+        }
+        if (!allParallelSafe) {
+            for (ToolCall tc : calls) {
+                context.interrupt().checkpoint();
+                String name = tc.getName() == null ? "?" : tc.getName();
+                executeToolCall(tc, name,
+                        tc.getArgumentsJson() == null ? "{}" : tc.getArgumentsJson(), listener);
+            }
+            return;
+        }
+
+        for (ToolCall tc : calls) {
+            Map<String, Object> args = parseArgs(tc.getArgumentsJson() == null ? "{}" : tc.getArgumentsJson());
+            listener.onEvent(new StreamEvent.ToolCallRequest(tc.getName(), args, tc.getArgumentsJson()));
+        }
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(calls.size(), 4));
+        try {
+            List<Future<ToolResult>> futures = new ArrayList<Future<ToolResult>>();
+            for (int i = 0; i < calls.size(); i++) {
+                final ToolCall tc = calls.get(i);
+                final Map<String, Object> args =
+                        parseArgs(tc.getArgumentsJson() == null ? "{}" : tc.getArgumentsJson());
+                futures.add(pool.submit(new Callable<ToolResult>() {
+                    @Override
+                    public ToolResult call() {
+                        return toolkit.execute(tc.getName(), args);
+                    }
+                }));
+            }
+            for (int i = 0; i < calls.size(); i++) {
+                ToolCall tc = calls.get(i);
+                String callId = tc.getId() == null || tc.getId().isEmpty()
+                        ? ("call_" + tc.getName() + "_" + System.currentTimeMillis() + "_" + i) : tc.getId();
+                ToolResult result;
+                try {
+                    result = futures.get(i).get();
+                } catch (java.util.concurrent.ExecutionException e) {
+                    result = ToolResult.failure(callId, tc.getName(),
+                            "工具执行失败: " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    result = ToolResult.failure(callId, tc.getName(), "工具执行被中断");
+                }
+                emitToolResult(new ToolCall(callId, tc.getName(),
+                        tc.getArgumentsJson() == null ? "{}" : tc.getArgumentsJson()), result, listener);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     /**
@@ -384,13 +523,35 @@ public class BotAgent {
 
     // ===== 运行时控制 =====
 
+    /**
+     * 协作式软中断：置位 kernel {@link InterruptFlag}，主循环在最近的迭代/工具边界停下，不强杀线程。
+     */
     public void stop() {
-        stopped = true;
+        context.interrupt().request("用户请求停止");
+    }
+
+    public boolean isStopRequested() {
+        return context.interrupt().isInterrupted();
+    }
+
+    /**
+     * 用户插话：agent 运行中时在工具间隙注入（/steer 语义）；空闲时入队，
+     * 下次 {@link #chat} 开头并入用户消息（/queue 语义）。
+     */
+    public void steer(String message) {
+        context.steer().add(message);
+    }
+
+    /** kernel 显式运行状态（预算 / 中断 / steer 队列），供 /usage 与子代理派生使用。 */
+    public AgentContext context() {
+        return context;
     }
 
     public void reset() {
         memory.clear();
-        stopped = false;
+        context.interrupt().reset();
+        context.steer().clear();
+        pendingConfirmation = null;
     }
 
     public boolean isRunning() {
@@ -603,6 +764,7 @@ public class BotAgent {
         private BotCenterClient centerClient;
         private int maxSteps;
         private int maxTokens;
+        private long tokenBudget;
         private double temperature;
         private String systemPrompt;
         private boolean builtinTools = true;
@@ -613,6 +775,7 @@ public class BotAgent {
             this.model = config == null ? "gpt-4o-mini" : config.getModel();
             this.maxSteps = config == null ? 50 : config.getMaxSteps();
             this.maxTokens = config == null ? 8192 : config.getMaxTokens();
+            this.tokenBudget = config == null ? 400_000L : config.getTokenBudget();
             this.temperature = config == null ? 0.7 : config.getTemperature();
         }
 
@@ -686,6 +849,15 @@ public class BotAgent {
             return this;
         }
 
+        /** 配置存在时给 provider 套上重试/降级装饰器；config 为 null（纯测试桩）不包。 */
+        private static LlmProvider wrapResilient(LlmProvider provider, BotConfig config) {
+            if (config == null) {
+                return provider;
+            }
+            return new ResilientLlmProvider(provider, config.getRetryMaxAttempts(),
+                    config.getRetryBackoffMs(), config.getFallbackModels());
+        }
+
         public BotAgent build() {
             if (toolkit == null) {
                 toolkit = new Toolkit();
@@ -696,7 +868,8 @@ public class BotAgent {
             }
             if (builtinTools) {
                 BuiltinTools.registerAll(toolkit, sandbox,
-                        config == null ? null : config.getExecConfirmMode());
+                        config == null ? null : config.getExecConfirmMode(),
+                        config == null ? null : config.getExecConfirmWhitelist());
             }
             if (sessionManager == null) {
                 sessionManager = new SessionManager();

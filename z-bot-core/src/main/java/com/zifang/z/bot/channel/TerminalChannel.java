@@ -5,6 +5,8 @@ import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.session.SessionManager;
+import com.zifang.z.bot.slash.SlashCommand;
+import com.zifang.z.bot.slash.SlashRegistry;
 import com.zifang.z.bot.ui.MarkdownRenderer;
 import com.zifang.z.bot.ui.RawTerminalReader;
 import com.zifang.z.bot.ui.TerminalUI;
@@ -25,6 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class TerminalChannel {
 
     private final BotAgent agent;
+    /** 与 HTTP 通道共享的斜杠命令注册表；终端私有命令（/theme /confirm /exit…）不进表。 */
+    private final SlashRegistry slash = SlashRegistry.withBuiltinCommands();
     private final AtomicInteger stepCount = new AtomicInteger(0);
     private final AtomicInteger tokenEstimate = new AtomicInteger(0);
 
@@ -158,34 +162,15 @@ public final class TerminalChannel {
         String name = parts[0].toLowerCase();
         String args = parts.length > 1 ? parts[1].trim() : "";
 
-        if ("/new".equals(name)) {
-            TerminalUI.success("新会话已创建: " + agent.newSession());
-        } else if ("/clear".equals(name)) {
-            agent.clearMemory();
-            TerminalUI.success("记忆已清空");
-        } else if ("/sessions".equals(name)) {
-            cmdSessions();
-        } else if ("/switch".equals(name)) {
-            cmdSwitch(args);
+        SlashCommand command = slash.find(name);
+        if (command != null) {
+            TerminalUI.plain(MarkdownRenderer.render(command.execute(agent, args)));
         } else if ("/status".equals(name)) {
             renderStartupPanel();
-        } else if ("/tools".equals(name)) {
-            cmdTools();
-        } else if ("/skills".equals(name)) {
-            cmdSkills();
-        } else if ("/sync".equals(name)) {
-            cmdSync();
-        } else if ("/memory".equals(name)) {
-            cmdMemory();
-        } else if ("/feedback".equals(name)) {
-            cmdFeedback(args);
-        } else if ("/usage".equals(name)) {
-            cmdUsage();
-        } else if ("/model".equals(name)) {
-            TerminalUI.plain("  " + TerminalUI.DIM_GRAY + "model: " + TerminalUI.RESET
-                    + agent.getProviderCode() + " / " + agent.getModel());
         } else if ("/theme".equals(name)) {
             cmdTheme(args);
+        } else if ("/feedback".equals(name)) {
+            cmdFeedback(args);
         } else if ("/confirm".equals(name)) {
             cmdConfirm();
         } else if ("/help".equals(name) || "/?".equals(name)) {
@@ -197,77 +182,6 @@ public final class TerminalChannel {
             TerminalUI.error("未知命令: " + name + "  — 输入 /help 查看可用命令");
         }
         System.out.println();
-    }
-
-    private void cmdSessions() {
-        List<SessionManager.SessionSummary> sessions = agent.listSessions();
-        if (sessions.isEmpty()) {
-            TerminalUI.warn("本地暂无会话");
-            return;
-        }
-        String current = agent.currentSessionId();
-        System.out.println(TerminalUI.BOLD + "  🗂 本地会话 (" + sessions.size() + ")"
-                + TerminalUI.RESET + TerminalUI.DIM_GRAY + "  @" + agent.getSessionManager().getSessionDir()
-                + TerminalUI.RESET);
-        for (SessionManager.SessionSummary s : sessions) {
-            String mark = s.id.equals(current) ? TerminalUI.SUCCESS + "● " + TerminalUI.RESET : "  ";
-            System.out.println("    " + mark + TerminalUI.PRIMARY + s.id + TerminalUI.RESET
-                    + TerminalUI.DIM_GRAY + "  " + s.messageCount + " msgs  " + s.title + TerminalUI.RESET);
-        }
-    }
-
-    private void cmdSwitch(String args) {
-        if (args.isEmpty()) {
-            TerminalUI.error("格式: /switch <sessionId>（先 /sessions 查看）");
-            return;
-        }
-        agent.switchSession(args);
-        TerminalUI.success("已切换到会话 " + args + "（" + agent.getMemory().size() + " 条消息）");
-    }
-
-    private void cmdTools() {
-        List<String> names = agent.getToolkit().getToolNames();
-        System.out.println(TerminalUI.BOLD + "  🔧 已注册工具 (" + names.size() + ")" + TerminalUI.RESET);
-        for (String name : names) {
-            System.out.println("    " + TerminalUI.PRIMARY + "▸ " + TerminalUI.BOLD + name + TerminalUI.RESET);
-        }
-    }
-
-    private void cmdSkills() {
-        List<String> codes = agent.listInstalledSkills();
-        if (codes.isEmpty()) {
-            TerminalUI.warn("本地无已同步的 Skill（接入 center 后运行 /sync 拉取）");
-            return;
-        }
-        System.out.println(TerminalUI.BOLD + "  📦 已同步 Skill (" + codes.size() + ")" + TerminalUI.RESET);
-        for (String code : codes) {
-            System.out.println("    " + TerminalUI.ACCENT + "▸ " + TerminalUI.BOLD + code + TerminalUI.RESET);
-        }
-    }
-
-    private void cmdSync() {
-        BotCenterClient c = agent.getCenterClient();
-        if (c == null || !c.isEnabled()) {
-            TerminalUI.error("Bot 未接入 z-agent-center，无法 sync");
-            return;
-        }
-        TerminalUI.info("正在从 z-agent-center 同步 Skill ...");
-        int wrote = agent.syncSkillsFromCenter();
-        TerminalUI.success("同步完成：写入了 " + wrote + " 个 SKILL.md 到本地");
-    }
-
-    private void cmdMemory() {
-        BotCenterClient c = agent.getCenterClient();
-        if (c == null || !c.isEnabled()) {
-            TerminalUI.warn("Bot 未接入 z-agent-center — 长期记忆由 center 侧维护");
-            return;
-        }
-        String recalled = c.recallMemory();
-        if (recalled == null || recalled.isEmpty()) {
-            TerminalUI.info("center 暂无长期记忆（首轮 chat 后会自动积累）");
-        } else {
-            TerminalUI.plain(MarkdownRenderer.render(recalled));
-        }
     }
 
     private void cmdFeedback(String args) {
@@ -283,14 +197,6 @@ public final class TerminalChannel {
         String appCode = agent.getConfig() == null ? "default-chat" : agent.getConfig().getAppCode();
         agent.submitFeedback(rating, "", appCode, null);
         TerminalUI.success("反馈已提交: " + (rating > 0 ? "👍 赞" : rating < 0 ? "👎 踩" : "😐 中性"));
-    }
-
-    private void cmdUsage() {
-        long elapsed = chatStartMs == 0 ? 0 : System.currentTimeMillis() - chatStartMs;
-        TerminalUI.plain("  " + TerminalUI.DIM_GRAY + "step" + TerminalUI.RESET + "=" + stepCount.get()
-                + "    " + TerminalUI.DIM_GRAY + "tokens" + TerminalUI.RESET + "=" + tokenEstimate.get()
-                + "    " + TerminalUI.DIM_GRAY + "messages" + TerminalUI.RESET + "=" + agent.getMemory().size()
-                + "    " + TerminalUI.DIM_GRAY + "elapsed" + TerminalUI.RESET + "=" + elapsed + "ms");
     }
 
     private void cmdTheme(String args) {

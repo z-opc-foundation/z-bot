@@ -252,14 +252,15 @@ public class BotAgentTest {
 
     @Test
     public void maxStepsExhaustedReturnsHint() {
+        // 预算 2 步 + kernel grace 收尾 1 次：3 次调用都还吐 tool_calls 才真正耗尽
         for (int i = 0; i < 5; i++) {
             llm.script(toolReply(call("c" + i, "probe", "{}")));
         }
 
         String reply = newAgent(2).chat("loop forever", StreamListener.NOOP);
 
-        assertTrue(reply, reply.contains("最大步数限制(2)"));
-        assertEquals(2, llm.callCount);
+        assertTrue(reply, reply.contains("已达到预算上限(steps=3/2"));
+        assertEquals(3, llm.callCount);
     }
 
     @Test
@@ -279,7 +280,7 @@ public class BotAgentTest {
             }
         });
 
-        assertEquals("已中止。", reply);
+        assertTrue(reply, reply.startsWith("已中止"));
         assertEquals(1, llm.callCount);
         assertFalse(running.isRunning());
     }

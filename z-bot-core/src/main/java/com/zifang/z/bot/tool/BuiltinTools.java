@@ -9,6 +9,8 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.InputStreamReader;
 import java.net.InetAddress;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -34,17 +36,28 @@ public final class BuiltinTools {
      * @param execConfirmMode {@link ExecGuard} 的 off / dangerous / all
      */
     public static Toolkit registerAll(Toolkit toolkit, Sandbox sandbox, String execConfirmMode) {
+        return registerAll(toolkit, sandbox, execConfirmMode, Collections.<String>emptyList());
+    }
+
+    /**
+     * 注册全部内置工具（带 exec 免确认白名单）。
+     *
+     * <p>并行安全标记：只读工具（echo/time/health/sysinfo/read_file/search）允许同批并发，
+     * 写/exec/网络类一律串行。</p>
+     */
+    public static Toolkit registerAll(Toolkit toolkit, Sandbox sandbox, String execConfirmMode,
+                                      List<String> execWhitelist) {
         final AtomicInteger counter = new AtomicInteger(0);
 
-        toolkit.register(echo());
-        toolkit.register(time());
+        toolkit.register(echo(), true);
+        toolkit.register(time(), true);
         toolkit.register(counter(counter));
-        toolkit.register(health());
-        toolkit.register(readFile(sandbox));
+        toolkit.register(health(), true);
+        toolkit.register(readFile(sandbox), true);
         toolkit.register(writeFile(sandbox));
-        toolkit.register(exec(sandbox, execConfirmMode));
-        toolkit.register(search());
-        toolkit.register(sysinfo());
+        toolkit.register(exec(sandbox, execConfirmMode, execWhitelist));
+        toolkit.register(search(), true);
+        toolkit.register(sysinfo(), true);
         toolkit.register(mvnBuild(sandbox));
         toolkit.register(curlTest());
         return toolkit;
@@ -222,6 +235,10 @@ public final class BuiltinTools {
     // ===== 进程 =====
 
     public static Tool exec(final Sandbox sandbox, final String confirmMode) {
+        return exec(sandbox, confirmMode, Collections.<String>emptyList());
+    }
+
+    public static Tool exec(final Sandbox sandbox, final String confirmMode, final List<String> whitelist) {
         return Toolkit.of("exec",
                 "执行系统命令并返回输出（仅在沙箱目录 " + sandbox.root() + " 下执行，高危命令需审批）",
                 new ToolSchemaBuilder().string("command", "要执行的系统命令").build(),
@@ -234,7 +251,7 @@ public final class BuiltinTools {
                         return ToolResult.error("安全错误：禁止的危险命令");
                     }
                     String reason = ExecGuard.confirmationReason(confirmMode, command,
-                            Confirmations.alreadyConfirmed(args));
+                            Confirmations.alreadyConfirmed(args), whitelist);
                     if (reason != null) {
                         return Confirmations.needsConfirmation(reason);
                     }

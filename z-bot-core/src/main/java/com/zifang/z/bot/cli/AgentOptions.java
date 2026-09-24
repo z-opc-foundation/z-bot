@@ -34,6 +34,10 @@ public class AgentOptions {
             description = "exec 确认模式: off | dangerous | all")
     String execConfirm;
 
+    @Option(names = {"--yolo"},
+            description = "跳过全部工具人工确认（等价 --exec-confirm off，启动时冻结，运行期不可改）")
+    boolean yolo;
+
     @Option(names = {"--max-steps"}, paramLabel = "N", description = "ReAct 最大步数")
     Integer maxSteps;
 
@@ -68,6 +72,9 @@ public class AgentOptions {
         }
         if (execConfirm != null && !execConfirm.trim().isEmpty()) {
             config.setExecConfirmMode(execConfirm.trim());
+        }
+        if (yolo) {
+            config.setExecConfirmMode("off");
         }
         return config;
     }

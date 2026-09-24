@@ -1,5 +1,7 @@
 package com.zifang.z.bot.tool;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -77,10 +79,35 @@ public final class ExecGuard {
      * 已确认过的（args 带 {@link Confirmations#CONFIRMED_ARG}）不再拦。
      */
     public static String confirmationReason(String mode, String command, boolean alreadyConfirmed) {
+        return confirmationReason(mode, command, alreadyConfirmed, Collections.<String>emptyList());
+    }
+
+    /**
+     * 同上，带用户白名单：命令以白名单任一前缀开头时免确认（持久化在配置里，用户逐条授权的产物）。
+     */
+    public static String confirmationReason(String mode, String command, boolean alreadyConfirmed,
+                                            List<String> whitelist) {
         if (alreadyConfirmed || mode == null || MODE_OFF.equalsIgnoreCase(mode)) {
+            return null;
+        }
+        if (isWhitelisted(command, whitelist)) {
             return null;
         }
         boolean needs = MODE_ALL.equalsIgnoreCase(mode) || isDangerous(command);
         return needs ? "高危命令需要确认: " + command : null;
+    }
+
+    /** 命令是否命中白名单前缀（trim 后前缀匹配，空条目忽略）。 */
+    public static boolean isWhitelisted(String command, List<String> whitelist) {
+        if (command == null || whitelist == null || whitelist.isEmpty()) {
+            return false;
+        }
+        String c = command.trim();
+        for (String w : whitelist) {
+            if (w != null && !w.trim().isEmpty() && c.startsWith(w.trim())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

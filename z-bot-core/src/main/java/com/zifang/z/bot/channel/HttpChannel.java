@@ -126,6 +126,23 @@ public final class HttpChannel {
             } else if ("/bot/confirm".equals(path)) {
                 String confirmBody = readBody(ex);
                 busyGuard(ex, () -> confirm(ex, confirmBody));
+            } else if ("/bot/stop".equals(path)) {
+                if (!agent.isRunning()) {
+                    text(ex, 200, "当前没有正在运行的任务");
+                } else {
+                    agent.stop();
+                    text(ex, 200, "已请求停止，将在最近的迭代边界生效");
+                }
+            } else if ("/bot/steer".equals(path)) {
+                String steerBody = readBody(ex).trim();
+                if (steerBody.isEmpty()) {
+                    text(ex, 400, "steer 内容不能为空");
+                } else {
+                    agent.steer(steerBody);
+                    text(ex, 200, agent.isRunning()
+                            ? "已入队 steer，将在工具间隙注入"
+                            : "已入队，将在下次对话开头并入");
+                }
             } else if ("/api/sessions".equals(path)) {
                 sessions(ex, method);
             } else if ("/api/session/switch".equals(path)) {
@@ -267,6 +284,9 @@ public final class HttpChannel {
             StreamEvent.ToolResult tr = (StreamEvent.ToolResult) event;
             return frame("tool_result", "[" + tr.name + "] " + (tr.success ? "OK: " : "ERROR: ")
                     + (tr.success ? String.valueOf(tr.result) : tr.error));
+        }
+        if (event instanceof StreamEvent.SteerInjected) {
+            return frame("steer", "[steer] " + ((StreamEvent.SteerInjected) event).text);
         }
         if (event instanceof StreamEvent.FinalDelta) {
             return frame("final", ((StreamEvent.FinalDelta) event).text);

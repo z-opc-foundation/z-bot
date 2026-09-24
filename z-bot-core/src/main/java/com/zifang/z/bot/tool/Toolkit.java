@@ -7,8 +7,10 @@ import com.zifang.z.agent.kernel.tool.ToolResult;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -16,16 +18,29 @@ import java.util.function.Function;
  *
  * <p>同名注册会覆盖（与 z-opc 老 bot 行为一致：ZAgent 先注册裸 read_file/exec，
  * TerminalBot 再用带沙箱的版本盖掉）。</p>
+ *
+ * <p>并行调度语义（对齐 hermes tools/registry）：只有显式标记 parallel-safe 的工具
+ * 才允许在同一个工具批次里并发执行；写文件 / exec / 网络类默认串行。</p>
  */
 public final class Toolkit {
 
     private final Map<String, Tool> tools = new LinkedHashMap<String, Tool>();
+    private final Set<String> parallelSafeNames = new LinkedHashSet<String>();
 
     public Toolkit register(Tool tool) {
+        return register(tool, false);
+    }
+
+    public Toolkit register(Tool tool, boolean parallelSafe) {
         if (tool == null || tool.getName() == null || tool.getName().isEmpty()) {
             throw new IllegalArgumentException("tool 及 tool.name 不能为空");
         }
         tools.put(tool.getName(), tool);
+        if (parallelSafe) {
+            parallelSafeNames.add(tool.getName());
+        } else {
+            parallelSafeNames.remove(tool.getName());
+        }
         return this;
     }
 
@@ -34,7 +49,12 @@ public final class Toolkit {
      */
     public Toolkit register(String name, String description, Map<String, Object> schema,
                             Function<Map<String, Object>, ToolResult> handler) {
-        return register(of(name, description, schema, handler));
+        return register(name, description, schema, handler, false);
+    }
+
+    public Toolkit register(String name, String description, Map<String, Object> schema,
+                            Function<Map<String, Object>, ToolResult> handler, boolean parallelSafe) {
+        return register(of(name, description, schema, handler), parallelSafe);
     }
 
     public static Tool of(String name, String description, Map<String, Object> schema,
@@ -64,6 +84,11 @@ public final class Toolkit {
 
     public boolean contains(String name) {
         return tools.containsKey(name);
+    }
+
+    /** 该工具是否允许与同批次其他工具并发执行（只读工具才标记）。 */
+    public boolean isParallelSafe(String name) {
+        return name != null && parallelSafeNames.contains(name);
     }
 
     /**
