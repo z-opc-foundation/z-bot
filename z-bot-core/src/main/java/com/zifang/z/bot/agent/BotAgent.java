@@ -3,6 +3,7 @@ package com.zifang.z.bot.agent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zifang.z.agent.kernel.agent.AgentContext;
+import com.zifang.z.agent.kernel.agent.ContextEngine;
 import com.zifang.z.agent.kernel.agent.InterruptFlag;
 import com.zifang.z.agent.kernel.agent.IterationBudget;
 import com.zifang.z.agent.kernel.llm.ChatCompletionsRequest;
@@ -14,6 +15,7 @@ import com.zifang.z.agent.kernel.tool.ToolResult;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
+import com.zifang.z.bot.context.CompressorEngine;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
 import com.zifang.z.bot.session.SessionManager;
@@ -93,6 +95,11 @@ public class BotAgent {
     private final AgentContext context;
     /** 被 {@link ToolConfirmationNeeded} 暂停的那次调用；确认后要用它回灌 tool 结果。 */
     private volatile ToolCall pendingConfirmation;
+    /** 最近一次请求的消息字符量（网关不回 usage 时给压缩引擎做上下文估算）。 */
+    private volatile long lastRequestChars;
+    /** 上下文压缩引擎（null = 未启用，如纯测试桩）；摘要走主 provider。 */
+    private final CompressorEngine compressor;
+    private final ContextEngine.Summarizer summarizer;
 
     protected BotAgent(Builder b) {
         this.config = b.config;
@@ -109,6 +116,16 @@ public class BotAgent {
         this.context = AgentContext.root(new IterationBudget(b.maxSteps, b.tokenBudget));
         this.provider = b.provider != null ? Builder.wrapResilient(b.provider, b.config)
                 : Builder.wrapResilient(LlmRouter.create(b.config.activeProvider()), b.config);
+        if (b.contextEngine != null) {
+            this.compressor = b.contextEngine;
+            this.summarizer = b.summarizer;
+        } else if (b.config != null && !b.noCompress) {
+            this.compressor = new CompressorEngine(b.tokenBudget);
+            this.summarizer = this::summarizeWithProvider;
+        } else {
+            this.compressor = null;
+            this.summarizer = null;
+        }
 
         if (centerClient != null && centerClient.isEnabled()) {
             this.lifecycle = registerAndStartLifecycle(centerClient, b.appCode);
@@ -194,9 +211,12 @@ public class BotAgent {
             listener.onEvent(new StreamEvent.StepStart(step));
             context.interrupt().checkpoint();
             injectSteer(listener);
+            applyCompression(listener);
             ChatCompletionsResponse response;
             try {
-                response = provider.chat(buildRequest());
+                ChatCompletionsRequest request = buildRequest();
+                lastRequestChars = requestCharsOf(request);
+                response = provider.chat(request);
             } catch (Exception e) {
                 LOG.warn("[BotAgent] step {} LLM 调用失败: {}", step, e.getMessage());
                 listener.onEvent(new StreamEvent.ErrorEvent(e));
@@ -263,8 +283,68 @@ public class BotAgent {
     }
 
     private void recordUsage(IterationBudget budget, ChatCompletionsResponse response) {
+        // kernel 会把缺失的 usage 归一成 TokenUsage.empty()（全 0），所以不能只判 != null，
+        // 否则网关不回传 usage 时（如本地 bench 代理）估算分支永远进不去、压缩阈值永远不触发。
+        boolean hasUsage = response != null && response.getUsage() != null
+                && response.getUsage().getPromptTokens() > 0;
+        if (hasUsage) {
+            int prompt = (int) response.getUsage().getPromptTokens();
+            int completion = (int) response.getUsage().getCompletionTokens();
+            budget.recordTokens(prompt, completion);
+            if (compressor != null) {
+                compressor.update(prompt, completion);
+            }
+            return;
+        }
         if (response != null && response.getUsage() != null) {
-            budget.recordTokens(response.getUsage().getPromptTokens(), response.getUsage().getCompletionTokens());
+            budget.recordTokens((int) response.getUsage().getPromptTokens(),
+                    (int) response.getUsage().getCompletionTokens());
+        }
+        // 网关不回传 usage 时按请求体字符数粗估上下文规模喂给压缩引擎
+        if (compressor != null && lastRequestChars > 0) {
+            compressor.update((int) (lastRequestChars / 2), 0);
+        }
+    }
+
+    /**
+     * 达到阈值就把中段历史压成一条摘要消息（保最近 N 条原文），压缩结果回灌记忆。
+     * 压缩锁在 {@link CompressorEngine} 里，这里只负责回写与事件。
+     */
+    private void applyCompression(StreamListener listener) {
+        if (compressor == null || !compressor.shouldCompress()) {
+            return;
+        }
+        List<Msg> history = memory.getMessages();
+        List<Msg> compressed = compressor.compress(history, summarizer);
+        if (compressed == history || compressed.size() >= history.size()) {
+            return;
+        }
+        memory.load(compressed);
+        listener.onEvent(new StreamEvent.Compacted(compressor.getLastSummary(),
+                compressor.getLastFromCount(), compressor.getLastToCount()));
+        LOG.info("[BotAgent] 上下文压缩: {} -> {} 条 (累计 {} 次)",
+                compressor.getLastFromCount(), compressor.getLastToCount(), compressor.getCompressCount());
+        persistSession();
+    }
+
+    /** 摘要调主 provider（无工具、低温），prompt 带事实承诺保留约束。 */    private String summarizeWithProvider(List<Msg> middle) {
+        StringBuilder sb = new StringBuilder(CompressorEngine.SUMMARY_PROMPT_PREFIX);
+        for (Msg m : middle) {
+            String role = m.getRole() == null ? "user" : m.getRole().name().toLowerCase();
+            sb.append(role).append(": ")
+                    .append(m.getContent() == null ? "" : m.getContent()).append('\n');
+        }
+        try {
+            ChatCompletionsRequest req = new ChatCompletionsRequest(model,
+                    Collections.singletonList(Msg.user(sb.toString())),
+                    Collections.<com.zifang.z.agent.kernel.tool.Tool>emptyList(),
+                    0.2, null, 1024, false, Collections.<String, Object>emptyMap());
+            ChatCompletionsResponse resp = provider.chat(req);
+            return resp == null || resp.toAssistantMsg().getContent() == null
+                    ? "" : resp.toAssistantMsg().getContent();
+        } catch (Exception e) {
+            LOG.warn("[BotAgent] 摘要生成失败，跳过本次压缩: {}", e.getMessage());
+            return "";
         }
     }
 
@@ -548,6 +628,29 @@ public class BotAgent {
         return context;
     }
 
+    /** {@code /compress [preview]} — 查看或手动触发上下文压缩。 */
+    public String compressNow(String args) {
+        if (compressor == null) {
+            return "未启用上下文压缩引擎";
+        }
+        boolean preview = args != null && args.toLowerCase().contains("preview");
+        if (preview) {
+            return "context tokens=" + compressor.getContextTokens() + "/" + compressor.getMaxTokens()
+                    + " shouldCompress=" + compressor.shouldCompress()
+                    + " 已压缩次数=" + compressor.getCompressCount()
+                    + "（输入 /compress 执行压缩）";
+        }
+        List<Msg> history = memory.getMessages();
+        List<Msg> out = compressor.forceCompress(history, summarizer);
+        if (out == history || out.size() >= history.size()) {
+            return "没有可压缩的内容（历史太短或摘要为空）";
+        }
+        memory.load(out);
+        persistSession();
+        return "已压缩: " + history.size() + " -> " + out.size() + " 条 (累计 "
+                + compressor.getCompressCount() + " 次)";
+    }
+
     public void reset() {
         memory.clear();
         context.interrupt().reset();
@@ -601,13 +704,25 @@ public class BotAgent {
         List<Msg> messages = new ArrayList<Msg>();
         messages.add(Msg.system(memory.getSystemPrompt()));
         messages.addAll(memory.getMessages());
-        List<com.zifang.z.agent.kernel.tool.Tool> tools = toolkit.getAllTools();
+        // 工具 schema 按 name 字典序 — 保持请求前缀稳定，提高 provider 侧 prompt-cache 命中
+        List<com.zifang.z.agent.kernel.tool.Tool> tools =
+                new ArrayList<com.zifang.z.agent.kernel.tool.Tool>(toolkit.getAllTools());
+        tools.sort((a, b) -> String.valueOf(a.getName()).compareTo(String.valueOf(b.getName())));
         Map<String, Object> providerParams = new LinkedHashMap<String, Object>();
         if (!tools.isEmpty() && config != null && config.getToolChoice() != null
                 && !config.getToolChoice().isEmpty()) {
             providerParams.put("tool_choice", config.getToolChoice());
         }
         return new ChatCompletionsRequest(model, messages, tools, temperature, null, maxTokens, false, providerParams);
+    }
+
+    /** 请求消息的总字符量 — 无 usage 网关时的上下文规模估算原料。 */
+    private static long requestCharsOf(ChatCompletionsRequest request) {
+        long chars = 0;
+        for (Msg m : request.getMessages()) {
+            chars += m.getContent() == null ? 0 : m.getContent().length();
+        }
+        return chars;
     }
 
     private static String buildSystemPrompt(String base, Toolkit toolkit) {
@@ -776,6 +891,11 @@ public class BotAgent {
         private Toolkit toolkit;
         private Sandbox sandbox;
         private SessionManager sessionManager;
+        /** 覆盖默认 {@link CompressorEngine}；summarizer 需一起给。 */
+        private CompressorEngine contextEngine;
+        private ContextEngine.Summarizer summarizer;
+        /** 纯测试桩关闭压缩（省一次摘要 LLM 调用）。 */
+        private boolean noCompress;
         private BotCenterClient centerClient;
         private int maxSteps;
         private int maxTokens;
@@ -831,6 +951,17 @@ public class BotAgent {
 
         public Builder sessionManager(SessionManager sessionManager) {
             this.sessionManager = sessionManager;
+            return this;
+        }
+
+        public Builder contextEngine(CompressorEngine engine, ContextEngine.Summarizer summarizer) {
+            this.contextEngine = engine;
+            this.summarizer = summarizer;
+            return this;
+        }
+
+        public Builder withoutCompressor() {
+            this.noCompress = true;
             return this;
         }
 

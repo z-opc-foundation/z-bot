@@ -288,6 +288,11 @@ public final class HttpChannel {
         if (event instanceof StreamEvent.SteerInjected) {
             return frame("steer", "[steer] " + ((StreamEvent.SteerInjected) event).text);
         }
+        if (event instanceof StreamEvent.Compacted) {
+            StreamEvent.Compacted cp = (StreamEvent.Compacted) event;
+            return frame("compact", "[compact] " + cp.fromCount + " -> " + cp.toCount
+                    + " 条消息已压缩为摘要");
+        }
         if (event instanceof StreamEvent.FinalDelta) {
             return frame("final", ((StreamEvent.FinalDelta) event).text);
         }

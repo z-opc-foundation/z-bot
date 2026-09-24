@@ -34,6 +34,8 @@ public abstract class StreamEvent {
         DONE,
         /** 用户 steer 插话被注入消息流 */
         STEER,
+        /** 上下文中段被压缩成摘要 */
+        COMPACTED,
         /** 不可恢复错误 */
         ERROR
     }
@@ -179,6 +181,28 @@ public abstract class StreamEvent {
         @Override
         public String toString() {
             return "SteerInjected(" + text + ")";
+        }
+    }
+
+    public static final class Compacted extends StreamEvent {
+        public final String summary;
+        public final int fromCount;
+        public final int toCount;
+
+        public Compacted(String summary, int fromCount, int toCount) {
+            this.summary = summary == null ? "" : summary;
+            this.fromCount = fromCount;
+            this.toCount = toCount;
+        }
+
+        @Override
+        public Kind kind() {
+            return Kind.COMPACTED;
+        }
+
+        @Override
+        public String toString() {
+            return "Compacted(" + fromCount + "->" + toCount + ", summaryLen=" + summary.length() + ")";
         }
     }
 

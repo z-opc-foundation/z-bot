@@ -81,6 +81,17 @@
 - prompt-cache 稳定化: 工具 schema 按 name 字典序 + JSON sort_keys 输出
 - `/compress here [N] | focus <topic> | --preview`
 - 验收: 单测(触发阈值/头尾保护/锁); 真实长会话 E2E 触发一次压缩并继续对话
+> **P3 已完成 (92/92 单测全绿)**: `CompressorEngine` 实现 kernel `ContextEngine` SPI —
+> 阈值取**最近一次真实 prompt 观测** ≥ maxTokens×0.85; 头部 system 原样保留 + 尾部 8 条原文,
+> 中段走辅助模型摘要(摘要空则放弃本次压缩不破坏历史); AtomicBoolean 压缩锁; `/compress` 手动/preview。
+> token 记账: usage>0 走真实值, **usage 缺失/全 0 走请求字符÷2 估算**(kernel 把 null usage 归一成
+> TokenUsage.empty(), 不能只判 !=null — 修复了这个坑, 新增 `UsageFallbackCompressTest` 2 例回归)。
+> prompt-cache: buildRequest 工具 schema 按 name 字典序排序。事件: `StreamEvent.Compacted`,
+> HTTP SSE `event: compact`, 终端 `▤ compact X -> Y`。
+> E2E (serve + 独立配置目录 + 临时 state.db, LLM 后端 bench 代理当时卡死改用本地 OpenAI stub,
+> z-bot 进程/HTTP/state.db/压缩链路全真实): 2000 token 预算 6 轮 4.2k 字符消息后第 6 轮触发
+> `上下文压缩: 11 -> 9 条`, r7/r8 压缩后继续对话正常, 落库 10 条, 压缩累计 3 次;
+> SSE 流第二轮长消息收到 `event: compact` 帧。
 
 ### P4 checkpoint 影子 git — Hermes #12
 - 破坏性操作(write_file/patch/exec 写命令)前对沙箱目录做影子 git 快照(`~/.zbot/checkpoints/store/`, GIT_DIR/GIT_WORK_TREE 分离, blob 去重)

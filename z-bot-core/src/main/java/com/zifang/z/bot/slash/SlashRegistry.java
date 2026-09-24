@@ -304,6 +304,22 @@ public final class SlashRegistry {
                 return "已排队，将在下次对话开头并入";
             }
         });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/compress";
+            }
+
+            @Override
+            public String description() {
+                return "上下文压缩: /compress 查看状态并执行, /compress preview 只看状态";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return agent.compressNow(args);
+            }
+        });
         return r;
     }
 

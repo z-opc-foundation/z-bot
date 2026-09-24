@@ -62,6 +62,9 @@ public class ChatCommand implements Callable<Integer> {
                     System.err.println("← " + tr.name + (tr.success ? " ok" : " 失败: " + tr.error));
                 } else if (event instanceof StreamEvent.ErrorEvent) {
                     System.err.println("✗ " + ((StreamEvent.ErrorEvent) event).cause.getMessage());
+                } else if (event instanceof StreamEvent.Compacted) {
+                    StreamEvent.Compacted cp = (StreamEvent.Compacted) event;
+                    System.err.println("▤ compact " + cp.fromCount + " -> " + cp.toCount);
                 }
             }
         };
