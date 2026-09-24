@@ -10,18 +10,8 @@ import java.util.concurrent.Callable;
 /**
  * z-bot CLI 入口 — 对标 cc/Hermes.
  *
- * <p>子命令:
- * <ul>
- *   <li>{@code z-bot chat "你好"} — 单轮对话, 走 LLM 直连</li>
- *   <li>{@code z-bot serve --port 9099} — 启 HTTP server, 暴露 /v1/chat/completions</li>
- *   <li>{@code z-bot --help} — 帮助</li>
- * </ul>
- *
- * <p>对应的 z-agent-kernel runtime:
- * <ul>
- *   <li>chat: 调 LlmProvider.chat()</li>
- *   <li>serve: 启 JDK 内置 HttpServer, 接收 OpenAI 协议请求, 转发给 LlmProvider</li>
- * </ul>
+ * <p>用法: {@code z-bot [-m vendor/model] --api-key <key> [--base-url <url>] "消息"} — 单轮对话, 走 z-agent-kernel LlmProvider。
+ * <p>{@code z-bot --help} 看完整选项。HTTP serve 模式尚未实现。
  */
 @Command(name = "z-bot", mixinStandardHelpOptions = true, version = "z-bot 0.1.0",
         description = "本地 agent 应用 (对标 Claude Code / Hermes)")
@@ -47,8 +37,8 @@ public class ZBot implements Callable<Integer> {
     @Override
     public Integer call() {
         if (prompt == null || prompt.isEmpty()) {
-            System.err.println("用法: z-bot chat \"你的消息\"  或  z-bot serve --port 9099");
-            System.err.println("提示: 完整 CLI 用 picocli 子命令模式, 这里简化为两种模式: chat / serve");
+            System.err.println("用法: z-bot [-m vendor/model] --api-key <key> [--base-url <url>] \"你的消息\"");
+            System.err.println("示例: z-bot -m openai/gpt-4o-mini --base-url http://127.0.0.1:18180/v1 --api-key k \"你好\"");
             return 1;
         }
         return new ChatCommand(model, apiKey, baseUrl, prompt).execute();
