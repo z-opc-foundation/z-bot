@@ -64,6 +64,16 @@
 - 新 CLI: `sessions list/search/export(md|jsonl)/stats/prune`
 - 验收: 单测覆盖 CRUD/FTS/迁移; 双进程并发写不丟(WAL 实测); 导出文件可用
 
+> **P2 完成记录 (2026-09-25)**: sqlite-jdbc 3.41.2.2 (Java 8 线); `StateStore` (sessions/messages/
+> session_model_usage 三表, WAL+busy_timeout, FTS5 建不上自动降级 LIKE); SessionManager 增加 store
+> 模式 (sqlite 唯一事实来源, 构造时把目录里遗留 JSON 会话一次性收编, 原文件保留); 序列化抽成
+> `MsgCodec` 供 JSON/db 两端共用; BotConfig `agent.state.db`(-Dzbot.state.db 也可) + Builder 自动装配;
+> BotAgent finish 时给 session_model_usage 记账; 新 CLI `z-bot sessions list/search/export/stats/prune`。
+> 单测 83/83 (新增 13: StateStoreTest 8 + SessionManagerStoreTest 5, 全部 TemporaryFolder 不碰 ~/.zbot)。
+> 真机 E2E: `chat` 走本地代理后 2 条消息落库+标题自动生成; 18 个 ~/.zbot/sessions 遗留 JSON (313 条消息)
+> 迁移进 /tmp state.db 原文件保留; FTS search "PPT" 命中 3 条带片段; export JSONL 可读; prune 空会话;
+> stats 显示 model=bench tasks=1。WAL 由单测 PRAGMA journal_mode=wal 断言。
+
 ### P3 上下文引擎 — Hermes #5
 - kernel-agent `ContextEngine` SPI 默认实现 `CompressorEngine`: tokens > max×0.85 触发; 保留 system + 最近 N 轮原文, 中段用辅助模型摘要; 摘要 prompt 强制保留文件路径/代码/决策等"事实承诺"
 - 压缩锁(同会话并发压缩只跑一次); 压缩血统写进 metadata

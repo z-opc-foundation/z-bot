@@ -17,6 +17,7 @@ import com.zifang.z.bot.center.BotLifecycle;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
 import com.zifang.z.bot.session.SessionManager;
+import com.zifang.z.bot.store.StateStore;
 import com.zifang.z.bot.tool.BuiltinTools;
 import com.zifang.z.bot.tool.Confirmations;
 import com.zifang.z.bot.tool.Sandbox;
@@ -746,8 +747,22 @@ public class BotAgent {
             prompt = (int) response.getUsage().getPromptTokens();
             completion = (int) response.getUsage().getCompletionTokens();
         }
+        recordSessionUsage(steps, prompt, completion);
         listener.onEvent(new StreamEvent.FinalDelta(reply));
         listener.onEvent(new StreamEvent.Done(reply, steps, prompt, completion));
+    }
+
+    /** state.db 模式下给 session_model_usage 记一笔账（模型×任务）；JSON 模式是空操作。 */
+    private void recordSessionUsage(int apiCalls, Integer promptTokens, Integer completionTokens) {
+        if (sessionManager == null) {
+            return;
+        }
+        StateStore store = sessionManager.getStore();
+        if (store == null) {
+            return;
+        }
+        String model = config == null ? null : config.getModel();
+        store.recordUsage(sessionManager.getCurrentSessionId(), model, promptTokens, completionTokens, apiCalls);
     }
 
     // ===== 装配 =====
@@ -872,7 +887,15 @@ public class BotAgent {
                         config == null ? null : config.getExecConfirmWhitelist());
             }
             if (sessionManager == null) {
-                sessionManager = new SessionManager();
+                if (config != null && config.getStateDbPath() != null
+                        && !config.getStateDbPath().trim().isEmpty()) {
+                    // state.db 是唯一事实来源；会话 JSON 目录仍作一次性迁移入口
+                    sessionManager = new SessionManager(
+                            new java.io.File(System.getProperty("user.home") + "/.zbot/sessions"),
+                            new StateStore(new java.io.File(config.getStateDbPath().trim())));
+                } else {
+                    sessionManager = new SessionManager();
+                }
             }
             if (centerClient == null && config != null && config.getCenterUrl() != null
                     && !config.getCenterUrl().isEmpty()) {

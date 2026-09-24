@@ -4,6 +4,7 @@ import com.zifang.z.bot.cli.AgentOptions;
 import com.zifang.z.bot.cli.ChatCommand;
 import com.zifang.z.bot.cli.ReplCommand;
 import com.zifang.z.bot.cli.ServeCommand;
+import com.zifang.z.bot.cli.SessionsCommand;
 import com.zifang.z.bot.cli.StatusCommand;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -27,7 +28,8 @@ import java.util.concurrent.Callable;
  * <p>模型 / key 默认取 {@code ~/.zbot/config.properties}，命令行选项只做覆盖。</p>
  */
 @Command(name = "z-bot", mixinStandardHelpOptions = true, version = "z-bot 0.2.0",
-        subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, StatusCommand.class},
+        subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, StatusCommand.class,
+                SessionsCommand.class},
         description = "本地 agent 应用（ReAct + 工具 + 沙箱 + 会话）")
 public class ZBot implements Callable<Integer> {
 

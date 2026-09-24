@@ -47,6 +47,8 @@ public final class BotConfig {
     private long retryBackoffMs = 1000L;
     /** 主模型重试耗尽后的降级模型 id 列表（llm.fallback.models，逗号分隔）。 */
     private List<String> fallbackModels = new ArrayList<String>();
+    /** 会话持久化库路径（agent.state.db）；空 = 只用 JSON 会话文件。 */
+    private String stateDbPath;
     private String centerUrl;
     private String appCode = "default-chat";
     private boolean loaded;
@@ -138,6 +140,12 @@ public final class BotConfig {
             this.retryBackoffMs = parseLong(retryBackoff, this.retryBackoffMs);
         }
         this.fallbackModels = splitList(props.getProperty("llm.fallback.models"));
+        String stateDb = trim(props.getProperty("agent.state.db"));
+        if (stateDb.isEmpty()) {
+            stateDb = System.getProperty("zbot.state.db",
+                    System.getProperty("user.home") + "/.zbot/state.db");
+        }
+        this.stateDbPath = stateDb;
         this.centerUrl = trim(props.getProperty("center.url"));
         String appCode = trim(props.getProperty("center.app.code"));
         if (!appCode.isEmpty()) {
@@ -300,6 +308,15 @@ public final class BotConfig {
 
     public List<String> getFallbackModels() {
         return Collections.unmodifiableList(fallbackModels);
+    }
+
+    /** {@code agent.state.db}：SQLite 会话库路径；new Agent() 默认在此路径建库。 */
+    public String getStateDbPath() {
+        return stateDbPath;
+    }
+
+    public void setStateDbPath(String stateDbPath) {
+        this.stateDbPath = stateDbPath;
     }
 
     public void setToolChoice(String toolChoice) {
