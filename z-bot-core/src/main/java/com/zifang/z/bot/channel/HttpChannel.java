@@ -376,7 +376,8 @@ public final class HttpChannel {
         return out;
     }
 
-    private Map<String, Object> skillSyncResult() {        Map<String, Object> resp = new LinkedHashMap<String, Object>();
+    private Map<String, Object> skillSyncResult() {
+        Map<String, Object> resp = new LinkedHashMap<String, Object>();
         resp.put("ok", true);
         resp.put("installed", agent.syncSkillsFromCenter());
         resp.put("instanceCode", agent.getInstanceCode());
