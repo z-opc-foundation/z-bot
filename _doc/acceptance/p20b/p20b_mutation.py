@@ -555,7 +555,10 @@ def main():
             out("FATAL %s 还原未落定" % mid)
             return 3
         after = disk_md5(rel)
-        rrows.append([mid, rel, bmd5, during, "no(注入确实改了盘)" if during != bmd5 else "yes?注入无效!",
+        # 这一格读作"注入有没有真进盘"：盘上 md5 != git show md5 ⇒ 进盘了（yes）。
+        # 第一版把这个三元写反了（差异成立时打印 "no(注入确实改了盘)"），记在 EVIDENCE §6。
+        rrows.append([mid, rel, bmd5, during,
+                      "yes(disk!=git show)" if during != bmd5 else "NO(注入没进盘!)",
                       after, "ok" if after == bmd5 else "RESTORE-FAILED"])
         hit = sorted(set(expected) & failing)
         extra = sorted(failing - set(expected))
