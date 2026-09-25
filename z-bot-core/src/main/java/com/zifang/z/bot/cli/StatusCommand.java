@@ -27,10 +27,10 @@ public class StatusCommand implements Callable<Integer> {
     public Integer call() {
         BotConfig config = options.loadConfig();
         BotConfig.Provider provider = config.activeProvider();
-        File sandboxDir = options.sandboxDir();
+        File sandboxDir = options.sandboxDir(config);
         Toolkit toolkit = BuiltinTools.registerAll(new Toolkit(),
                 new Sandbox(sandboxDir.getAbsolutePath()), config.getExecConfirmMode());
-        SessionManager sessions = new SessionManager();
+        SessionManager sessions = new SessionManager(config.sessionsDir());
         List<SessionManager.SessionSummary> existing = sessions.listSessions();
 
         row("config", new File(config.getConfigDir(), "config.properties").getPath()

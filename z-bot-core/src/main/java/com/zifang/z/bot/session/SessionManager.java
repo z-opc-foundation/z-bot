@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 会话持久化。两种后端：
  * <ul>
- *   <li>默认 JSON 模式：{@code ~/.zbot/sessions/<id>.json} + {@code _index.json}，
+ *   <li>默认 JSON 模式：{@code <profile>/sessions/<id>.json} + {@code _index.json}，
  *       格式与 z-opc 老 bot 兼容；</li>
  *   <li>store 模式（P2 起）：传入 {@link StateStore} 后 SQLite {@code state.db} 是唯一事实来源，
  *       启动时把目录里遗留的 JSON 会话一次性收编进库（原文件保留）。</li>
@@ -40,8 +40,9 @@ public class SessionManager {
             java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 6);
     private String currentSessionId;
 
+    /** 无 profile 上下文时的兜底档：跟着 {@code ZBOT_HOME}/{@code -Dzbot.home} 走，不再写死 {@code ~/.zbot}。 */
     public SessionManager() {
-        this(new File(System.getProperty("user.home") + "/.zbot/sessions"));
+        this(new File(com.zifang.z.bot.config.BotConfig.defaultConfigDir(), "sessions"));
     }
 
     public SessionManager(File sessionDir) {
@@ -283,7 +284,7 @@ public class SessionManager {
     }
 
     /**
-     * {@code serve} 与命令行 {@code chat} 共用 {@code ~/.zbot/sessions}，谁后写 {@code _index.json}
+     * {@code serve} 与命令行 {@code chat} 共用同一个 profile 的 sessions 目录，谁后写 {@code _index.json}
      * 就把对方的会话从索引里挤掉（消息文件还在，列表里却再也看不到）。启动时按消息文件收编这类会话。
      */
     private void adoptOrphanSessionFiles() {

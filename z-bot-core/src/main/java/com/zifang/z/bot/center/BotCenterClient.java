@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit;
  *   <li>启动时向 center 注册（POST /api/agent/skill/register），拿 instanceCode + authToken</li>
  *   <li>每 30s 心跳（POST /api/agent/skill/heartbeat）</li>
  *   <li>每次 chat 后 fire postChat 事件（POST /api/bot/event）让 center 侧 hook 跑</li>
- *   <li>拉取 pending skills 并写入 {@code ~/.zbot/skills/<instanceCode>/<skillCode>/SKILL.md}</li>
+ *   <li>拉取 pending skills 并写入 {@code <profile>/skills/<instanceCode>/<skillCode>/SKILL.md}</li>
  * </ul>
  *
  * <p>所有调用都是 best-effort：center 挂了 / 没起，z-bot 继续按本地模式工作。</p>
@@ -41,15 +41,15 @@ public class BotCenterClient {
             .build();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /** 来自 /register 的 instanceCode（存 ~/.zbot/instance.json 以便跨重启复用）。 */
+    /** 来自 /register 的 instanceCode（存 <profile>/instance.json 以便跨重启复用）。 */
     private String instanceCode;
     private String authToken;
     private String callbackUrl;
 
-    public BotCenterClient(String centerBaseUrl) {
-        this(centerBaseUrl, new File(System.getProperty("user.home") + "/.zbot"));
-    }
-
+    /**
+     * @param zbotDir 本 profile 的数据目录（instance.json / skills 都落这里）。
+     *                红线 1：由调用方给出，这里不再猜 {@code ~/.zbot}。
+     */
     public BotCenterClient(String centerBaseUrl, File zbotDir) {
         this.centerBaseUrl = centerBaseUrl == null ? null : centerBaseUrl.replaceAll("/$", "");
         this.zbotDir = zbotDir;
@@ -64,7 +64,7 @@ public class BotCenterClient {
     }
 
     /**
-     * 启动注册（首次或重启时复用 ~/.zbot/instance.json）。
+     * 启动注册（首次或重启时复用 <profile>/instance.json）。
      *
      * @param appCode     应用编码
      * @param userId      用户 ID
@@ -163,7 +163,7 @@ public class BotCenterClient {
     }
 
     /**
-     * 拉取本实例 pending skills 的内容，写入 {@code ~/.zbot/skills/<instanceCode>/<skillCode>/SKILL.md}。
+     * 拉取本实例 pending skills 的内容，写入 {@code <profile>/skills/<instanceCode>/<skillCode>/SKILL.md}。
      *
      * @return 成功写入的 skill 数
      */
@@ -312,7 +312,7 @@ public class BotCenterClient {
     }
 
     /**
-     * SKILL.md 落盘路径：{@code ~/.zbot/skills/<instanceCode>/<skillCode>/SKILL.md}
+     * SKILL.md 落盘路径：{@code <profile>/skills/<instanceCode>/<skillCode>/SKILL.md}
      */
     public File resolveSkillPath(String skillCode) {
         return new File(zbotDir, "skills/" + instanceCode + "/" + skillCode + "/SKILL.md");

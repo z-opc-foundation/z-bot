@@ -4,16 +4,22 @@ import java.io.File;
 import java.io.IOException;
 
 /**
- * 文件沙箱：所有文件类工具的路径都相对 {@code ~/.zbot/workspace} 解析，
+ * 文件沙箱：所有文件类工具的路径都相对本 profile 的沙箱根解析（缺省 {@code <profile>/workspace}），
  * 越界（{@code ..} 逃逸到根目录之外）直接拒绝。
  */
 public final class Sandbox {
 
     private final File root;
 
+    /**
+     * @param rootPath 沙箱根；给空则回落到 profile 的 {@code workspace} 目录
+     *                 （{@code -Dzbot.sandbox} &gt; {@code <configDir>/workspace}，见
+     *                 {@link com.zifang.z.bot.config.BotConfig#resolveWorkspaceDir}）。
+     */
     public Sandbox(String rootPath) {
         this.root = new File(rootPath == null || rootPath.trim().isEmpty()
-                ? System.getProperty("user.home") + "/.zbot/workspace" : rootPath.trim());
+                ? com.zifang.z.bot.config.BotConfig.resolveWorkspaceDir(null, null).getPath()
+                : rootPath.trim());
         if (!root.exists()) {
             this.root.mkdirs();
         }

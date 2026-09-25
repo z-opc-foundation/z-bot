@@ -1,0 +1,14 @@
+id	verdict	named_expected_red	test_that_went_red	surefire_rc	restored
+M1 ZBOT_HOME 被忽略	GREEN-BUT-MUTATED	0/0	全绿（跑了 8 条）	0	True
+M2 profile 缺省写死回 ~/.zbot	RED-OK	2/3	everyDataDirFollowsTheProfile,zbotHomePropertyIsTheProfileDefault	1	True
+M3 沙箱阶梯被换序	RED-OK	1/2	workspaceResolutionIsCliThenSysPropThenProfile	1	True
+M4 workspace 不跟 profile	RED-OK	5/5	agentBuilderKeepsEveryArtifactInsideTheProfile,eachSwitchAloneMovesOnlyItsOwnDir,everyDataDirFollowsTheProfile,statusCommandReportsProfilePathsNotRealHome,workspaceResolutionIsCliThenSysPropThenProfile	1	True
+M5 sessionsDir 不跟 profile	RED-OK	4/4	agentBuilderKeepsEveryArtifactInsideTheProfile,eachSwitchAloneMovesOnlyItsOwnDir,everyDataDirFollowsTheProfile,statusCommandReportsProfilePathsNotRealHome	1	True
+M6 AgentOptions 丢掉 profile	RED-OK	1/1	statusCommandReportsProfilePathsNotRealHome	1	True
+M7 status 回到无参 SessionManager	RED-OK	1/1	statusCommandReportsProfilePathsNotRealHome	1	True
+M8 Builder 的沙箱写死	RED-OK	1/1	agentBuilderKeepsEveryArtifactInsideTheProfile	1	True
+M9 Builder 的会话目录写死	RED-OK	1/1	agentBuilderKeepsEveryArtifactInsideTheProfile	1	True
+M10 Sandbox 空根不跟 profile	RED-OK	1/1	everyDataDirFollowsTheProfile	1	True
+M11 SessionManager 兜底写死	RED-OK	1/1	everyDataDirFollowsTheProfile	1	True
+M12 stty 备份回到 ~/.zbot 共享文件	GREEN-BUT-MUTATED	0/0	全绿（跑了 8 条）	0	True
+M13 BotCenterClient 忽略传入目录	RED-OK	1/1	centerClientWritesItsArtifactsIntoTheProfile	1	True

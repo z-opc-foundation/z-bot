@@ -39,7 +39,7 @@ public final class LineEditor implements AutoCloseable {
     private final LineReader reader;
     /** 斜杠命令全集（SlashRegistry ∪ 终端私有命令），补全单一来源。 */
     private final Supplier<List<String>> commandNames;
-    /** 降级读取器懒加载：RawTerminalReader 构造会跑 stty 并备份到 ~/.zbot，延迟到首次读。 */
+    /** 降级读取器懒加载：RawTerminalReader 构造会跑 stty（备份落在本进程的临时文件），延迟到首次读。 */
     private RawTerminalReader fallback;
 
     private LineEditor(Mode mode, LineReader reader, Supplier<List<String>> commandNames) {
