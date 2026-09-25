@@ -17,6 +17,9 @@ import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
 import com.zifang.z.bot.checkpoint.CheckpointManager;
 import com.zifang.z.bot.context.CompressorEngine;
+import com.zifang.z.bot.cron.CronJob;
+import com.zifang.z.bot.cron.CronScheduler;
+import com.zifang.z.bot.cron.CronTools;
 import com.zifang.z.bot.delegate.DelegateManager;
 import com.zifang.z.bot.memory.MemoryStore;
 import com.zifang.z.bot.memory.MemoryTools;
@@ -119,6 +122,8 @@ public class BotAgent {
     private final MemoryStore memoryStore;
     /** 本地技能根目录（<configDir>/skills 或 center 下发目录），可空。 */
     private final File skillsRoot;
+    /** 定时任务调度器（null = 未启用）。 */
+    private final CronScheduler cronScheduler;
 
     /** 执行前需要打快照的破坏性工具（写文件 / 任意命令 / Maven 构建都会改沙箱）。 */
     private static final Set<String> CHECKPOINT_TOOLS = new HashSet<String>(
@@ -155,6 +160,7 @@ public class BotAgent {
         this.delegation = b.delegation;
         this.memoryStore = b.memoryStore;
         this.skillsRoot = b.skillsRoot;
+        this.cronScheduler = b.cronScheduler;
         if (delegation != null) {
             delegation.attach(this);
         }
@@ -809,6 +815,62 @@ public class BotAgent {
         return (user ? "USER.md:\n" : "MEMORY.md:\n") + (content.isEmpty() ? "（空）" : content);
     }
 
+    /** 当前 cron 调度器（测试 / 高级用法可见）。未启用时返回 null。 */
+    public CronScheduler getCronScheduler() {
+        return cronScheduler;
+    }
+
+    /** {@code /cron [list|add <schedule> | <name> | <prompt>|remove|pause|resume <id>]}。 */
+    public String cronManage(String args) {
+        if (cronScheduler == null) {
+            return "未启用 cron 调度（config 模式启动后可用）";
+        }
+        String a = args == null ? "" : args.trim();
+        if (a.toLowerCase().startsWith("add")) {
+            String rest = a.substring(3).trim();
+            String[] parts = rest.split("\\|");
+            if (parts.length < 3) {
+                return "格式: /cron add <schedule> | <name> | <prompt>";
+            }
+            try {
+                CronJob job = cronScheduler.add(parts[1].trim(), parts[2].trim(), parts[0].trim());
+                return "已创建定时任务 " + job.id + " (" + job.schedule + ")";
+            } catch (IllegalArgumentException e) {
+                return e.getMessage();
+            }
+        }
+        if (a.toLowerCase().startsWith("remove") || a.toLowerCase().startsWith("pause")
+                || a.toLowerCase().startsWith("resume")) {
+            String[] parts = a.split("\\s+", 2);
+            if (parts.length < 2) {
+                return "格式: /cron " + parts[0] + " <id>";
+            }
+            String id = parts[1].trim();
+            switch (parts[0].toLowerCase()) {
+                case "remove":
+                    return cronScheduler.remove(id) ? "已删除 " + id : "未找到任务: " + id;
+                case "pause":
+                    return cronScheduler.setEnabled(id, false) ? "已暂停 " + id : "未找到任务: " + id;
+                default:
+                    return cronScheduler.setEnabled(id, true) ? "已恢复 " + id : "未找到任务: " + id;
+            }
+        }
+        List<CronJob> jobs = cronScheduler.list();
+        if (jobs.isEmpty()) {
+            return "暂无定时任务（/cron add every 5m | 名字 | 任务描述）";
+        }
+        StringBuilder sb = new StringBuilder("定时任务 (" + jobs.size() + ")\n");
+        for (CronJob j : jobs) {
+            sb.append("  ").append(j.id).append("  ").append(j.enabled ? "ON " : "OFF").append("  ")
+                    .append(j.schedule).append("  ").append(j.name);
+            if (!j.lastResult.isEmpty()) {
+                sb.append("  最近: ").append(j.lastResult);
+            }
+            sb.append('\n');
+        }
+        return sb.toString().trim();
+    }
+
     /** {@code /rollback [id]} — 把沙箱恢复到指定快照，缺省最近一次。 */
     public String rollbackCheckpoint(String id) {
         if (checkpoints == null) {
@@ -864,6 +926,9 @@ public class BotAgent {
     }
 
     public void shutdown() {
+        if (cronScheduler != null) {
+            cronScheduler.stop();
+        }
         if (lifecycle != null) {
             lifecycle.stop();
         }
@@ -1161,6 +1226,8 @@ public class BotAgent {
         private MemoryStore memoryStore;
         /** 本地技能根目录；config 模式缺省 {@code <configDir>/skills}。 */
         private File skillsRoot;
+        /** cron 调度器；config 模式缺省建在 {@code <configDir>/cron}（60s tick，spawn 子代理执行）。 */
+        private CronScheduler cronScheduler;
         private BotCenterClient centerClient;
         private int maxSteps;
         private int maxTokens;
@@ -1261,8 +1328,14 @@ public class BotAgent {
     }
 
     /** 覆盖默认记忆目录（测试注入 TemporaryFolder 用）。 */
-        public Builder memoryStore(MemoryStore memoryStore) {
+    public Builder memoryStore(MemoryStore memoryStore) {
             this.memoryStore = memoryStore;
+            return this;
+        }
+
+        /** 注入现成 cron 调度器（测试用小 tick 注入）。 */
+        public Builder cronScheduler(CronScheduler cronScheduler) {
+            this.cronScheduler = cronScheduler;
             return this;
         }
 
@@ -1363,6 +1436,31 @@ public class BotAgent {
             }
             if (skillsRoot == null && config != null && config.getConfigDir() != null) {
                 skillsRoot = new File(config.getConfigDir(), "skills");
+            }
+            if (cronScheduler == null && config != null && config.getConfigDir() != null) {
+                final LlmProvider raw = provider != null ? provider : LlmRouter.create(config.activeProvider());
+                final File cronSessions = new File(config.getConfigDir(), "cron/sessions");
+                cronScheduler = new CronScheduler(new File(config.getConfigDir(), "cron"), 60,
+                        new CronScheduler.TaskRunner() {
+                            @Override
+                            public String run(String prompt) {
+                                BotAgent child = BotAgent.builder(config)
+                                        .provider(raw)
+                                        .sandbox(sandbox)
+                                        .withoutCenter()
+                                        .sessionManager(new SessionManager(cronSessions))
+                                        .build();
+                                try {
+                                    return child.chat(prompt, StreamListener.NOOP);
+                                } finally {
+                                    child.shutdown();
+                                }
+                            }
+                        });
+                cronScheduler.start();
+            }
+            if (cronScheduler != null) {
+                toolkit.register(CronTools.cronTool(cronScheduler));
             }
             if (systemPrompt == null && centerClient != null) {
                 systemPrompt = augmentWithLongTermMemory(null, centerClient);

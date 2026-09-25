@@ -335,6 +335,22 @@ public final class SlashRegistry {
         r.register(new SlashCommand() {
             @Override
             public String name() {
+                return "/cron";
+            }
+
+            @Override
+            public String description() {
+                return "定时任务: /cron 列表, /cron add <schedule> | <name> | <prompt>, remove/pause/resume <id>";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return agent.cronManage(args);
+            }
+        });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
                 return "/checkpoints";
             }
 

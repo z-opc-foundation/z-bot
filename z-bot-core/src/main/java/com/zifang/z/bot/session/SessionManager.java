@@ -35,8 +35,8 @@ public class SessionManager {
     private final StateStore store;
     private final ObjectMapper mapper = new ObjectMapper();
     private final Map<String, SessionData> sessions = new ConcurrentHashMap<String, SessionData>();
-    /** 实例级随机短标识，拼进新会话 id 防跨进程同毫秒撞 id。 */
-    private static final String INSTANCE_TAG =
+    /** 实例级随机短标识，拼进新会话 id 防跨进程/同进程不同实例同毫秒撞 id。 */
+    private final String instanceTag =
             java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 6);
     private String currentSessionId;
 
@@ -82,11 +82,11 @@ public class SessionManager {
 
     public synchronized String createSession() {
         long now = System.currentTimeMillis();
-        // 时间戳 + 实例级随机段：防止两个进程在同一毫秒各 /new 撞 id 互相吞会话；
+        // 时间戳 + 实例级随机段：防止两个进程或同进程不同实例在同一毫秒各 /new 撞 id 互相吞会话；
         // 同实例内连续新建（TUI 连按两次 /new）由去重循环兜底
-        String id = "session_" + now + "-" + INSTANCE_TAG;
+        String id = "session_" + now + "-" + instanceTag;
         for (int n = 1; sessions.containsKey(id); n++) {
-            id = "session_" + now + "-" + INSTANCE_TAG + "-" + n;
+            id = "session_" + now + "-" + instanceTag + "-" + n;
         }
         SessionData sd = new SessionData();
         sd.id = id;

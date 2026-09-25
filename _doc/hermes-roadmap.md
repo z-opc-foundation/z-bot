@@ -196,3 +196,10 @@
 
 ## 3. 进度记录
 - 2026-09-24: 计划成文。基线: z-bot 0.2.0 (26 类/5090 行, 43 单测), kernel 0.1.1 (9 空壳子模块)。
+- 2026-09-25 P0–P6 ✅: kernel SPI / BotAgent 核心 / state.db / ContextEngine / CheckpointManager / DelegateManager / Memory 三层 + SKILL.md + SOUL.md。单测 116/116 连续 3 跑绿。
+- 2026-09-25 P7 ✅: cron 调度 + 主动自动化落定 (`z-bot-core/.../cron/{CronSchedule,CronJob,CronScheduler,CronTools}.java`)。
+  - 表达式: `every Ns/Nm/Nh` / `hourly` / `daily HH:MM`, `due()` 用 truncatedTo(MINUTES) 走整分边界, 修了原实现跨边界漏触发的 bug (例如 last=09:00:30→now=09:02:30 找不到 09:02:00)。
+  - 调度: daemon 60s tick, jobs.json tmp+ATOMIC_MOVE, 每 job `<id>.run.lock` FileLock 防多进程抢跑, runner 抛异常也写回 `lastResult`。
+  - 工具: `cronjob` (add/list/remove/pause/resume), 注册到 BotAgent 工具表; `/cron` slash 命令同步操作; `BotAgent.Builder.cronScheduler(...)` 注入短 tick scheduler 便于测试。
+  - 副修: `SessionManager.INSTANCE_TAG` static → instance, 同进程多 SessionManager 实例同毫秒 `createSession()` 不再撞 id (orphansFromAnotherProcessAreAdopted 假红根因)。
+  - 单测 152/152 连续 3 跑绿 (新增 CronScheduleTest 17 + CronSchedulerTest 13 + BotAgentCronTest 6)。
