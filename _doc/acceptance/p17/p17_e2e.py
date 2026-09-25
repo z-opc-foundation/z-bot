@@ -36,6 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")
+REAL_CRON = os.path.join(REAL_HOME, "cron")
 OUT = os.path.join(HERE, "out")
 STUB_KEY = "stub-key-not-real"
 
@@ -283,8 +284,7 @@ def main():
     home_before = (len(os.listdir(REAL_HOME)) if os.path.isdir(REAL_HOME) else -1,
                    md5(os.path.join(REAL_HOME, "config.properties")),
                    md5(os.path.join(REAL_HOME, "state.db")))
-    cron_real = os.path.join(REAL_HOME, "cron")
-    real_cron_listing = sorted(os.listdir(cron_real)) if os.path.isdir(cron_real) else None
+    real_cron_listing = sorted(os.listdir(REAL_CRON)) if os.path.isdir(REAL_CRON) else None
 
     srv, base_url = start_stub()
     print("stub LLM: %s   临时根: %s" % (base_url, root), flush=True)
@@ -491,7 +491,7 @@ def run_cases(root, base_url, home_before, real_cron_listing):
                   md5(os.path.join(REAL_HOME, "state.db")))
     check("D2 真实 ~/.zbot 没被动过", home_before == home_after,
           "before=%s after=%s" % (home_before, home_after))
-    cron_now = sorted(os.listdir(cron_real)) if os.path.isdir(cron_real) else None
+    cron_now = sorted(os.listdir(REAL_CRON)) if os.path.isdir(REAL_CRON) else None
     check("D3 真实 ~/.zbot/cron 没多出东西", cron_now == real_cron_listing,
           "before=%s after=%s" % (real_cron_listing, cron_now))
 
