@@ -1,6 +1,7 @@
 package com.zifang.z.bot.cli;
 
 import com.zifang.z.bot.config.BotConfig;
+import com.zifang.z.bot.store.SchemaMigrations;
 import com.zifang.z.bot.store.StateStore;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -15,18 +16,26 @@ import java.util.List;
 import java.util.concurrent.Callable;
 
 /**
- * {@code z-bot sessions …} — state.db 会话库管理：list / search / export / stats / prune。
+ * {@code z-bot sessions …} — state.db 会话库管理：list / search / export / stats / prune
+ * + P15 的 version / lineage / end / resume / archive / checkpoint。
  *
  * <p>缺省操作 {@code <configDir>/state.db}（{@code --config-dir} 决定 profile），
  * {@code --db} 可直接指向别的库文件（测试 / 多实例）。</p>
  */
-@Command(name = "sessions", description = "state.db 会话库管理（list/search/export/stats/prune）",
+@Command(name = "sessions",
+        description = "state.db 会话库管理（list/search/export/stats/prune/version/lineage/end/archive）",
         subcommands = {
                 SessionsCommand.ListCmd.class,
                 SessionsCommand.SearchCmd.class,
                 SessionsCommand.ExportCmd.class,
                 SessionsCommand.StatsCmd.class,
-                SessionsCommand.PruneCmd.class})
+                SessionsCommand.PruneCmd.class,
+                SessionsCommand.VersionCmd.class,
+                SessionsCommand.LineageCmd.class,
+                SessionsCommand.EndCmd.class,
+                SessionsCommand.ResumeCmd.class,
+                SessionsCommand.ArchiveCmd.class,
+                SessionsCommand.CheckpointCmd.class})
 public class SessionsCommand {
 
     @Option(names = {"--db"}, paramLabel = "FILE",
@@ -47,7 +56,7 @@ public class SessionsCommand {
         return new File(BotConfig.load(dir).getStateDbPath());
     }
 
-    @Command(name = "list", description = "列出全部会话")
+    @Command(name = "list", description = "列出会话（默认隐藏软归档的）")
     public static class ListCmd implements Callable<Integer> {
         @ParentCommand
         SessionsCommand parent;
@@ -55,21 +64,28 @@ public class SessionsCommand {
         @Option(names = {"-n", "--limit"}, defaultValue = "50", description = "最多显示条数")
         int limit;
 
+        @Option(names = {"--all"}, description = "把软归档（archived=1）的会话也列出来")
+        boolean all;
+
         @Override
         public Integer call() {
             StateStore store = new StateStore(dbFileOf(parent));
-            List<StateStore.SessionRow> rows = store.listSessions();
+            List<StateStore.SessionRow> rows = store.listSessions(all);
             java.io.PrintStream out = System.out;
-            out.printf("%-28s  %-6s  %-32s  %s%n", "SESSION", "MSGS", "TITLE", "UPDATED");
+            out.printf("%-28s  %-4s  %-6s  %-30s  %-19s  %s%n",
+                    "SESSION", "END", "MSGS", "TITLE", "UPDATED", "PARENT");
             int n = 0;
             for (StateStore.SessionRow r : rows) {
                 if (n++ >= limit) {
                     break;
                 }
-                out.printf("%-28s  %-6d  %-32s  %s%n", r.id, r.messageCount,
-                        clip(r.title, 32), r.updatedAt);
+                out.printf("%-28s  %-4s  %-6d  %-30s  %-19s  %s%n", r.id,
+                        r.archived ? "arch" : (r.isEnded() ? "end" : "-"),
+                        r.messageCount, clip(r.title, 30), r.updatedAt,
+                        r.parentSessionId == null ? "" : r.parentSessionId);
             }
-            out.println("共 " + rows.size() + " 个会话" + (store.isFtsEnabled() ? "" : "（FTS 不可用，检索为 LIKE 模式）"));
+            out.println("共 " + rows.size() + " 个会话" + (all ? "（含归档）" : "（--all 连归档一起看）")
+                    + (store.isFtsEnabled() ? "" : "（FTS 不可用，检索为 LIKE 模式）"));
             return 0;
         }
     }
@@ -145,20 +161,250 @@ public class SessionsCommand {
         }
     }
 
-    @Command(name = "prune", description = "清理空会话（updated_at 早于 N 天且 0 条消息）")
+    @Command(name = "prune", description = "按保留策略清理（默认只删『已结束且 0 消息』；在飞/有消息都要显式开关）")
     public static class PruneCmd implements Callable<Integer> {
         @ParentCommand
         SessionsCommand parent;
 
-        @Option(names = {"--days"}, defaultValue = "7", description = "N 天前的空会话才删")
+        @Option(names = {"--days"}, defaultValue = "7", description = "N 天前的才进窗口")
         int days;
+
+        @Option(names = {"--include-in-flight"},
+                description = "连未结束（在飞）的会话一起删；只在明确知道没人在用时用")
+        boolean includeInFlight;
+
+        @Option(names = {"--cascade"},
+                description = "父命中时沿 parent_session_id 连带删掉整条血统（默认是置空子会话的父指针）")
+        boolean cascade;
+
+        @Option(names = {"--dry-run"}, description = "只点名不动手")
+        boolean dryRun;
+
+        @Option(names = {"--archive"}, description = "软归档（打 archived 标记、不删数据）而不是硬删")
+        boolean archive;
+
+        @Option(names = {"--purge-archived"}, description = "硬删已归档且超过 --days 的会话")
+        boolean purgeArchived;
+
+        @Option(names = {"--source"}, paramLabel = "SRC", description = "只处理该来源的会话")
+        String source;
+
+        @Option(names = {"--max-messages"}, paramLabel = "N",
+                description = "只处理消息数 <= N 的会话（默认 0：只清空的）")
+        Integer maxMessages;
+
+        @Option(names = {"--include-non-empty"},
+                description = "连有消息的会话一起硬删（不加这个开关时 prune 只清 0 消息会话，"
+                        + "与 P2 的行为一致；结束状态不是删除授权）")
+        boolean includeNonEmpty;
 
         @Override
         public Integer call() {
             StateStore store = new StateStore(dbFileOf(parent));
-            int removed = store.prune(days);
-            System.out.println("已清理 " + removed + " 个空会话（>" + days + " 天）");
+            StateStore.PruneCriteria c = StateStore.PruneCriteria.olderThanDays(days)
+                    .requireEnded(!includeInFlight)
+                    .cascadeChildren(cascade)
+                    .detachOrphans(!cascade)
+                    .dryRun(dryRun);
+            if (source != null && !source.trim().isEmpty()) {
+                c.source(source.trim());
+            }
+            if (maxMessages != null) {
+                c.maxMessages(maxMessages);
+            } else if (!includeNonEmpty && !archive) {
+                // 默认钉死在 P2 的语义上：这个命令曾经只能删空会话。"已结束"只是生命周期状态，
+                // 不等于人可以把它连消息一起抹掉 —— 扩面必须显式给开关。
+                // 只钉硬删这一档：--archive 是软归档（数据原样留着、可 --unarchive 撤销），
+                // 给它加同样的封顶就等于逼用户为了归档再打一次删除开关。
+                c.maxMessages(Integer.valueOf(0));
+                System.out.println("按 0 消息范围清理（要连有消息的已结束会话一起删: --include-non-empty，"
+                        + "或改用 --archive 软归档）");
+            }
+            StateStore.PruneReport r = archive ? store.archiveMatching(c) : store.pruneDetailed(c);
+            if (purgeArchived) {
+                int purged = store.deleteArchived(days);
+                System.out.println("已硬删归档会话 " + purged + " 个（>" + days + " 天）");
+            }
+            System.out.println((archive ? "软归档 " : "清理 ") + r
+                    + (dryRun ? " ⇒ dry-run，未改动任何数据" : ""));
+            for (String id : r.ids) {
+                System.out.println("  " + id);
+            }
             return 0;
+        }
+    }
+
+    @Command(name = "version", description = "schema 版本与迁移台账；--check 顺带校验 head")
+    public static class VersionCmd implements Callable<Integer> {
+        @ParentCommand
+        SessionsCommand parent;
+
+        @Option(names = {"--check"}, description = "跑一次 head 对齐校验，缺项则退出码 1")
+        boolean check;
+
+        @Option(names = {"--steps"}, description = "列出迁移阶梯")
+        boolean steps;
+
+        @Override
+        public Integer call() {
+            StateStore store = new StateStore(dbFileOf(parent));
+            System.out.println("schema_version=" + store.schemaVersion()
+                    + " head=" + SchemaMigrations.HEAD_VERSION
+                    + " db=" + store.getDbFile().getAbsolutePath());
+            SchemaMigrations.Report last = store.lastMigration();
+            if (last != null) {
+                System.out.println("本次开库迁移: " + last.summary());
+            }
+            String ledger = store.getMeta(StateStore.META_LAST_MIGRATION);
+            System.out.println("迁移台账(state_meta): " + (ledger == null ? "(空)" : ledger));
+            if (store.recoveredFromBackup() != null) {
+                System.out.println("注意：原库判为不可用，已备份到 "
+                        + store.recoveredFromBackup().getAbsolutePath() + "，当前是重建的空库");
+            }
+            if (steps) {
+                for (SchemaMigrations.Step s : SchemaMigrations.steps()) {
+                    System.out.println("  v" + s.version + " " + s.name + " — " + s.what);
+                }
+            }
+            if (!check) {
+                return 0;
+            }
+            List<String> problems = store.verifySchema();
+            for (String p : problems) {
+                System.out.println("  缺项: " + p);
+            }
+            System.out.println(problems.isEmpty() ? "schema 校验通过" : "schema 校验不通过");
+            return problems.isEmpty() ? 0 : 1;
+        }
+    }
+
+    @Command(name = "lineage", description = "看某个会话的血统链（往上到根 + 往下列子会话）")
+    public static class LineageCmd implements Callable<Integer> {
+        @ParentCommand
+        SessionsCommand parent;
+
+        @Parameters(paramLabel = "SESSION", description = "会话 id")
+        String session;
+
+        @Override
+        public Integer call() {
+            StateStore store = new StateStore(dbFileOf(parent));
+            if (!store.sessionExists(session)) {
+                System.out.println("会话不存在: " + session);
+                return 1;
+            }
+            java.io.PrintStream out = System.out;
+            List<StateStore.LineageStep> chain = store.lineageOf(session);
+            for (int i = 0; i < chain.size(); i++) {
+                StateStore.LineageStep s = chain.get(i);
+                StringBuilder indent = new StringBuilder();
+                for (int j = 0; j < i; j++) {
+                    indent.append("  ");
+                }
+                out.printf("%s%s  msgs=%d  %s%s%n", indent, s.sessionId,
+                        store.messageCount(s.sessionId),
+                        s.ended ? "ended(" + s.endReason + ")" : "in-flight",
+                        i == chain.size() - 1 ? "   ← 当前" : "");
+            }
+            List<StateStore.SessionRow> children = store.listChildSessions(session);
+            for (StateStore.SessionRow child : children) {
+                if (chain.size() > 1 && child.id.equals(chain.get(chain.size() - 2).sessionId)) {
+                    continue; // 链上已经打过父节点
+                }
+                out.println("  ↳ " + child.id + "  " + clip(child.title, 30));
+            }
+            if (children.isEmpty()) {
+                out.println("（无子会话）");
+            }
+            return 0;
+        }
+    }
+
+    @Command(name = "end", description = "标成已结束（ended_at/end_reason），prune 才会碰它")
+    public static class EndCmd implements Callable<Integer> {
+        @ParentCommand
+        SessionsCommand parent;
+
+        @Parameters(paramLabel = "SESSION", description = "会话 id")
+        String session;
+
+        @Option(names = {"--reason"}, paramLabel = "WHY", defaultValue = "manual",
+                description = "结束原因（第一个写进去的原因赢）")
+        String reason;
+
+        @Override
+        public Integer call() {
+            StateStore store = new StateStore(dbFileOf(parent));
+            boolean ok = store.endSession(session, reason);
+            System.out.println(ok ? "已标记结束: " + session + " (" + reason + ")"
+                    : "没改动（会话不存在或早已结束）: " + session);
+            return ok ? 0 : 1;
+        }
+    }
+
+    @Command(name = "resume", description = "撤销 end 标记，让会话回到在飞状态")
+    public static class ResumeCmd implements Callable<Integer> {
+        @ParentCommand
+        SessionsCommand parent;
+
+        @Parameters(paramLabel = "SESSION", description = "会话 id")
+        String session;
+
+        @Override
+        public Integer call() {
+            StateStore store = new StateStore(dbFileOf(parent));
+            boolean ok = store.reopenSession(session);
+            System.out.println(ok ? "已回到在飞: " + session : "没改动（会话不存在或本就未结束）: " + session);
+            return ok ? 0 : 1;
+        }
+    }
+
+    @Command(name = "archive", description = "软归档 / 取消归档（不删数据）")
+    public static class ArchiveCmd implements Callable<Integer> {
+        @ParentCommand
+        SessionsCommand parent;
+
+        @Parameters(paramLabel = "SESSION", description = "会话 id；配 --old N 时留空")
+        String session;
+
+        @Option(names = {"--unarchive"}, description = "改成未归档")
+        boolean unarchive;
+
+        @Option(names = {"--old"}, paramLabel = "N", description = "批量：把 N 天前且已结束的会话整组归档")
+        Integer oldDays;
+
+        @Override
+        public Integer call() {
+            StateStore store = new StateStore(dbFileOf(parent));
+            if (oldDays != null) {
+                StateStore.PruneReport r = store.archiveMatching(
+                        StateStore.PruneCriteria.olderThanDays(oldDays.intValue()));
+                System.out.println("批量归档 " + r);
+                return 0;
+            }
+            if (session == null || session.trim().isEmpty()) {
+                System.out.println("要么给 SESSION，要么给 --old N");
+                return 1;
+            }
+            boolean ok = store.archiveSession(session.trim(), !unarchive);
+            System.out.println(ok ? (unarchive ? "已取消归档: " + session : "已软归档: " + session)
+                    : "会话不存在: " + session);
+            return ok ? 0 : 1;
+        }
+    }
+
+    @Command(name = "checkpoint", description = "立刻做一次 wal_checkpoint(TRUNCATE)，收缩 -wal")
+    public static class CheckpointCmd implements Callable<Integer> {
+        @ParentCommand
+        SessionsCommand parent;
+
+        @Override
+        public Integer call() {
+            StateStore store = new StateStore(dbFileOf(parent));
+            boolean ok = store.checkpointNow();
+            System.out.println(ok ? "wal_checkpoint 完成（写事务计数 " + store.writeCounters() + "）"
+                    : "wal_checkpoint 失败: " + store.lastError());
+            return ok ? 0 : 1;
         }
     }
 
