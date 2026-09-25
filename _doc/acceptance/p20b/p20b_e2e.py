@@ -32,7 +32,8 @@ LOGS = os.path.join(HERE, "logs")
 DRIVER = os.path.join(HERE, "P20bToolDriver.java")
 SERVER = os.path.join(HERE, "mcp_stub_server.py")
 STUB_KEY = "stub-key-not-real"
-# 真 key 125 字符、stub 19 字符：这条尺判的是"像真 key 那么长的东西有没有进产物"
+# 真 key 125 字符、stub 17 字符（`len("stub-key-not-real")`，K2 里逐字比过）：
+# 这条尺判的是"像真 key 那么长的东西有没有进产物"
 LONG_KEY_RE = re.compile(r"api\.key[=\" :]+[A-Za-z0-9_\-]{60,}")
 HOME_REAL = os.path.expanduser("~/.zbot")
 RESULTS = []
@@ -200,12 +201,17 @@ def judge_mcp(kv, logtext):
           "alpha_tools=%s anchor=%s second_read=%s samples=%s"
           % (n_alpha, anchor_n, second_n, samples[:2]))
     mid = [s for s in samples if 30_000 <= s[0] < 60_000]
-    check("M5 越过 TTL 后重探、但宽限窗内不摘工具（30–60s 窗必须真有样本；重探是步进的、不是每轮都探）",
-          bool(mid) and all(s[1] for s in mid)
-          and max(s[2] for s in mid) > anchor_n
-          and max(s[2] for s in mid) <= anchor_n * 3,
-          "30-60s 样本=%d 条 probes=%s exposed=%s"
-          % (len(mid), sorted(set(s[2] for s in mid)), set(s[1] for s in mid)))
+    # 期望值的出处（本条第一版写"重探是步进的、不是每轮都探"，那个上界 anchor*3 <b>没有出处</b>，
+    # 而产品语义正相反：探测<b>失败</b>不写缓存 —— 单测
+    # ToolkitProbeTest.transientFailureInsideGraceWindowKeepsTheToolAndIsNotCached 钉的就是这条 ——
+    # 所以 server 一直死着时，驱动每 1.5s 读一次外发清单就会重探该桥的每个槽位一次
+    # （alpha 发了 2 个工具 ⇒ 每轮 +2）。下面按<b>精确斜率</b>判，比原来那条不等式强，不是放宽。
+    steps = [b[2] - a[2] for a, b in zip(mid, mid[1:])]
+    check("M5 越过 TTL 后每轮都重探（失败不写缓存，斜率恰为该桥槽位数）、但宽限窗内一条都不摘（真时间）",
+          len(mid) >= 5 and all(s[1] for s in mid) and mid[0][2] > anchor_n
+          and all(d == n_alpha for d in steps) and min(s[2] for s in mid) > anchor_n,
+          "30-60s 样本=%d 条 probes=%s 每轮增量=%s exposed=%s"
+          % (len(mid), [s[2] for s in mid][:6], sorted(set(steps)), set(s[1] for s in mid)))
     hidden = i(kv.get("SEG1_FIRST_HIDDEN_MS"))
     check("M6 持续失败过了 60s 宽限窗必须把工具从外发清单摘掉（真时间读数）",
           60_000 <= hidden <= 90_000, "first_hidden=%dms" % hidden)
