@@ -414,7 +414,7 @@ def run_tests(classes=None):
         cmd += ["-Dtest=" + classes, "-DfailIfNoTests=false"]
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ZBOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    failing, ran, names = set(), 0, set()
+    failing, ran, names, msgs = set(), 0, set(), {}
     if os.path.isdir(REPORTS):
         for name in sorted(os.listdir(REPORTS)):
             if not name.endswith(".xml"):
@@ -425,10 +425,20 @@ def run_tests(classes=None):
                 continue
             ran += int(root.get("tests") or 0)
             for tc in root.iter("testcase"):
-                names.add(tc.get("name").split("[")[0])
-                if tc.find("failure") is not None or tc.find("error") is not None:
-                    failing.add(tc.get("name").split("[")[0])
-    return proc.returncode, failing, ran, names, proc.stdout.decode("utf-8", "replace"), time.time() - t0
+                tn = tc.get("name").split("[")[0]
+                names.add(tn)
+                node = tc.find("failure")
+                if node is None:
+                    node = tc.find("error")
+                if node is not None:
+                    failing.add(tn)
+                    # 断言级读数：PARTIAL / GREEN-BUT-MUTATED 要能逐条落到"哪个断言红了"
+                    txt = ((node.get("type") or "") + ": " + (node.get("message") or "")).strip(": ")
+                    first = (txt.split("\n") or [""])[0][:200]
+                    cls = (tc.get("classname") or "").split(".")[-1]
+                    msgs[tn] = "%s#%s ⇒ %s" % (cls, tn, first or "(无 message 属性)")
+    return (proc.returncode, failing, ran, names, msgs,
+            proc.stdout.decode("utf-8", "replace"), time.time() - t0)
 
 
 def full_suite_probe(ids):
@@ -466,7 +476,7 @@ def full_suite_probe(ids):
     for mid, key, old, new, anchors, expected, note in sel:
         original = read(key)
         write(key, original.replace(old, new, 1))
-        rc, failing, ran, _names, out, secs = run_tests(None)     # 全量：不带 -Dtest
+        rc, failing, ran, _names, msgs, out, secs = run_tests(None)     # 全量：不带 -Dtest
         write(key, original)
         ok = md5(os.path.join(ZBOT, SRC[key])) == md5_before[key]
         stable = stable and ok
@@ -480,6 +490,8 @@ def full_suite_probe(ids):
         print("%-34s %-24s ran=%d 点名集=%d 红=%s | mvn_rc=%s | %.1fs | 还原=%s"
               % (mid, verdict, ran, len(expected), who if failing else "-", rc, secs, ok),
               flush=True)
+        for tn in sorted(failing)[:8]:
+            print("     %s" % msgs.get(tn, tn), flush=True)
         rows.append((mid, verdict, str(ran), "%d/%d" % (len(set(expected) & failing),
                                                         len(expected)), who, str(rc), str(ok)))
     md5_after = {k: md5(os.path.join(ZBOT, v)) for k, v in SRC.items()}
@@ -519,7 +531,7 @@ def main():
         if not mutants:
             print("FATAL: 选择器没命中任何变异体 id: %s" % sys.argv[1:], flush=True)
             return 2
-        print("选择器 %s ⇒ 只跑 %d/%d 条（LEDGER 会被这一子集覆盖，整账要整跑）"
+        print("选择器 %s ⇒ 只跑 %d/%d 条（子集只写 logs/LEDGER_subset.tsv，整账要无参整跑）"
               % (sys.argv[1:], len(mutants), len(MUTANTS)), flush=True)
     try:
         acquire_lock()
@@ -554,7 +566,8 @@ def main():
     for mid, key, old, new, anchors, expected, note in mutants:
         original = read(key)
         write(key, original.replace(old, new, 1))
-        rc, failing, ran, names, out, secs = run_tests()
+        # 分母钉死在本期五支类（run_tests 的 classes 参数缺省是"全量"，这里必须显式给）
+        rc, failing, ran, names, msgs, out, secs = run_tests(TESTS)
         write(key, original)                       # 按内存原文逐字节还原
         restored = md5(os.path.join(ZBOT, SRC[key])) == md5_before[key]
         missing = sorted(want - names)
@@ -581,6 +594,10 @@ def main():
                  restored), flush=True)
         if verdict != "RED-OK":
             print("     %s" % note, flush=True)
+            for tn in sorted(failing)[:8]:
+                print("     %s" % msgs.get(tn, tn), flush=True)
+            if not failing:
+                print("     注入后 82 条具名 testcase 无一判红 ⇒ 这条行为没有测试盯", flush=True)
         if missing:
             print("     分母漂了，缺: %s" % ",".join(missing[:6]), flush=True)
         rows.append((mid, verdict, "%d/%d" % (len(set(expected) & failing), len(expected)),
@@ -592,7 +609,9 @@ def main():
     md5_after = {k: md5(os.path.join(ZBOT, v)) for k, v in SRC.items()}
     stable = all(md5_after[k] == md5_before[k] for k in SRC)
     here = os.path.dirname(os.path.abspath(__file__))
-    ledger = os.path.join(here, "LEDGER.tsv")
+    # 只跑子集时**不许**覆盖整账：上一版选择器也会走完整个写账流程 ⇒ 一次探针就把 24 条整账抹了。
+    ledger = (os.path.join(here, "LEDGER.tsv") if mutants is MUTANTS
+              else os.path.join(here, "logs", "LEDGER_subset.tsv"))
     with io.open(ledger, "w", encoding="utf-8") as fh:
         fh.write("id\tverdict\tnamed_expected_red\ttest_that_went_red\ttests_ran"
                  "\tsurefire_rc\trestored\n")
