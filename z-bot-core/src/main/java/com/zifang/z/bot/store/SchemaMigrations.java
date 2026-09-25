@@ -273,6 +273,7 @@ public final class SchemaMigrations {
         public int toVersion = UNVERSIONED;
         public final List<String> appliedSteps = new ArrayList<String>();
         public final List<String> createdTables = new ArrayList<String>();
+        public final List<String> createdIndexes = new ArrayList<String>();
         public final List<String> addedColumns = new ArrayList<String>();
         public int normalizedTimestamps;
         public boolean healedByReconcile;
@@ -287,6 +288,9 @@ public final class SchemaMigrations {
             }
             if (!addedColumns.isEmpty()) {
                 sb.append(" columns=").append(addedColumns);
+            }
+            if (!createdIndexes.isEmpty()) {
+                sb.append(" indexes=").append(createdIndexes);
             }
             if (normalizedTimestamps > 0) {
                 sb.append(" timestampsNormalized=").append(normalizedTimestamps);
@@ -440,8 +444,9 @@ public final class SchemaMigrations {
         }
     }
 
+    /** 建表原语：只有"这次真的建了表"才记进 {@code createdTables}（幂等重开必须是 no-op）。 */
     private static void exec(Connection c, Report report, String ddl) throws SQLException {
-        String table = tableOfCreate(ddl);
+        String table = nameOfCreate(ddl);
         boolean known = table != null && hasTable(c, table);
         try (Statement st = c.createStatement()) {
             st.execute(ddl);
@@ -451,28 +456,55 @@ public final class SchemaMigrations {
         }
     }
 
-    private static void index(Connection c, Report report, String name, String defs) throws SQLException {
-        exec(c, report, "CREATE INDEX IF NOT EXISTS " + q(name) + " ON " + defs);
+    private static boolean objectExists(Connection c, String name) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT 1 FROM sqlite_master WHERE name=? LIMIT 1")) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
     }
 
-    private static String tableOfCreate(String ddl) {
+    /** 从 {@code CREATE ... IF NOT EXISTS <name> ...} 里取对象名；取不到返回 null。 */
+    private static String nameOfCreate(String ddl) {
         String m = ddl.trim();
         String upper = m.toUpperCase();
-        if (!upper.startsWith("CREATE TABLE") && !upper.startsWith("CREATE INDEX")
-                && !upper.startsWith("CREATE VIRTUAL TABLE")) {
+        if (!upper.startsWith("CREATE TABLE") && !upper.startsWith("CREATE VIRTUAL TABLE")) {
             return null;
         }
         int exists = upper.indexOf("EXISTS");
         if (exists < 0) {
             return null;
         }
-        int lp = m.indexOf('(', exists);
-        int comma = m.indexOf(',', exists);
-        if (lp < 0) {
-            return null;
+        String rest = m.substring(exists + 6).trim();
+        int end = rest.length();
+        for (int i = 0; i < rest.length(); i++) {
+            char ch = rest.charAt(i);
+            if (ch == '(' || Character.isWhitespace(ch)) {
+                end = i;
+                break;
+            }
         }
-        int end = comma > 0 && comma < lp ? comma : lp;
-        return m.substring(exists + 6, end).trim();
+        return unquote(rest.substring(0, end).trim());
+    }
+
+    private static String unquote(String ident) {
+        if (ident.length() >= 2 && ident.startsWith("\"") && ident.endsWith("\"")) {
+            return ident.substring(1, ident.length() - 1);
+        }
+        return ident;
+    }
+
+    private static void index(Connection c, Report report, String name, String defs) throws SQLException {
+        boolean known = objectExists(c, name);
+        try (Statement st = c.createStatement()) {
+            st.execute("CREATE INDEX IF NOT EXISTS " + q(name) + " ON " + defs);
+        }
+        // 索引进独立清单：混进 createdTables 会让"重开一次"看起来像建了 6 张表
+        if (!known && report != null && !report.createdIndexes.contains(name)) {
+            report.createdIndexes.add(name);
+        }
     }
 
     public static boolean hasTable(Connection c, String table) throws SQLException {

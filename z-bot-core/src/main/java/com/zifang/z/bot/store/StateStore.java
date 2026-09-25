@@ -404,6 +404,7 @@ public class StateStore {
     private final SqliteTx.Counters counters = new SqliteTx.Counters();
     private boolean ftsEnabled;
     private SchemaMigrations.Report lastMigration;
+    private PruneReport lastAutoPrune;
     private File recoveredFromBackup;
     private String lastError;
 
@@ -424,6 +425,13 @@ public class StateStore {
             throw new IllegalStateException("sqlite-jdbc 不在 classpath", e);
         }
         openWithSelfHealing();
+        // hermes 的启动路径：auto_prune 开着就在开库时清一次（默认 off ⇒ 完全 no-op）
+        this.lastAutoPrune = maybeAutoPrune();
+    }
+
+    /** 本次开库的自动清理结果；{@code null} = 没跑（默认，{@code auto_prune} 关着）。 */
+    public PruneReport lastAutoPrune() {
+        return lastAutoPrune;
     }
 
     // ===== 打开 / 体检 / 自愈 =====
@@ -864,6 +872,9 @@ public class StateStore {
     /**
      * 挂父：{@code childId} 的 {@code parent_session_id = parentId}。
      *
+     * <p>防环的方向要说清：挂上去会成环，当且仅当 {@code childId} 已经在 {@code parentId} 的祖先链上
+     * （即父是我的后代）。所以从 <b>parentId</b> 往上走找 childId。</p>
+     *
      * @return false = 参数非法（自己挂自己 / 父不存在 / 会成环），库未改动
      */
     public synchronized boolean setParentSession(String childId, String parentId) {
@@ -873,7 +884,7 @@ public class StateStore {
         if (parentId != null && !sessionExists(parentId)) {
             return false;
         }
-        if (parentId != null && reachesAncestor(childId, parentId)) {
+        if (parentId != null && (parentId.equals(childId) || reachesAncestor(parentId, childId))) {
             return false; // 会成环
         }
         final String child = childId;
