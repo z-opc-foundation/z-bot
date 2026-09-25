@@ -53,6 +53,8 @@ public final class BotConfig {
     private int delegateMaxDepth = 2;
     /** 异步委托并发宽度（agent.delegate.max.children）：同时在跑的子代理上限，默认 3。 */
     private int delegateMaxChildren = 3;
+    /** MCP server 列表（mcp.servers），每一项 name + stdio 命令行。空 = 不接 MCP。 */
+    private List<McpServerEntry> mcpServers = new ArrayList<McpServerEntry>();
     private String centerUrl;
     private String appCode = "default-chat";
     private boolean loaded;
@@ -162,6 +164,35 @@ public final class BotConfig {
         String appCode = trim(props.getProperty("center.app.code"));
         if (!appCode.isEmpty()) {
             this.appCode = appCode;
+        }
+
+        // mcp.servers = "fs=node /usr/local/bin/mcp-fs.js,git=uvx mcp-git"
+        // 逗号分隔每个 server, "=" 前面是 server name, 后面是完整命令行 (空格分隔)
+        String mcpRaw = trim(props.getProperty("mcp.servers"));
+        if (!mcpRaw.isEmpty()) {
+            this.mcpServers = new ArrayList<McpServerEntry>();
+            for (String entry : mcpRaw.split(",")) {
+                String e = entry.trim();
+                if (e.isEmpty()) {
+                    continue;
+                }
+                int eq = e.indexOf('=');
+                if (eq <= 0 || eq == e.length() - 1) {
+                    continue;
+                }
+                String name = e.substring(0, eq).trim();
+                String cmdline = e.substring(eq + 1).trim();
+                List<String> cmd = new ArrayList<String>();
+                for (String token : cmdline.split("\\s+")) {
+                    if (!token.isEmpty()) {
+                        cmd.add(token);
+                    }
+                }
+                if (name.isEmpty() || cmd.isEmpty()) {
+                    continue;
+                }
+                this.mcpServers.add(new McpServerEntry(name, cmd));
+            }
         }
 
         String active = trim(props.getProperty("llm.provider"));
@@ -341,6 +372,16 @@ public final class BotConfig {
         return delegateMaxChildren;
     }
 
+    /** MCP server 配置列表。{@code mcp.servers} 解析结果；空 = 不接 MCP。 */
+    public List<McpServerEntry> getMcpServers() {
+        return Collections.unmodifiableList(mcpServers);
+    }
+
+    public void setMcpServers(List<McpServerEntry> mcpServers) {
+        this.mcpServers = mcpServers == null
+                ? new ArrayList<McpServerEntry>() : new ArrayList<McpServerEntry>(mcpServers);
+    }
+
     public void setToolChoice(String toolChoice) {
         this.toolChoice = toolChoice;
     }
@@ -463,6 +504,34 @@ public final class BotConfig {
         public String toString() {
             return "Provider{code='" + code + "', type='" + type + "', baseUrl='" + baseUrl
                     + "', model='" + model + "', apiKey=" + (apiKey == null || apiKey.isEmpty() ? "none" : "set") + '}';
+        }
+    }
+
+    /**
+     * 一个 MCP server 配置 — 仅支持 stdio transport（命令行拉起子进程），
+     * name 作为工具前缀（{@code mcp-<name>-<tool>})。
+     */
+    public static final class McpServerEntry {
+        private final String name;
+        private final List<String> command;
+
+        public McpServerEntry(String name, List<String> command) {
+            this.name = name;
+            this.command = command == null
+                    ? Collections.<String>emptyList() : Collections.unmodifiableList(command);
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public List<String> getCommand() {
+            return command;
+        }
+
+        @Override
+        public String toString() {
+            return "McpServer{name='" + name + "', command=" + command + "}";
         }
     }
 }

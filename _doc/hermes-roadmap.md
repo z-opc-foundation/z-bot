@@ -221,3 +221,14 @@
 **BotAgent.forkFor(conversationId)**: 共享 provider/tools/sandbox/context/checkpoint, 独立 SessionManager 在 `<configDir>/delegate/children/fork-<cid>/`(P5 delegate 子代理的同模式复用)。
 
 **单测**: 181/181 连续 3 跑绿 (新增 29: PairingServiceTest 7 + WebhookChannelTest 5 + FeishuChannelTest 7 + DingTalkChannelSignTest 5 + GatewayTest 5)。webhook/飞书是真 HTTP 端到端; 配对/钉钉签名/Gateway 是纯算法/桩。
+
+### P9 MCP 客户端 — Hermes #10 ✅ 完成 (2026-09-25)
+**实现**:
+- `mcp.McpClientFactory`: `createStdio(BotConfig.McpServerEntry)` 用 kernel `StdioMcpTransport` 拉起子进程 + JSON-RPC `initialize/tools/list/tools/call` 封装; `wrap(name, transport)` 用于测试注入
+- `mcp.McpBridge`: 单 server 工具桥接, 命名 `mcp-<server>-<tool>`, 注册到 `Toolkit`
+- `mcp.McpManager`: 多 server 聚合, **失败隔离** (一个 server 起不来不连累其他), `startAll / reload / stopAll / snapshot / toMapList` API; **静态工厂** `fromClients(Toolkit, List<McpClient>)` 绕开 `List<X>` / `List<Y>` 擦除冲突
+- `BotAgent` 接线: `mcpManager` 字段 + `Builder.mcpManager(...)/withoutMcp()`; `BotAgent.shutdown()` 停 mcpManager; `BotAgent.mcpManage(args)` 对应 `/mcp [list|reload]` slash 命令; config 模式 + `mcp.servers` 非空时 `build()` 自动 `startAll`
+- `BotConfig` 解析: `mcp.servers=fs=node /usr/local/bin/mcp-fs.js,git=uvx mcp-git --foo` 逗号分 server, `=` 分 name 和命令行, 空格切 argv; 新 `McpServerEntry(name, command)` POJO
+- pom: 引入 `z-agent-kernel-mcp` 依赖 (dependencyManagement + z-bot-core 显式声明)
+
+**单测**: 190/190 连续 3 跑绿 (新增 9: McpManagerTest)。`FakeMcpServer` (内存 `McpTransport`) 覆盖: 启动注册/工具执行/server 错误透传/单 server 失败不连累其他/reload 重注册/命名格式/properties 解析/空 servers。

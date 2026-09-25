@@ -22,6 +22,7 @@ import com.zifang.z.bot.cron.CronScheduler;
 import com.zifang.z.bot.cron.CronTools;
 import com.zifang.z.bot.delegate.DelegateManager;
 import com.zifang.z.bot.memory.MemoryStore;
+import com.zifang.z.bot.mcp.McpManager;
 import com.zifang.z.bot.memory.MemoryTools;
 import com.zifang.z.bot.skill.SkillLoader;
 import com.zifang.z.bot.llm.LlmRouter;
@@ -124,6 +125,8 @@ public class BotAgent {
     private final File skillsRoot;
     /** 定时任务调度器（null = 未启用）。 */
     private final CronScheduler cronScheduler;
+    /** MCP bridge 聚合（null = 未启用），按 config.mcp.servers 拉起各 server 并把工具注入 toolkit。 */
+    private final McpManager mcpManager;
 
     /** 执行前需要打快照的破坏性工具（写文件 / 任意命令 / Maven 构建都会改沙箱）。 */
     private static final Set<String> CHECKPOINT_TOOLS = new HashSet<String>(
@@ -161,6 +164,7 @@ public class BotAgent {
         this.memoryStore = b.memoryStore;
         this.skillsRoot = b.skillsRoot;
         this.cronScheduler = b.cronScheduler;
+        this.mcpManager = b.mcpManager;
         if (delegation != null) {
             delegation.attach(this);
         }
@@ -929,6 +933,9 @@ public class BotAgent {
         if (cronScheduler != null) {
             cronScheduler.stop();
         }
+        if (mcpManager != null) {
+            mcpManager.stopAll();
+        }
         if (lifecycle != null) {
             lifecycle.stop();
         }
@@ -936,6 +943,36 @@ public class BotAgent {
 
     public Toolkit getToolkit() {
         return toolkit;
+    }
+
+    public McpManager getMcpManager() {
+        return mcpManager;
+    }
+
+    /** {@code /mcp [list|reload]} — 查看已注册 MCP 工具或热重载。 */
+    public String mcpManage(String args) {
+        if (mcpManager == null) {
+            return "未启用 MCP（config 中 mcp.servers 为空时不会启动）";
+        }
+        String a = args == null ? "" : args.trim().toLowerCase();
+        if (a.startsWith("reload")) {
+            int total = mcpManager.reload();
+            return "MCP reload 完成，共注册 " + total + " 个工具";
+        }
+        // default: list
+        List<McpManager.BridgeStatus> snaps = mcpManager.snapshot();
+        StringBuilder sb = new StringBuilder("MCP servers (" + snaps.size() + ")\n");
+        for (McpManager.BridgeStatus s : snaps) {
+            if (s.ok) {
+                sb.append("- ").append(s.name).append(": OK, ")
+                        .append(s.toolCount).append(" 工具 (")
+                        .append(String.join(", ", s.registeredNames))
+                        .append(")\n");
+            } else {
+                sb.append("- ").append(s.name).append(": ERROR, ").append(s.error).append('\n');
+            }
+        }
+        return sb.toString().trim();
     }
 
     public Sandbox getSandbox() {
@@ -1248,6 +1285,10 @@ public class BotAgent {
         private File skillsRoot;
         /** cron 调度器；config 模式缺省建在 {@code <configDir>/cron}（60s tick，spawn 子代理执行）。 */
         private CronScheduler cronScheduler;
+        /** MCP 客户端聚合；config 模式 + mcp.servers 非空时缺省建，测试可注入。 */
+        private McpManager mcpManager;
+        /** 关闭 MCP 自动装配（默认 true）。 */
+        private boolean noMcp;
         private BotCenterClient centerClient;
         private int maxSteps;
         private int maxTokens;
@@ -1356,6 +1397,17 @@ public class BotAgent {
         /** 注入现成 cron 调度器（测试用小 tick 注入）。 */
         public Builder cronScheduler(CronScheduler cronScheduler) {
             this.cronScheduler = cronScheduler;
+            return this;
+        }
+
+        public Builder mcpManager(McpManager mcpManager) {
+            this.mcpManager = mcpManager;
+            return this;
+        }
+
+        /** 关闭 MCP 自动装配（仅用 config 时生效，{@link #mcpManager} 显式注入不受影响）。 */
+        public Builder withoutMcp() {
+            this.noMcp = true;
             return this;
         }
 
@@ -1481,6 +1533,15 @@ public class BotAgent {
             }
             if (cronScheduler != null) {
                 toolkit.register(CronTools.cronTool(cronScheduler));
+            }
+            if (mcpManager == null && config != null && !noMcp
+                    && config.getMcpServers() != null && !config.getMcpServers().isEmpty()) {
+                mcpManager = new McpManager(toolkit, config.getMcpServers());
+                try {
+                    mcpManager.startAll();
+                } catch (RuntimeException e) {
+                    LOG.warn("[BotAgent] MCP 装配失败: {}", e.getMessage());
+                }
             }
             if (systemPrompt == null && centerClient != null) {
                 systemPrompt = augmentWithLongTermMemory(null, centerClient);
