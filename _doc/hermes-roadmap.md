@@ -53,7 +53,7 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 | 4 | steer 注入 | `agent/_pending_steer` 单槽 (非队列) + 追加到最后一条 tool 结果; 3 处 drain; 硬中断丢弃 pending steer | kernel `SteerQueue` **0 消费者**, 自建实现 | 浅 |
 | 5 | prompt cache | `agent/prompt_caching.py:84-119` `system_and_3` ≤4 断点; **system prompt 每会话构建一次并逐字节重放** (`:967-971`), 易变内容进 user 消息; 工具 schema `sorted()` | 只有 schema 排序; 记忆/技能/center 召回拼进 system prompt | **缺** (缓存不变量未定义) |
 | 6 | 上下文压缩 | 阈值 `(context_length - max_tokens) × 0.50` (`agent/context_compressor.py:1521` `threshold_percent: float = 0.50`), 3 个评估位点, 防抖/失败冷却, `compression_locks` 表, **血统=会话分叉入库** | 阈值 `maxTokens × 0.85` (`CompressorEngine.java:23`), 锁有, 血统在内存 | 浅 |
-| 7 | 状态库 | `hermes_state.py` 9,503 行, **13 张 CREATE TABLE**, sessions **46 列**, `schema_version` 迁移阶梯 + 坏库自愈, WAL/`BEGIN IMMEDIATE`+抖动重试 | `StateStore.java` 4 张表, WAL+busy_timeout, FTS5→LIKE 降级 | 浅 |
+| 7 | 状态库 | `hermes_state.py` 9,503 行, **22 条 CREATE TABLE (含虚表) ⇒ 11 张实表 + 3 张 FTS 虚表** (复算 `grep -cE 'CREATE (VIRTUAL )?TABLE' hermes_state.py`; 实表名去重见 §8), sessions **46 列** (`:872-919`, 按列声明正则数=46), `schema_version` 迁移阶梯 + 坏库自愈, WAL/`BEGIN IMMEDIATE`+抖动重试 | `store/` 4 文件 3,152 行 (StateStore 1,950 / SchemaMigrations 565 / SqliteTx 324 / DbRecovery 313): head 8 实表 + 1 FTS 虚表, sessions 15 列, 3 步可重入阶梯 + 声明式收口 + 坏库备份重建 + `BEGIN IMMEDIATE`/20–150ms 抖动重试, 10 个配置键接线; **双进程对撞实测**见 §8 | 浅 (机制四件套 09-25 实测齐; 差额=sessions 还缺 31 列的计费/token 分档/通道身份/handoff + telegram 主题 2 表 + trigram/cjk 两个虚表) |
 | 8 | 检索 | `messages_fts` + `messages_fts_trigram` + `messages_fts_cjk` (`native/fts5_cjk/` C 扩展); 搜索沿血统回溯 (`session_search_tool.py:104`) | 单一 FTS5, 无 trigram | 浅 (CJK 扩展=不做) |
 | 9 | 记忆 | `MEMORY.md`+`USER.md` 两层 (2,200/1,375 字符上限), `SOUL.md` 属**身份**不属记忆; 快照冻结保缓存; `write_approval` 三段 (allow/inline/stage→`pending/*.json`); 威胁扫描 `[BLOCKED:]` | 三文件同放 `memories/`, rewrite/forget 走审批, 无字符上限/无冻结快照/无威胁扫描 | 浅 |
 | 10 | 技能 | **184 个 `SKILL.md`** (78 在 `skills/`, 余在 `optional-skills/`; 复算 `find . -name SKILL.md -not -path './.git/*' -not -path './tests/*' -not -path './website/*' \| wc -l`); frontmatter 含 `platforms/environments/prerequisites/metadata.hermes.*`; `agent/skill_commands.py:320 scan_skill_commands` **技能→斜杠命令** (被 `gateway/slash_commands.py:1362`、`tui_gateway/server.py:13424`、`cli.py:3643` 三端消费); `skills_sync` origin_hash 清单 (23 处); `tools/skills_hub.py` 4,227 行 (lockfile+隔离+审计); `agent/curator.py` 2,016 + `tools/skill_usage.py` 947 + `tools/skills_guard.py` 1,153 生命周期 | 4 字段 frontmatter + `/skills list/view`; **技能→命令在 v1 被显式推迟且没做** | 浅 |
@@ -281,8 +281,28 @@ _(W1 起逐期追加)_
   | 复算: `mvn -o test -pl z-bot-core -Dtest=PairingServiceTest` 循环单跑 5–10 次（**别只看全量跑**，冷 JVM 才暴露）
   | 实测: 修前单跑连续 6/6 红（`Tests run: 7, Failures: 1`，`caseInsensitiveCodeConsumption` 耗时 1.4–3.4s），全量 3 跑里红 1 跑（`multipleIssuedCodesAccumulate expected:<2> but was:<0>`）；修后单跑 `Tests run: 7, Failures: 0` × 5。
 - 2026-09-25 **待办 · 红线 1 泄漏（P11 发现，另片修）**: 沙箱根三处硬编码 `~/.zbot/workspace`，`--config-dir X` 不改变它 ⇒ 多 profile 共享同一个写/执行根（与已修的 `a91de90` state.db 同一类）。
-  | 复算: `grep -rn "zbot/workspace" z-bot-core/src/main/java` ⇒ `agent/BotAgent.java:1593`、`cli/AgentOptions.java:100`、`tool/Sandbox.java:16`
-  | 实测: 尚未修；修法（默认跟随 `configDir/workspace`，`--sandbox`/`-Dzbot.sandbox` 仍可覆盖）与验收清单待开工时补。
+  | 复算: `grep -n 'user.home.*\.zbot' z-bot-core/src/main/java/com/zifang/z/bot/{agent/BotAgent.java,cli/AgentOptions.java,tool/Sandbox.java}`
+  | 实测: `BotAgent.java:1593`、`BotAgent.java:1609`（**P15 复测新逮到一处**: 会话 JSON 目录 `~/.zbot/sessions` 同样无视 `--config-dir`）、`AgentOptions.java:100`、`Sandbox.java:16`；尚未修，修法（默认跟随 `configDir/workspace`、`configDir/sessions`，`--sandbox`/`-Dzbot.sandbox` 仍可覆盖）与验收清单待开工时补。
+- 2026-09-25 **P15 state.db 收口** ✅ 提交 `d64ad44`: 10 个 `agent.state.*` 配置键接进 `BotConfig.stateStoreOptions()`（两个建库点 `BotAgent.Builder` / `SessionsCommand.openStore` 都走它，11 处 `new StateStore` 收成一处）+ E2E 抓到的"在飞"漏洞修掉。
+  | 复算: `rm -rf z-bot-core/target/surefire-reports && mvn -o test` 连续 3 跑
+  | 实测: `Tests run: 391, Failures: 0, Errors: 0, Skipped: 0` × 3 跑、`RC=0` × 3（修 CLI 默认档前是 390 × 3 全绿，那 3 跑也是同一条命令跑的，不覆盖本次改动）。§2 矩阵 #7 的实测列同期改为 3,152 行 / 8 实表 / sessions 15 列 / 3 步阶梯 / 10 键接线。
+- 2026-09-25 P15 变异检验（14 支，量具入库）
+  | 复算: `python3 _doc/acceptance/p15/p15_mutation.py`（单支复算：`python3 _doc/acceptance/p15/p15_mutation.py MU-14`；脚本自带锚点唯一性预检 + 变异后逐字节 md5 还原，还原失败当场停机）
+  | 实测: 14 次注入 = **12 `RED-OK` / 1 `PARTIAL` / 1 `GREEN-BUT-MUTATED`**，收尾 `final md5 ok: True`。
+  |  · **`GREEN-BUT-MUTATED` 是 MU-1（把 `cfg.beginImmediate()` 的返回值扔掉、写事务全退化成 deferred）：`StateStoreWritePathTest` 12 条全绿** ⇒ `BEGIN IMMEDIATE` 这道守卫**没有任何单测能杀**（同 JVM 多线程 + busy_timeout + 重试阶梯把它兜住了），唯一证据是下面的双进程对撞；这条不是"缺覆盖"的口径问题，而是单测这一层结构性看不见跨进程写锁。
+  |  · `PARTIAL` 是 MU-3（抖动退避清零）：我在期望集里**故意没点名**（没有计时断言），红了的是姊妹测试 `retryLadderCarriesAWriteThroughAnExternalLockHolder` 的 `givenUp==0` 断言 ⇒ 阶梯"熬多久"其实被这条钉住了，记账为"期望集留空"而非"无覆盖"。
+  |  · MU-14 是我修的洞的反向验证：把 `.treatUnusedEmptyAsEnded(false)` 摘掉 ⇒ `emptyInFlightSessionIsOnlyGoneWithItsOwnSwitch` 点名红。
+- 2026-09-25 P15 真实 E2E（真 jar/真 CLI/真两个 JVM 对撞/真坏库；不许用读代码代替）✅ **20/20**
+  | 复算: `mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p15/p15_e2e.py`
+  | 实测 · 迁移: 用 `ae5aff7` 的字面 DDL 造 4 表老库（2/3/1/1 行 + 只有 `messages_ai` 的 FTS），真 CLI 首开 ⇒ `schema 0->3 steps=[legacy-baseline, p15-schema-alignment, p15-timestamp-normalization]`、`sessions` 补 4 列、新建 3 表、`timestampsNormalized=7`，四表行数逐表比对**一行不丢**，FTS 因缺 delete 触发器被就地重建（`messages_ai,messages_ad`、`fts=3=messages`），`search 遗留消息甲` 命中 `[old-1]`。
+  | 实测 · 双进程对撞（两个真 JVM 各 240 条追加到**同一 session**，行数由驱动侧独立 JDBC 连接读，不信被测自述）: C1 改前形态（deferred+0 重试+busy=0）**丢 183/480 与 129/480（两次跑），落库 297/351 行，`lastError=[SQLITE_BUSY_SNAPSHOT]`/`[SQLITE_BUSY]`**；C2 只有阶梯、C3 只有 IMMEDIATE、C4 P15 默认 三档均 `rows=480/480 唯一内容=480 idx 跨度=480 message_count=480 lost=0`。⇒ `BEGIN IMMEDIATE` 与重试阶梯**各自都足以保住数据**（这正是 MU-1 单测杀不掉的那条），代价在延迟：两跑读数 C2 1,903/1,776ms、C3 773/1,744ms、C4 948/891ms。
+  | 实测 · 自愈: 把 state.db 头部 4KB 写成垃圾 ⇒ CLI 不崩，`[StateStore] 警告：state.db 判为不可用（[SQLITE_NOTADB]）`，原件改名 `state.db.corrupt-20260925_204059`（备份大小 8192 = 原大小，没被覆盖），同路径重建空库 118,784 字节。
+  | 实测 · 抓出的洞（已修，见上条 MU-14）: `sessions prune --days 7` 默认档把**0 消息的在飞会话**一起硬删了（`清理 matched=2 deleted=2` 里有 `in-flight`），而这条命令的帮助文本和自己的 `--include-in-flight` 开关都承诺"在飞不动" ⇒ 首跑 E2E **18/20**，两处 FAIL 同一个根因；修 CLI 侧关掉 `treatUnusedEmptyAsEnded` 后 **20/20**（`E4a survivors=[ended-with-msg, in-flight]`、`E4c survivors=[in-flight]`）。store 层的 P2 兼容档保持原样（`auto_prune` 走那条，90 天保留是她的语义）。
+  | 实测 · 配置键真有牙: `--config-dir` 里写 `agent.state.prune.auto=true` + `retention.days=1` ⇒ 开库真清掉 30 天前的已结束会话、今天新建的活着；不配时同一份库一动不动（E5b）。量具注: E5 的 `fresh` 行是用 `sqlite3 strftime('now')`（UTC）灌的，与本地时间差 8 小时，不影响"1 天保留期内不删"这一判定。
+  | 实测 · 红线 1: `~/.zbot 项数=8→8`、`config.properties md5 2dadaed0→2dadaed0`、`state.db md5 690ddbc0→690ddbc0`（全程 `--config-dir`/`--db` 指向临时目录；key 一律 `stub-key-not-real`）。
+- 2026-09-25 **待办 · P15 未交部分（不遮蔽，另片记账）**: §5 P15 验收行里的"sessions 列对齐（她 46 列，逐列注明 要/不要/占位）"**只做了加 4 列**，`SchemaMigrations` 类注释里那句"理由表见本期 notes"目前**没有对应的表**。
+  | 复算: `python3 - <<'PY' … 数 hermes `hermes_state.py:872` 的 sessions 列声明 ⇒ 46；`sqlite3 <head 库> 'PRAGMA table_info(sessions)' | wc -l` ⇒ 15`（hermes 实测 46 列名已在本轮取到：`user_id/session_key/chat_id/chat_type/thread_id/origin_json` 通道身份 6 列、`input/output/cache_read/cache_write/reasoning_tokens` token 分档 5 列、`estimated_cost_usd/actual_cost_usd/cost_status/cost_source/pricing_version/billing_*` 成本台账 8 列、`handoff_state/platform/error` 3 列、`cwd/git_branch/rewind_count/expiry_finalized/profile_name` 等）
+  | 实测: `handoff_*` 三列**没加**（§5 计划里点名要）；差额 31 列里"成本台账"依赖 P12 的 token 记账、"通道身份"依赖 P16 的送达模型，硬堆就是红线 2 的 0 消费者列 ⇒ 逐列理由表随 P14（血统/压缩列）与 P16（路由列）各自补片时产出，本期不虚报。
 
 ---
 
