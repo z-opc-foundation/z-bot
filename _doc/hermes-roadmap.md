@@ -249,3 +249,16 @@
 
 **单测**: 216/216 连续 4 跑绿 (新增 11: ModelCatalogCacheTest 10 + HttpChannelTest 模型端点 1)。
 已知抖动: 全量首跑出现过 1 次 WebhookChannelTest 401 (全仓唯一 401 源是 Feishu token 校验, WebhookChannel 无鉴权逻辑), 单类 10/10 + 后续 4 轮全量均绿, 判定为环境级临时端口复用, 未复现不修。
+
+### P10c Web UI 扩展 ✅ 完成 (2026-09-25)
+**后端**:
+- `HttpChannel` 新路由 `GET/POST /api/cron`: GET 返回 count+jobs(id/name/prompt/schedule/enabled/lastRun/lastResult); POST 支持 `{action:add, name?, prompt, schedule}` / `{action:remove|pause|resume, id}`; 无 scheduler 时 GET 返 count=0、POST 返 `cron scheduler not enabled`; add 缺字段/未知 action 都返 ok:false
+
+**前端 (web/index.html)**:
+- 侧栏会话区加搜索框: 按 title/id 客户端过滤, 无匹配给提示, 清空即恢复
+- 新增"管理"侧栏区 → 三个 modal 视图: 模型目录 (id/名称/上下文/能力表格 + 刷新缓存/强制重拉) / 技能 (code 列表 + 从中心同步) / 定时任务 (增删暂停恢复 + 上次运行结果)
+- modal overlay (点遮罩/Esc 关闭) + attrEsc 属性转义 (escapeHtml 不处理引号, 放 onclick 会炸)
+
+**真渲染验收** (起真实 serve + 内置浏览器实测, 非代码断言): 页面骨架/搜索框/管理区渲染无 console 错误; 模型目录真拉到 6 个模型; cron UI 加→行出现→删→count 归 0 回路通过 (残留 jobs.json 已清理回 pre-state); 会话搜索 18→3 条且清空恢复; 技能页渲染正常。
+
+**单测**: 219/219 连续 3 跑绿 (新增 3: HttpChannelTest cron 增删暂停恢复回路 / 校验拒绝 / 无 scheduler 分支; setUp 注入 CronScheduler 使 status tools=2→3)。

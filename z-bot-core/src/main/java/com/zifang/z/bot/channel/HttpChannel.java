@@ -10,6 +10,8 @@ import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.config.BotConfig;
+import com.zifang.z.bot.cron.CronJob;
+import com.zifang.z.bot.cron.CronScheduler;
 import com.zifang.z.bot.session.SessionManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -165,6 +167,8 @@ public final class HttpChannel {
                 json(ex, 200, skillSyncResult());
             } else if ("/api/skill/list".equals(path)) {
                 json(ex, 200, skillListResult());
+            } else if ("/api/cron".equals(path)) {
+                json(ex, 200, cronResult(method, readBody(ex)));
             } else if ("/api/agent/register".equals(path)) {
                 json(ex, 200, agentRegisterResult(readBody(ex)));
             } else {
@@ -427,6 +431,73 @@ public final class HttpChannel {
         resp.put("count", codes.size());
         resp.put("skillCodes", codes);
         return resp;
+    }
+
+    /**
+     * {@code GET /api/cron} 列任务; {@code POST /api/cron} 操作:
+     * {@code {action: add, name?, prompt, schedule}} / {@code {action: remove|pause|resume, id}}。
+     */
+    private Map<String, Object> cronResult(String method, String body) {
+        Map<String, Object> resp = new LinkedHashMap<String, Object>();
+        CronScheduler scheduler = agent.getCronScheduler();
+        if ("POST".equals(method)) {
+            if (scheduler == null) {
+                resp.put("ok", false);
+                resp.put("error", "cron scheduler not enabled");
+                return resp;
+            }
+            Map<String, Object> req = parseObject(body);
+            String action = str(req.get("action"));
+            if ("add".equals(action)) {
+                String prompt = str(req.get("prompt"));
+                String schedule = str(req.get("schedule"));
+                if (prompt.isEmpty() || schedule.isEmpty()) {
+                    resp.put("ok", false);
+                    resp.put("error", "prompt 和 schedule 不能为空");
+                    return resp;
+                }
+                CronJob job = scheduler.add(or(str(req.get("name")), prompt), prompt, schedule);
+                resp.put("ok", true);
+                resp.put("job", cronJobMap(job));
+                return resp;
+            }
+            String id = str(req.get("id"));
+            boolean ok;
+            if ("remove".equals(action)) {
+                ok = scheduler.remove(id);
+            } else if ("pause".equals(action)) {
+                ok = scheduler.setEnabled(id, false);
+            } else if ("resume".equals(action)) {
+                ok = scheduler.setEnabled(id, true);
+            } else {
+                resp.put("ok", false);
+                resp.put("error", "未知 action: " + action);
+                return resp;
+            }
+            resp.put("ok", ok);
+            resp.put("message", ok ? "ok" : "未找到任务: " + id);
+            return resp;
+        }
+        List<CronJob> jobs = scheduler == null ? Collections.<CronJob>emptyList() : scheduler.list();
+        List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
+        for (CronJob job : jobs) {
+            out.add(cronJobMap(job));
+        }
+        resp.put("count", out.size());
+        resp.put("jobs", out);
+        return resp;
+    }
+
+    private static Map<String, Object> cronJobMap(CronJob job) {
+        Map<String, Object> m = new LinkedHashMap<String, Object>();
+        m.put("id", job.id);
+        m.put("name", job.name);
+        m.put("prompt", job.prompt);
+        m.put("schedule", job.schedule);
+        m.put("enabled", job.enabled);
+        m.put("lastRun", job.lastRun);
+        m.put("lastResult", job.lastResult);
+        return m;
     }
 
     /**

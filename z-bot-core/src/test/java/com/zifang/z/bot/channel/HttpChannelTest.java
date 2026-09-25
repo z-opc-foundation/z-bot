@@ -8,6 +8,7 @@ import com.zifang.z.agent.kernel.message.ToolCall;
 import com.zifang.z.agent.kernel.tool.ToolResult;
 import com.zifang.z.agent.kernel.types.TokenUsage;
 import com.zifang.z.bot.agent.BotAgent;
+import com.zifang.z.bot.cron.CronScheduler;
 import com.zifang.z.bot.session.SessionManager;
 import com.zifang.z.bot.tool.Confirmations;
 import com.zifang.z.bot.tool.Sandbox;
@@ -74,6 +75,7 @@ public class HttpChannelTest {
                 .toolkit(toolkit)
                 .sandbox(new Sandbox(tmp.newFolder("sandbox").getAbsolutePath()))
                 .sessionManager(new SessionManager(tmp.newFolder("sessions")))
+                .cronScheduler(new CronScheduler(tmp.newFolder("cron"), 60, prompt -> "ok"))
                 .model("test-model")
                 .withoutBuiltinTools()
                 .build();
@@ -97,7 +99,8 @@ public class HttpChannelTest {
 
         assertEquals(200, r.code);
         assertTrue(r.body, r.body.contains("model=test-model"));
-        assertTrue(r.body, r.body.contains("tools=2"));
+        // tools=2 (echo/risky) + cronjob (注入 CronScheduler 时自动注册)
+        assertTrue(r.body, r.body.contains("tools=3"));
         assertTrue(r.body, r.body.contains("provider=scripted"));
         assertTrue(r.body, r.body.contains("instance=local"));
     }
@@ -139,6 +142,81 @@ public class HttpChannelTest {
         assertTrue(r3.body, r3.body.contains("\"refreshing\":true"));
 
         disk.delete();
+    }
+
+    // ===== cron =====
+
+    @Test
+    public void cronAddListPauseResumeRemoveRoundTrip() throws Exception {
+        Response add = call("POST", "/api/cron",
+                "{\"action\":\"add\",\"name\":\"晨报\",\"prompt\":\"生成晨报\",\"schedule\":\"daily 08:00\"}");
+        assertEquals(200, add.code);
+        assertTrue(add.body, add.body.contains("\"ok\":true"));
+        String id = field(add.body, "id");
+        assertNotNull("add 应返回 job id", id);
+
+        Response list = call("GET", "/api/cron", null);
+        assertEquals(200, list.code);
+        assertTrue(list.body, list.body.contains("\"count\":1"));
+        assertTrue(list.body, list.body.contains("daily 08:00"));
+        assertTrue(list.body, list.body.contains("\"enabled\":true"));
+
+        Response pause = call("POST", "/api/cron", "{\"action\":\"pause\",\"id\":\"" + id + "\"}");
+        assertTrue(pause.body, pause.body.contains("\"ok\":true"));
+        Response afterPause = call("GET", "/api/cron", null);
+        assertTrue(afterPause.body, afterPause.body.contains("\"enabled\":false"));
+
+        Response resume = call("POST", "/api/cron", "{\"action\":\"resume\",\"id\":\"" + id + "\"}");
+        assertTrue(resume.body, resume.body.contains("\"ok\":true"));
+
+        Response remove = call("POST", "/api/cron", "{\"action\":\"remove\",\"id\":\"" + id + "\"}");
+        assertTrue(remove.body, remove.body.contains("\"ok\":true"));
+        Response empty = call("GET", "/api/cron", null);
+        assertTrue(empty.body, empty.body.contains("\"count\":0"));
+
+        Response removeAgain = call("POST", "/api/cron", "{\"action\":\"remove\",\"id\":\"" + id + "\"}");
+        assertTrue(removeAgain.body, removeAgain.body.contains("\"ok\":false"));
+        assertTrue(removeAgain.body, removeAgain.body.contains("未找到任务"));
+    }
+
+    @Test
+    public void cronAddValidatesRequiredFieldsAndAction() throws Exception {
+        Response noSchedule = call("POST", "/api/cron", "{\"action\":\"add\",\"prompt\":\"x\"}");
+        assertTrue(noSchedule.body, noSchedule.body.contains("\"ok\":false"));
+        assertTrue(noSchedule.body, noSchedule.body.contains("不能为空"));
+
+        Response noPrompt = call("POST", "/api/cron", "{\"action\":\"add\",\"schedule\":\"daily 08:00\"}");
+        assertTrue(noPrompt.body, noPrompt.body.contains("\"ok\":false"));
+
+        Response unknown = call("POST", "/api/cron", "{\"action\":\"explode\"}");
+        assertTrue(unknown.body, unknown.body.contains("未知 action"));
+    }
+
+    @Test
+    public void cronEndpointReportsDisabledWithoutScheduler() throws Exception {
+        BotAgent bare = BotAgent.builder(null)
+                .provider(llm)
+                .providerCode("scripted")
+                .sandbox(new Sandbox(tmp.newFolder("bare-sandbox").getAbsolutePath()))
+                .sessionManager(new SessionManager(tmp.newFolder("bare-sessions")))
+                .model("test-model")
+                .withoutBuiltinTools()
+                .build();
+        HttpChannel ch = new HttpChannel(bare, 0);
+        ch.start();
+        try {
+            String bareBase = "http://127.0.0.1:" + ch.getPort();
+            Response list = callAt(bareBase, "GET", "/api/cron", null);
+            assertEquals(200, list.code);
+            assertTrue(list.body, list.body.contains("\"count\":0"));
+            Response post = callAt(bareBase, "POST", "/api/cron",
+                    "{\"action\":\"add\",\"prompt\":\"x\",\"schedule\":\"daily 08:00\"}");
+            assertEquals(200, post.code);
+            assertTrue(post.body, post.body.contains("\"ok\":false"));
+            assertTrue(post.body, post.body.contains("cron scheduler not enabled"));
+        } finally {
+            ch.stop();
+        }
     }
 
     @Test
@@ -414,7 +492,11 @@ public class HttpChannelTest {
     }
 
     private Response call(String method, String path, String body) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(base + path).openConnection();
+        return callAt(base, method, path, body);
+    }
+
+    private Response callAt(String baseUrl, String method, String path, String body) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + path).openConnection();
         conn.setRequestMethod(method);
         conn.setConnectTimeout(5000);
         conn.setReadTimeout(20000);
