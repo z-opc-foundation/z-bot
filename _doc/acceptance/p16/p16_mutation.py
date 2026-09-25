@@ -33,6 +33,9 @@ P16（送达台账 / 死目标 / turn lease / 监管者）变异自证：把本�
 另外三条是台账侧的防护（双实例不烧双份预算 / 发不出去的别认领 / 预算烧完就弃）：M11 M12 M15 M16。
 
 复算: python3 -u _doc/acceptance/p16/p16_mutation.py [M号子串...]
+      python3 -u _doc/acceptance/p16/p16_mutation.py --all-tests M07   # 把某条注入放到**全量**
+                                                                       # 测试类上验覆盖，只写
+                                                                       # logs/FULLSUITE.tsv
       python3 -u _doc/acceptance/p16/p16_mutation.py --hold-lock 90   # 只攥锁，不注入（互斥实测用）
 """
 import fcntl
@@ -402,12 +405,13 @@ def expected_names():
     return out
 
 
-def run_tests():
+def run_tests(classes=None):
     if os.path.isdir(REPORTS):
         for name in os.listdir(REPORTS):
             os.remove(os.path.join(REPORTS, name))
-    cmd = ["mvn", "-o", "-q", "test", "-pl", "z-bot-core", "-Dtest=" + TESTS,
-           "-DfailIfNoTests=false"]
+    cmd = ["mvn", "-o", "-q", "test", "-pl", "z-bot-core"]
+    if classes:
+        cmd += ["-Dtest=" + classes, "-DfailIfNoTests=false"]
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=ZBOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     failing, ran, names = set(), 0, set()
@@ -427,7 +431,81 @@ def run_tests():
     return proc.returncode, failing, ran, names, proc.stdout.decode("utf-8", "replace"), time.time() - t0
 
 
+def full_suite_probe(ids):
+    """杠② 的补账量具：把"点名集为空"的那几条注入放到**全量测试类**上再跑一遍，
+    分清"本期五支类没覆盖"与"全仓 481 条都没覆盖"。
+
+    只写 logs/FULLSUITE.tsv，**不碰 LEDGER.tsv** —— 整账仍由无参整跑机械产出。
+    判定照旧只认 surefire 里的具名 testcase，mvn 退出码不算证据。
+    """
+    sel = [m for m in MUTANTS if any(a in m[0] for a in ids)]
+    if not sel:
+        print("FATAL: --all-tests 的选择器没命中任何变异体 id: %s" % (ids,), flush=True)
+        return 2
+    print("lock     = %s (fcntl.flock LOCK_EX|LOCK_NB)" % LOCK_PATH, flush=True)
+    try:
+        acquire_lock()
+    except OSError:
+        print("FATAL 互斥锁被别的注入脚本攥着（%s）⇒ 本轮不跑，一个源文件都不碰"
+              % (sys.exc_info()[1],), flush=True)
+        return 4
+    bad = []
+    for mid, key, old, new, anchors, _expected, _note in sel:
+        got = read(key).count(old)
+        if got != anchors:
+            bad.append("%s: 锚点出现 %d 次，期望 %d 次（%s）" % (mid, got, anchors, SRC[key]))
+    if bad:
+        print("FATAL 锚点校验失败（代码已漂，下面的读数一律不收）:")
+        for line in bad:
+            print("  " + line)
+        return 2
+
+    md5_before = {k: md5(os.path.join(ZBOT, v)) for k, v in SRC.items()}
+    rows = []
+    stable = True
+    for mid, key, old, new, anchors, expected, note in sel:
+        original = read(key)
+        write(key, original.replace(old, new, 1))
+        rc, failing, ran, _names, out, secs = run_tests(None)     # 全量：不带 -Dtest
+        write(key, original)
+        ok = md5(os.path.join(ZBOT, SRC[key])) == md5_before[key]
+        stable = stable and ok
+        if "COMPILATION ERROR" in out:
+            verdict = "BROKEN"
+        elif failing:
+            verdict = "COVERED-BY-NAMED-TEST"
+        else:
+            verdict = "NOT-COVERED-REPO-WIDE"
+        who = ",".join(sorted(failing)) if failing else "全量 %d 条具名 testcase 无一判红" % ran
+        print("%-34s %-24s ran=%d 点名集=%d 红=%s | mvn_rc=%s | %.1fs | 还原=%s"
+              % (mid, verdict, ran, len(expected), who if failing else "-", rc, secs, ok),
+              flush=True)
+        rows.append((mid, verdict, str(ran), "%d/%d" % (len(set(expected) & failing),
+                                                        len(expected)), who, str(rc), str(ok)))
+    md5_after = {k: md5(os.path.join(ZBOT, v)) for k, v in SRC.items()}
+    stable = stable and all(md5_after[k] == md5_before[k] for k in SRC)
+    ledger = os.path.join(HERE, "logs", "FULLSUITE.tsv")
+    with io.open(ledger, "w", encoding="utf-8") as fh:
+        fh.write("id\tverdict\ttests_ran\tnamed_expected_red\ttest_that_went_red"
+                 "\tsurefire_rc\trestored\n")
+        for r in rows:
+            fh.write("\t".join(r) + "\n")
+        fh.write("# generated_by\tp16_mutation.py --all-tests %s\tat\t%s\n"
+                 % (",".join(ids), time.strftime("%Y-%m-%dT%H:%M:%S%z")))
+        fh.write("# denominator\t全量测试类（不带 -Dtest），非本期五支的 82 条\n")
+        for k in sorted(SRC):
+            fh.write("# md5\t%s\tbefore=%s\tafter=%s\n" % (k, md5_before[k], md5_after[k]))
+    print("\n== FULLSUITE PROBE: %d 条注入 ⇒ %s（LEDGER.tsv 未改）=="
+          % (len(rows), " / ".join("%s=%s" % (r[1], r[0].split()[0]) for r in rows)), flush=True)
+    print("  SRC_MD5_STABLE=%s  FULLSUITE -> %s" % ("yes" if stable else "NO", ledger), flush=True)
+    fcntl.flock(_lock_handle.fileno(), fcntl.LOCK_UN)
+    _lock_handle.close()
+    return 0 if stable else 3
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--all-tests":
+        return full_suite_probe(sys.argv[2:] or ["M07"])
     if len(sys.argv) > 2 and sys.argv[1] == "--hold-lock":
         return hold_lock_only(float(sys.argv[2]))
 
@@ -473,7 +551,7 @@ def main():
     tally = {"RED-OK": 0, "PARTIAL": 0, "GREEN-BUT-MUTATED": 0, "BROKEN": 0, "NO-RUN": 0}
     rows = []
     ran_last = 0
-    for mid, key, old, new, anchors, expected, note in MUTANTS:
+    for mid, key, old, new, anchors, expected, note in mutants:
         original = read(key)
         write(key, original.replace(old, new, 1))
         rc, failing, ran, names, out, secs = run_tests()

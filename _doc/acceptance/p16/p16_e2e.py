@@ -52,6 +52,7 @@ LOGS = os.path.join(HERE, "logs")
 STUB_KEY = "stub-key-not-real"
 
 RESULTS = []
+SECTION_TALLY = []
 SPAWNED = []
 LLM_HITS = []
 LLM_LOCK = threading.Lock()
@@ -427,6 +428,40 @@ def states(rows):
     return out
 
 
+# ---- 盘上状态对账（"已落盘/已生效"只认文件或副作用，不认日志行）----
+# P17 在本机实测：日志行早于落盘 0.1–8.8 ms，10 次里 2 次会读到旧值 ⇒ 拿日志行当触发器
+# 判"锁已换主"就是掷硬币。下面这几个函数一律直接读文件。
+
+def lock_path(profile):
+    """Supervisor:128 —— 锁落在 <configDir>/gateway/gateway.lock。"""
+    return os.path.join(profile, "gateway", "gateway.lock")
+
+
+def lock_body(profile):
+    p = lock_path(profile)
+    if not os.path.isfile(p):
+        return None
+    with io.open(p, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def lock_owned(profile, pid):
+    body = lock_body(profile)
+    return bool(body) and ('"pid":%d' % pid) in body
+
+
+def wait_until(pred, timeout, every=0.25):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if pred():
+                return True
+        except Exception:
+            pass
+        time.sleep(every)
+    return False
+
+
 def home_snapshot():
     """杠④：只取「文件名清单 + 整文件 md5」，一个文件的内容都不读进产物、不打印。"""
     if not os.path.isdir(REAL_HOME):
@@ -629,11 +664,20 @@ def section_b(root, base_url):
           "3 次 SIGKILL 最多只抓到 %d 行未结清 ⇒ 这一段无从判定" % len(open_rows))
     if len(open_rows) < 2:
         return
+    # 投递窗口仍然是"两个实例同时在跑"（下面 B2 起两边都活着、都在听自己的端口），
+    # 但**锁的归属**必须先量出来再起第二个：tryAcquireInstanceLock 只按 pid+started_at 判死，
+    # 两个 JVM 同时读到"归属进程已死"的那一瞬间谁都拒启 ⇒ B7 变成掷硬币。
+    # 顺序：起 g1 → 读盘确认锁已写到 g1 名下 → 起 g2（此时盘上是活着的 g1）⇒ 必然拒启。
     g1 = Gateway("B-gw1", prof, base_url, free_port(), free_port())
-    g2 = Gateway("B-gw2", prof, base_url, free_port(), free_port())
     g1.start()
-    g2.start()
     l1 = g1.listening(g1.webhook_port)
+    held1 = wait_until(lambda: lock_owned(prof, g1.pid()), 90)
+    check("B1b 第一个实例起来后锁真写到它名下（读盘对账，B7 的前置）", bool(l1) and held1,
+          "pid=%d lsof 监听=%d；锁文件 %s 内容=%s"
+          % (g1.pid(), l1, lock_path(prof).replace(prof, "<profile>"),
+             (lock_body(prof) or "无")[:120]))
+    g2 = Gateway("B-gw2", prof, base_url, free_port(), free_port())
+    g2.start()
     l2 = g2.listening(g2.webhook_port)
     check("B2 两个真 JVM 同刻都活着且各自在听自己的端口（按 pid 过滤 lsof）",
           bool(l1) and bool(l2) and g1.alive() and g2.alive(),
@@ -673,10 +717,14 @@ def section_b(root, base_url):
     check("B6 台账最终收敛（双实例打完之后没有行留在半路）", bool(converged),
           "状态分布=%s" % (states(after or {})))
     lt1, lt2 = g1.text(), g2.text()
-    refused = [t.tag for t, tx in (("B-gw1", lt1), ("B-gw2", lt2)) if "拒绝再起一个实例" in tx]
-    check("B7 实例锁在真双开时判死了一个（活实例锁的进程侧实据）", len(refused) == 1,
-          "拒启日志出现在=%s；B-gw1 命中=%s B-gw2 命中=%s"
-          % (refused or "两边都没有", "拒绝再起一个实例" in lt1, "拒绝再起一个实例" in lt2))
+    refused = [tag for tag, tx in (("B-gw1", lt1), ("B-gw2", lt2)) if "拒绝再起一个实例" in tx]
+    # 盘上对账：拒启的那个不许把锁改到自己名下（锁内容仍得是持锁者的 pid）
+    still_owner = lock_owned(prof, g1.pid()) and not lock_owned(prof, g2.pid())
+    check("B7 实例锁在真双开时判死了一个（活实例锁的进程侧实据）",
+          len(refused) == 1 and refused == ["B-gw2"] and still_owner,
+          "拒启日志出现在=%s；B-gw1 命中=%s B-gw2 命中=%s；锁仍在 B-gw1(pid=%d) 名下=%s（锁内容=%s）"
+          % (refused or "两边都没有", "拒绝再起一个实例" in lt1, "拒绝再起一个实例" in lt2,
+             g1.pid(), still_owner, (lock_body(prof) or "无")[:80]))
     g1.terminate()
     g2.terminate()
     LLM_DELAY[0] = 0.0
@@ -690,28 +738,20 @@ def section_b(root, base_url):
 
 def section_c(root, base_url):
     print("\n===== C 干净退出删自己的锁 / 崩退出留锁并被下一个实例自愈 =====", flush=True)
-
-    def lock_file(prof):
-        return os.path.join(prof, "gateway", "gateway.lock")
-
-    def lock_body(prof):
-        p = lock_file(prof)
-        if not os.path.isfile(p):
-            return None
-        with io.open(p, encoding="utf-8") as fh:
-            return fh.read()
+    lock_file = lock_path
+    lock_body_ = lock_body
 
     # C1 干净退出 ⇒ 自己的锁被删掉
     profC = os.path.join(root, "C-clean")
     os.makedirs(profC)
     c1 = Gateway("C-clean", profC, base_url, free_port(), free_port())
     c1.start()
+    held = wait_until(lambda: lock_owned(profC, c1.pid()), 90)
+    body_held = lock_body_(profC)
     ok_up = bool(c1.listening(c1.webhook_port))
-    body_held = lock_body(profC)
-    check("C1 起来时锁真在盘上且写着自己的 pid", ok_up and body_held is not None
-          and ('"pid":%d' % c1.pid()) in (body_held or ""),
-          "lock=%s 内容=%s" % (lock_file(profC).replace(profC, "<profile>"),
-                                (body_held or "无")[:120]))
+    check("C1 起来时锁真在盘上且写着自己的 pid", ok_up and held,
+          "lsof 监听=%d；lock=%s 内容=%s" % (ok_up, lock_file(profC).replace(profC, "<profile>"),
+                                        (body_held or "无")[:120]))
     c1.terminate()
     check("C2 干净退出（SIGTERM 走 shutdown hook）把**自己那把**锁删了",
           not os.path.isfile(lock_file(profC)),
@@ -724,29 +764,33 @@ def section_c(root, base_url):
     d1.start()
     d1.listening(d1.webhook_port)
     dead_pid = d1.pid()
-    body_before = lock_body(profD)
+    body_before = lock_body_(profD)
     d1.kill9()
-    body_left = lock_body(profD)
+    body_left = lock_body_(profD)
     check("C3 崩退出（SIGKILL）删不掉锁：文件还在且仍写着死掉的 pid",
           body_left is not None and ('"pid":%d' % dead_pid) in body_left,
           "SIGKILL 前=%s 后=%s" % ((body_before or "无")[:80], (body_left or "无")[:80]))
     d2 = Gateway("C-crash-2", profD, base_url, free_port(), free_port())
     d2.start()
-    healed = d2.wait_log("陈旧网关锁", 90) and bool(d2.listening(d2.webhook_port))
-    body_taken = lock_body(profD)
-    check("C4 下一个实例把陈旧锁判出来并自愈接管（日志 + 锁内容换主，两边都给）",
-          healed and body_taken is not None and ('"pid":%d' % d2.pid()) in (body_taken or "")
-          and ('"pid":%d' % dead_pid) not in (body_taken or ""),
-          "pid %d 的日志有『陈旧网关锁』=%s；锁现在=%s" % (d2.pid(), healed,
-                                                (body_taken or "无")[:120]))
+    # "已接管"只按盘上状态判：等锁内容换成 d2 的 pid（那行日志比落盘早 0.1–8.8 ms，
+    # 拿它当触发器会读到旧值 ⇒ 上一版 C4 是撞运气的量具）。日志行只作为旁证一起给。
+    taken = wait_until(lambda: lock_owned(profD, d2.pid()), 90)
+    saw_stale = ("陈旧网关锁" in d2.text())
+    healed = taken and bool(d2.listening(d2.webhook_port))
+    body_taken = lock_body_(profD)
+    check("C4 下一个实例把陈旧锁判出来并自愈接管（锁内容换主=盘上判据；日志行作旁证）",
+          healed and saw_stale and body_taken is not None
+          and ('"pid":%d' % d2.pid()) in body_taken and ('"pid":%d' % dead_pid) not in body_taken,
+          "盘上锁已换成 pid=%d=%s；它的日志里有『陈旧网关锁』=%s；锁现在=%s"
+          % (d2.pid(), taken, saw_stale, (body_taken or "无")[:120]))
     # C5 没拿到锁的那个实例，收尾时不许删别人的锁
     d3 = Gateway("C-crash-3", profD, base_url, free_port(), free_port())
     d3.start()
     d3.listening(d3.webhook_port)
     loser_alive = d3.alive()
-    body_of_owner = lock_body(profD)
+    body_of_owner = lock_body_(profD)
     d3.terminate()
-    body_after_loser = lock_body(profD)
+    body_after_loser = lock_body_(profD)
     owner_still_there = d2.alive()
     check("C5 双开里没拿到锁的那个退出时，没把别人（真活着的实例）的锁删掉",
           loser_alive and owner_still_there and body_after_loser == body_of_owner
@@ -814,15 +858,17 @@ def hygiene():
 
     scan_dirs = [OUT, LOGS]
     # X0 探测器自证：往扫描面里放一把同量级的假 key，它必须被抓到
+    # （上一版这里是 caught[relpath] = **单个字符串**，然后 `for v in vals` 拆成了逐字符 ⇒
+    #   任何哨兵都判不到 ⇒ X0 恒 FAIL、X1 变成空跑。改成 values 是 list，判定按元素走。）
     sentinel = "SENTINELkeyNOTreal" + ("s" * 100)
     prey = os.path.join(OUT, "_hygiene_prey.txt")
     with io.open(prey, "w", encoding="utf-8") as fh:
         fh.write("minimax.api.key=%s\nAuthorization: %s\n" % (sentinel, sentinel))
-    caught = {os.path.relpath(p, OUT): v for p, b in blobs(OUT) for v in offenders(b)}
+    caught = {os.path.relpath(p, OUT): offenders(b) for p, b in blobs(OUT) if offenders(b)}
     os.remove(prey)
     check("X0 泄漏探测器读得到产物（哨兵 key 必须被抓到，否则 X1 是空跑）",
-          any(sentinel[:10] in v for vals in caught.values() for v in vals),
-          "抓到 %d 处：%s" % (len(caught), list(caught)[:3]))
+          any(any(sentinel[:10] in v for v in vals) for vals in caught.values()),
+          "命中文件=%s（每处只留前 10 字符 + 长度，不打印整值）" % (sorted(caught)[:3] or "无"))
     scan = [(p, b) for d in scan_dirs for p, b in blobs(d)]
     hits = [(os.path.relpath(p, HERE), v) for p, b in scan for v in offenders(b)]
     check("X1 全部产物里出现过的 key 值只有 stub-key-not-real（非 stub 的一律算泄漏）",
@@ -830,12 +876,26 @@ def hygiene():
     stub_in_artifacts = sorted({os.path.relpath(p, HERE) for p, b in scan if STUB_KEY in b})
     check("X2 stub key 真的进了产物（同一条负向检查的反面钉子：扫描面不是空的）",
           bool(stub_in_artifacts), "带 stub key 的产物=%s" % (stub_in_artifacts[:4] or "无"))
-    hdrs = [" ".join(h["headers"].values()) for h in LLM_HITS]
-    stub_hits = sum(1 for s in hdrs if STUB_KEY in s)
-    nonstub = sum(1 for s in hdrs if "earer" in s and STUB_KEY not in s)
-    check("X3 每一次出口 LLM 请求带的都是 stub 凭证（这条同时钉住「真有请求发生」）",
-          bool(LLM_HITS) and stub_hits == len(LLM_HITS) and nonstub == 0,
-          "出口 %d 次 / 带 stub %d 次 / 带别的凭证 %d 次" % (len(LLM_HITS), stub_hits, nonstub))
+    # X3 只看"带Bearer 且不含 stub"太窄：换个凭证头名（x-api-key 等）就漏了。
+    # 这里按**头名**逐个核：每个出口请求都必须有凭证头，且值里必须是 stub。
+    cred_hdr = re.compile(r"^(authorization|proxy-authorization|api[-_]?key|x-api-key|apikey"
+                          r"|openai-key|x-goog-api-key|access-token)$", re.I)
+    with_stub = no_cred = other_cred = 0
+    seen_names = set()
+    for h in LLM_HITS:
+        names = dict((k, v) for k, v in h["headers"].items() if cred_hdr.match(k))
+        seen_names.update(names)
+        joined = " ".join(names.values())
+        if not names:
+            no_cred += 1
+        elif STUB_KEY in joined:
+            with_stub += 1
+        else:
+            other_cred += 1
+    check("X3 每一次出口 LLM 请求都带且只带 stub 凭证（这条同时钉住「真有请求发生」）",
+          bool(LLM_HITS) and with_stub == len(LLM_HITS) and no_cred == 0 and other_cred == 0,
+          "出口 %d 次 / 带 stub %d / 无凭证头 %d / 带别的凭证 %d；见过的凭证头名=%s（只列名不列值）"
+          % (len(LLM_HITS), with_stub, no_cred, other_cred, sorted(seen_names) or "无"))
     runtime = os.path.join(OUT, "runtime")
     cfgs = [os.path.join(dp, f) for dp, _d, fs in os.walk(runtime)
             for f in fs if f == "config.properties"]
@@ -866,24 +926,48 @@ def main():
     srv, base_url = start_stub()
     print("stub LLM: %s  临时根: %s" % (base_url, root), flush=True)
     only = os.environ.get("P16_ONLY", "").strip().upper()
+
+    def run_section(tag, fn, *a):
+        n0 = len(RESULTS)
+        p0 = sum(1 for _x, ok, _d in RESULTS if ok)
+        # 段内抛异常 ⇒ 记一条 FAIL（原文带 traceback）并继续跑后面的段：
+        # 本棒的硬要求是"一次调用全段跑完、结尾必有总判定行"，量具坏不许再吞掉整跑。
+        try:
+            fn(*a)
+        except Exception:
+            import traceback
+            tb = traceback.format_exc()
+            print(tb, flush=True)
+            check("段 %s 量具自身抛异常（读数不可信，见 traceback 首行）" % tag, False,
+                  " | ".join([l for l in tb.strip().split("\n") if l.strip()][-2:])[:300])
+        finally:
+            n = len(RESULTS) - n0
+            p = sum(1 for _x, ok, _d in RESULTS if ok) - p0
+            SECTION_TALLY.append((tag, p, n))
+            print("---- 段 %s：%d/%d 通过 ----" % (tag, p, n), flush=True)
+
     try:
         if only in ("", "A"):
-            section_a(root, base_url)
+            run_section("A", section_a, root, base_url)
         if only in ("", "B"):
-            section_b(root, base_url)
+            run_section("B", section_b, root, base_url)
         if only in ("", "C"):
-            section_c(root, base_url)
+            run_section("C", section_c, root, base_url)
+        run_section("D", section_d, home_before)
+        if not only:
+            run_section("X", hygiene)
     finally:
         srv.shutdown()
-    section_d(home_before)
-    if not only:
-        hygiene()
     passed = sum(1 for _n, ok, _d in RESULTS if ok)
-    print("\n== E2E: %d/%d 通过（%s） ==" % (passed, len(RESULTS),
-                                        "整跑" if not only else "只跑 %s 段，其余不作数" % only))
+    print("\n== E2E: %d/%d 通过（%s）==" % (passed, len(RESULTS),
+                                         "整跑：A/B/C/D/X 全段一次进程级运行"
+                                         if not only else "只跑 %s 段，其余不作数" % only),
+          flush=True)
+    for tag, p, n in SECTION_TALLY:
+        print("   段 %-2s %d/%d" % (tag, p, n), flush=True)
     for name, ok, detail in RESULTS:
         if not ok:
-            print("   FAIL %s | %s" % (name, detail))
+            print("   FAIL %s | %s" % (name, detail), flush=True)
     print("   日志/产物: %s" % OUT, flush=True)
     return 0 if passed == len(RESULTS) else 1
 
