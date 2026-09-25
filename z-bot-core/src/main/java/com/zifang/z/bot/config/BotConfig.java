@@ -1,7 +1,12 @@
 package com.zifang.z.bot.config;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -41,6 +46,13 @@ public final class BotConfig {
     private String execConfirmMode = "dangerous";
     /** exec 免确认命令前缀白名单（用户逐条授权的持久化产物，来自 agent.exec.confirm.whitelist）。 */
     private List<String> execConfirmWhitelist = new ArrayList<String>();
+    /**
+     * /confirm 选 "always" 落盘的<b>精确命令</b>名单（agent.exec.approval.always）。
+     * 与前缀白名单分开存：白名单按词前缀放行，这里只放行整条一模一样的命令。
+     */
+    private List<String> execAlwaysApprovals = new ArrayList<String>();
+    /** always 名单的键名（唯一会被 z-bot 回写的键）。 */
+    public static final String ALWAYS_APPROVALS_KEY = "agent.exec.approval.always";
     /** LLM 调用可重试错误（429/5xx/超时）的额外重试次数。 */
     private int retryMaxAttempts = 2;
     /** 重试退避基数（毫秒），第 n 次重试等待 backoff * n。 */
@@ -137,6 +149,7 @@ public final class BotConfig {
             this.execConfirmMode = execConfirm;
         }
         this.execConfirmWhitelist = splitList(props.getProperty("agent.exec.confirm.whitelist"));
+        this.execAlwaysApprovals = splitEscapedList(props.getProperty(ALWAYS_APPROVALS_KEY));
         String retryMax = trim(props.getProperty("llm.retry.max"));
         if (!retryMax.isEmpty()) {
             this.retryMaxAttempts = parseInt(retryMax, this.retryMaxAttempts);
@@ -342,6 +355,171 @@ public final class BotConfig {
     public void setExecConfirmWhitelist(List<String> whitelist) {
         this.execConfirmWhitelist = whitelist == null
                 ? new ArrayList<String>() : new ArrayList<String>(whitelist);
+    }
+
+    /**
+     * {@code agent.exec.confirm.whitelist}：人手工写的<b>前缀</b>白名单（token 边界匹配）。
+     *
+     * <p>与 {@link #getExecAlwaysApprovals()} 的区别：白名单条目按"前 N 个词"放行，
+     * always 名单是 /confirm 选"always"时落盘的<b>整条命令精确匹配</b>，两者不能混用。</p>
+     */
+    public List<String> getExecWhitelist() {
+        return getExecConfirmWhitelist();
+    }
+
+    /** {@code agent.exec.approval.always}：/confirm 的 ALWAYS 决议落盘下来的精确命令。 */
+    public List<String> getExecAlwaysApprovals() {
+        return Collections.unmodifiableList(execAlwaysApprovals);
+    }
+
+    public void setExecAlwaysApprovals(List<String> entries) {
+        this.execAlwaysApprovals = entries == null
+                ? new ArrayList<String>() : new ArrayList<String>(entries);
+    }
+
+    /**
+     * /confirm 的 ALWAYS 档落盘：加进 {@code execAlwaysApprovals} 并写回
+     * {@code <configDir>/config.properties}。
+     *
+     * <p>红线 1：只写 configDir，绝不写代码目录。写失败要冒出来（调用方据此告知用户
+     * "本次生效但没落盘"），不许静默。</p>
+     *
+     * @return 是否真的写进了文件（内存名单无论如何都会更新）
+     */
+    public synchronized boolean appendAlwaysApproval(String approvalKey) {
+        if (approvalKey == null || approvalKey.trim().isEmpty()) {
+            return false;
+        }
+        String entry = approvalKey.trim();
+        if (execAlwaysApprovals.contains(entry)) {
+            return true;
+        }
+        execAlwaysApprovals.add(entry);
+        return persistKey(ALWAYS_APPROVALS_KEY, joinEscaped(execAlwaysApprovals));
+    }
+
+    /** 原地改一行 properties（保留其它键与原有顺序），写临时文件后原子替换。 */
+    private boolean persistKey(String key, String value) {
+        if (configDir == null) {
+            return false;
+        }
+        File target = new File(configDir, "config.properties");
+        try {
+            if (configDir.getParentFile() != null) {
+                configDir.mkdirs();
+            }
+            List<String> lines = new ArrayList<String>();
+            if (target.exists()) {
+                BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(new FileInputStream(target), "UTF-8"));
+                try {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        lines.add(line);
+                    }
+                } finally {
+                    reader.close();
+                }
+            }
+            boolean replaced = false;
+            for (int i = 0; i < lines.size(); i++) {
+                String line = lines.get(i);
+                String trimmed = line.trim();
+                if (trimmed.startsWith("#") || trimmed.isEmpty()) {
+                    continue;
+                }
+                int eq = trimmed.indexOf('=');
+                String name = eq < 0 ? trimmed : trimmed.substring(0, eq).trim();
+                if (key.equals(name)) {
+                    lines.set(i, key + "=" + value);
+                    replaced = true;
+                }
+            }
+            if (!replaced) {
+                lines.add(key + "=" + value);
+            }
+            File tmp = new File(configDir, "config.properties.zbot-tmp");
+            BufferedWriter writer = new BufferedWriter(
+                    new OutputStreamWriter(new FileOutputStream(tmp), "UTF-8"));
+            try {
+                for (int i = 0; i < lines.size(); i++) {
+                    writer.write(lines.get(i));
+                    writer.newLine();
+                }
+            } finally {
+                writer.close();
+            }
+            if (target.exists() && !target.delete()) {
+                System.err.println("[BotConfig] 无法覆盖 " + target + "（请检查文件权限）");
+                return false;
+            }
+            if (!tmp.renameTo(target)) {
+                System.err.println("[BotConfig] 无法写入 " + target);
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            System.err.println("[BotConfig] 持久化 " + key + " 失败: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 拼成写进 properties 的一行值。
+     *
+     * <p>两层转义，缺一不可：① 我们自己吃 {@code \,} 这层（{@link #splitEscapedList}），
+     * 命令里带逗号不会被切碎；② 回读走 {@link java.util.Properties#load}，它会先吃掉一层反斜杠，
+     * 所以写盘前要把整串反斜杠再翻倍。实测：少第 ② 层时
+     * {@code docker run -e A=1,B=2 alpine} 会被读成两条
+     * {@code [docker run -e A=1, B=2 alpine]}（名单被劈开 ⇒ 免确认范围被悄悄放大）。</p>
+     */
+    private static String joinEscaped(List<String> entries) {
+        StringBuilder sb = new StringBuilder();
+        for (String entry : entries) {
+            if (sb.length() > 0) {
+                sb.append(',');
+            }
+            sb.append(entry.replace("\\", "\\\\").replace(",", "\\,")   // 我们的转义形
+                    .replace("\\", "\\\\")                              // 给 Properties.load 翻倍
+                    .replace("\r", "\\r").replace("\n", "\\n"));        // 别让换行劈成两行
+        }
+        return sb.toString();
+    }
+
+    /** 支持 {@code \,} 转义的逗号分隔列表（always 名单里存的是命令，命令可以带逗号）。 */
+    private static List<String> splitEscapedList(String v) {
+        List<String> out = new ArrayList<String>();
+        if (v == null) {
+            return out;
+        }
+        StringBuilder current = new StringBuilder();
+        boolean escaped = false;
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            if (escaped) {
+                current.append(c);
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == ',') {
+                addIfNotBlank(out, current.toString());
+                current.setLength(0);
+                continue;
+            }
+            current.append(c);
+        }
+        addIfNotBlank(out, current.toString());
+        return out;
+    }
+
+    private static void addIfNotBlank(List<String> out, String value) {
+        if (value != null && !value.trim().isEmpty()) {
+            out.add(value.trim());
+        }
     }
 
     public int getRetryMaxAttempts() {

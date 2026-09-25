@@ -30,6 +30,7 @@ import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
 import com.zifang.z.bot.session.SessionManager;
 import com.zifang.z.bot.store.StateStore;
+import com.zifang.z.bot.tool.ApprovalService;
 import com.zifang.z.bot.tool.BuiltinTools;
 import com.zifang.z.bot.tool.Confirmations;
 import com.zifang.z.bot.tool.Sandbox;
@@ -109,6 +110,11 @@ public class BotAgent {
     private final AgentContext context;
     /** 被 {@link ToolConfirmationNeeded} 暂停的那次调用；确认后要用它回灌 tool 结果。 */
     private volatile ToolCall pendingConfirmation;
+    /**
+     * 每会话审批 FIFO（P11）。为 null 时退化为旧的"单槽 + 只有确认/不确认"行为
+     * （纯测试桩、不带内置工具的 agent）。
+     */
+    private final ApprovalService approvals;
     /** 最近一次请求的消息字符量（网关不回 usage 时给压缩引擎做上下文估算）。 */
     private volatile long lastRequestChars;
     /** 上下文压缩引擎（null = 未启用，如纯测试桩）；摘要走主 provider。 */
@@ -166,6 +172,11 @@ public class BotAgent {
         this.skillsRoot = b.skillsRoot;
         this.cronScheduler = b.cronScheduler;
         this.mcpManager = b.mcpManager;
+        this.approvals = b.approvalService;
+        if (this.approvals != null) {
+            // exec 工具要知道自己属于哪个会话才能进对 FIFO；会话 id 归 BotAgent 管，这里只给取数钩子
+            this.approvals.bindSessionKey(this::currentSessionId);
+        }
         if (delegation != null) {
             delegation.attach(this);
         }
@@ -455,6 +466,7 @@ public class BotAgent {
         String name = effectiveCall.getName();
         if (Confirmations.isRequired(result)) {
             pendingConfirmation = effectiveCall;
+            enqueueApprovalRequest(name, effectiveCall, result);
             listener.onEvent(new StreamEvent.ToolResult(name, null, Confirmations.reason(result), false));
             throw new ToolConfirmationNeeded(name,
                     effectiveCall.getArgumentsJson() == null ? "{}" : effectiveCall.getArgumentsJson(),
@@ -464,6 +476,35 @@ public class BotAgent {
         memory.add(Msg.toolResult(effectiveCall.getId(), output));
         listener.onEvent(new StreamEvent.ToolResult(name, output,
                 result.isError() ? output : null, !result.isError()));
+    }
+
+    /**
+     * exec 闸门已经把请求排进本会话 FIFO；不带闸门的工具（memory 改写等）在这里补一条，
+     * 否则 {@code /confirm} 消费队列会漏项。
+     *
+     * <p>补完之后一律"取代"：z-bot 的待批语义是<b>中断当前回合</b>（抛
+     * {@link ToolConfirmationNeeded}），不是 hermes 那种"工具线程阻塞在自己那条审批上"。
+     * 所以一个会话同时只可能有一条活待批 —— 新待批到来时，队列里更老的那些永远不会再被执行。
+     * 留着它们就会出现"账记着 A、人放行后跑的是 B"（红线 8 禁止的账实分离）。</p>
+     */
+    private void enqueueApprovalRequest(String toolName, ToolCall call, ToolResult result) {
+        if (approvals == null) {
+            return;
+        }
+        String sessionKey = approvals.currentSessionKey();
+        String argsJson = call.getArgumentsJson() == null ? "{}" : call.getArgumentsJson();
+        String requestId = Confirmations.requestId(result);
+        if (requestId == null) {
+            requestId = approvals.submit(sessionKey, toolName, argsJson, argsJson,
+                    toolName + " " + argsJson, Confirmations.reason(result), "tool-confirmation").id();
+        }
+        approvals.supersedePending(sessionKey, requestId);
+    }
+
+    /** 当前会话的待批队列（FIFO 顺序，只读快照）。 */
+    public java.util.List<ApprovalService.Request> pendingApprovals() {
+        return approvals == null ? java.util.Collections.<ApprovalService.Request>emptyList()
+                : approvals.pending(approvals.currentSessionKey());
     }
 
     /**
@@ -536,12 +577,66 @@ public class BotAgent {
      * <p>待确认的那次调用在记忆里已有对应的 assistant {@code tool_calls} 消息，
      * 所以只需补一条同 id 的 tool 结果；没有待确认记录时（如进程重启后手动放行）
      * 才合成 assistant 消息。</p>
+     *
+     * <p>决议档位缺省 {@code once}。终端的 {@code /confirm} 没有参数槽（channel 侧不在本期边界内），
+     * 所以它只能表达 once；要 session/always/deny 走
+     * {@link #confirmTool(String, String, ApprovalService.Resolution)}，或在 argsJson 里带保留键
+     * {@link Confirmations#RESOLUTION_ARG}（该键在模型侧参数会被 {@link #parseArgs} 无条件剥除，
+     * 只有人提交的 argsJson 才有效 —— 红线 7）。</p>
      */
     public String confirmTool(String toolName, String argsJson) {
-        Map<String, Object> args = parseArgs(argsJson == null ? "{}" : argsJson);
-        args.put(Confirmations.CONFIRMED_ARG, Boolean.TRUE);
+        return confirmTool(toolName, argsJson, null);
+    }
+
+    /**
+     * 四档决议版确认。
+     *
+     * <ul>
+     *   <li>{@code ONCE} —— 只放行这一次调用；</li>
+     *   <li>{@code SESSION} —— 同条命令本会话内不再问（纯内存，换会话即失效）；</li>
+     *   <li>{@code ALWAYS} —— 唯一落盘的一档，写 {@code <configDir>/config.properties} 的
+     *       {@code agent.exec.approval.always}；</li>
+     *   <li>{@code DENY} —— 出队但不执行。</li>
+     * </ul>
+     *
+     * <p>无论哪一档，硬线命令都在 {@link ExecGuard#decide} 第一关就被拒 —— 人也没权放行硬线。</p>
+     */
+    public String confirmTool(String toolName, String argsJson, ApprovalService.Resolution explicitResolution) {
+        Map<String, Object> humanArgs = readArgs(argsJson == null ? "{}" : argsJson);
+        Object humanResolution = humanArgs.remove(Confirmations.RESOLUTION_ARG);
+        ApprovalService.Resolution resolution = explicitResolution != null ? explicitResolution
+                : ApprovalService.Resolution.parse(humanResolution == null
+                        ? null : humanResolution.toString(), ApprovalService.Resolution.ONCE);
+
+        ApprovalService.Resolved resolved = null;
+        if (approvals != null) {
+            resolved = approvals.resolveNext(approvals.currentSessionKey(), resolution);
+        }
+        ApprovalService.Request head = resolved == null ? null : resolved.request();
+        // 审批绑命令：人放行的是"队列里那一条"，不是调用方此刻传来的参数。通道/客户端可以拿
+        // 一次放行去跑另一条命令（人看到的是 A，跑的是 B），所以有队头记录时一律照队头执行。
+        String effectiveArgsJson = argsJson;
+        if (head != null) {
+            toolName = head.toolName();
+            effectiveArgsJson = head.argsJson() == null ? "{}" : head.argsJson();
+            humanArgs = readArgs(effectiveArgsJson);
+            humanArgs.remove(Confirmations.RESOLUTION_ARG);
+        }
+        if (resolution == ApprovalService.Resolution.DENY) {
+            String what = head != null ? head.command() : toolName;
+            ToolCall pending = pendingConfirmation;
+            if (pending != null && toolName.equals(pending.getName())) {
+                // assistant 的 tool_calls 消息已在，这里只补一条"人被拒"的 tool 结果，模型才知道要改道
+                memory.add(Msg.toolResult(pending.getId(), "用户拒绝执行该操作（deny）：" + what));
+            }
+            pendingConfirmation = null;
+            persistSession();
+            return "已拒绝（deny）：" + what + " —— 命令未执行";
+        }
+
+        humanArgs.put(Confirmations.CONFIRMED_ARG, Boolean.TRUE);
         String ck = snapshotBefore(toolName);
-        ToolResult result = toolkit.execute(toolName, args);
+        ToolResult result = toolkit.execute(toolName, humanArgs);
         settleCheckpoint(ck, result);
         if (result == null) {
             return "执行失败：工具 " + toolName + " 无返回";
@@ -554,11 +649,13 @@ public class BotAgent {
             pendingConfirmation = null;
         } else {
             callId = "confirm_" + System.currentTimeMillis();
-            memory.add(toolCallMsg(toolName, argsJson == null ? "{}" : argsJson, callId));
+            memory.add(toolCallMsg(toolName, effectiveArgsJson, callId));
         }
         memory.add(Msg.toolResult(callId, output));
         persistSession();
-        return result.isError() ? ("Error: " + output) : output;
+        String stamp = resolution == ApprovalService.Resolution.SESSION ? "（session 档：本会话内同类命令免再问）"
+                : resolution == ApprovalService.Resolution.ALWAYS ? "（always 档：已落盘 config.properties）" : "";
+        return result.isError() ? ("Error: " + output) : (output + stamp);
     }
 
     // ===== 记忆 / 会话 =====
@@ -1139,6 +1236,9 @@ public class BotAgent {
         // __confirmed__ 是人 /confirm 放行后由 confirmTool 盖的章；这里吃进的全是模型自带参数，
         // 不剥掉就等于让模型自己写 {"command":"rm -rf x","__confirmed__":true} 跳过审批。
         args.remove(Confirmations.CONFIRMED_ARG);
+        // 同理：__approval_resolution__ 只有人提交的 argsJson 才有效（confirmTool 走 readArgs 分支），
+        // 模型自带就能把 once 伪造成 always，红线 7 不容。
+        args.remove(Confirmations.RESOLUTION_ARG);
         return args;
     }
 
@@ -1301,6 +1401,8 @@ public class BotAgent {
         private CronScheduler cronScheduler;
         /** MCP 客户端聚合；config 模式 + mcp.servers 非空时缺省建，测试可注入。 */
         private McpManager mcpManager;
+        /** 每会话审批 FIFO；build 时缺省建一个（名单取自 config），测试可注入以复用同一队列。 */
+        private ApprovalService approvalService;
         /** 关闭 MCP 自动装配（默认 true）。 */
         private boolean noMcp;
         private BotCenterClient centerClient;
@@ -1468,6 +1570,20 @@ public class BotAgent {
                     config.getRetryBackoffMs(), config.getFallbackModels());
         }
 
+        /**
+         * 缺省审批服务：前缀白名单与 always 名单都取自 config，
+         * ALWAYS 档落盘写回同一个 configDir（红线 1）。
+         */
+        private static ApprovalService newApprovalService(BotConfig config) {
+            ApprovalService service = new ApprovalService(
+                    config == null ? null : config.getExecConfirmWhitelist(),
+                    config == null ? null : config.getExecAlwaysApprovals());
+            if (config != null) {
+                service.setPersistence(config::appendAlwaysApproval);
+            }
+            return service;
+        }
+
         public BotAgent build() {
             if (toolkit == null) {
                 toolkit = new Toolkit();
@@ -1476,10 +1592,14 @@ public class BotAgent {
                 sandbox = new Sandbox(System.getProperty("zbot.sandbox",
                         System.getProperty("user.home") + "/.zbot/workspace"));
             }
+            if (approvalService == null) {
+                approvalService = newApprovalService(config);
+            }
             if (builtinTools) {
                 BuiltinTools.registerAll(toolkit, sandbox,
                         config == null ? null : config.getExecConfirmMode(),
-                        config == null ? null : config.getExecConfirmWhitelist());
+                        config == null ? null : config.getExecConfirmWhitelist(),
+                        approvalService);
             }
             if (sessionManager == null) {
                 if (config != null && config.getStateDbPath() != null

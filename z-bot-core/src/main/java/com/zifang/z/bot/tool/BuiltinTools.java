@@ -47,6 +47,15 @@ public final class BuiltinTools {
      */
     public static Toolkit registerAll(Toolkit toolkit, Sandbox sandbox, String execConfirmMode,
                                       List<String> execWhitelist) {
+        return registerAll(toolkit, sandbox, execConfirmMode, execWhitelist, null);
+    }
+
+    /**
+     * 同上，再接上审批服务：exec 的待批请求会进 {@link ApprovalService} 的每会话 FIFO，
+     * session/always 档的精确免确认名单也由它提供。传 null 时退化为"只回抛一条、不入队"。
+     */
+    public static Toolkit registerAll(Toolkit toolkit, Sandbox sandbox, String execConfirmMode,
+                                      List<String> execWhitelist, ApprovalService approvals) {
         final AtomicInteger counter = new AtomicInteger(0);
 
         toolkit.register(echo(), true);
@@ -55,7 +64,7 @@ public final class BuiltinTools {
         toolkit.register(health(), true);
         toolkit.register(readFile(sandbox), true);
         toolkit.register(writeFile(sandbox));
-        toolkit.register(exec(sandbox, execConfirmMode, execWhitelist));
+        toolkit.register(exec(sandbox, execConfirmMode, execWhitelist, approvals));
         toolkit.register(search(), true);
         toolkit.register(sysinfo(), true);
         toolkit.register(mvnBuild(sandbox));
@@ -235,25 +244,50 @@ public final class BuiltinTools {
     // ===== 进程 =====
 
     public static Tool exec(final Sandbox sandbox, final String confirmMode) {
-        return exec(sandbox, confirmMode, Collections.<String>emptyList());
+        return exec(sandbox, confirmMode, Collections.<String>emptyList(), null);
     }
 
     public static Tool exec(final Sandbox sandbox, final String confirmMode, final List<String> whitelist) {
+        return exec(sandbox, confirmMode, whitelist, null);
+    }
+
+    /**
+     * exec 工具本体 —— 审批缝只有这一处判定（{@link ExecGuard#decide}）。
+     *
+     * <ul>
+     *   <li>硬线命中：直接 error，任何模式（含 {@code off}/{@code --yolo}）、已盖章、白名单都拦不住；</li>
+     *   <li>需要人审：请求进 {@link ApprovalService} 的每会话 FIFO（无 approval 服务时只回抛不入队）；</li>
+     *   <li>人给的 session/always 精确名单由 {@link ApprovalService#isApproved} 提供，
+     *       它在 decide 之后才起作用，所以盖不掉硬线。</li>
+     * </ul>
+     */
+    public static Tool exec(final Sandbox sandbox, final String confirmMode, final List<String> whitelist,
+                            final ApprovalService approvals) {
         return Toolkit.of("exec",
                 "执行系统命令并返回输出（仅在沙箱目录 " + sandbox.root() + " 下执行，高危命令需审批）",
                 new ToolSchemaBuilder().string("command", "要执行的系统命令").build(),
                 args -> {
-                    String command = arg(args, "command", "");
+                    String command = arg(args, Confirmations.COMMAND_ARG, "");
                     if (command.trim().isEmpty()) {
                         return ToolResult.error("参数错误：command 不能为空");
                     }
-                    if (ExecGuard.isForbidden(command)) {
-                        return ToolResult.error("安全错误：禁止的危险命令");
+                    String sessionKey = approvals == null ? null : approvals.currentSessionKey();
+                    boolean exactApproval = approvals != null
+                            && approvals.isApproved(sessionKey, ExecGuard.approvalKey(command));
+                    ExecGuard.Decision decision = ExecGuard.decide(confirmMode, command,
+                            Confirmations.alreadyConfirmed(args) || exactApproval,
+                            approvals != null ? mergeWhitelist(approvals, whitelist) : whitelist);
+                    if (decision.denied()) {
+                        return ToolResult.error("安全错误：" + decision.reason());
                     }
-                    String reason = ExecGuard.confirmationReason(confirmMode, command,
-                            Confirmations.alreadyConfirmed(args), whitelist);
-                    if (reason != null) {
-                        return Confirmations.needsConfirmation(reason);
+                    if (decision.needsApproval()) {
+                        String requestId = null;
+                        if (approvals != null) {
+                            requestId = approvals.submit(sessionKey, "exec",
+                                    commandArgsJson(command), command, decision.normalized(),
+                                    decision.reason(), decision.rule()).id();
+                        }
+                        return Confirmations.needsConfirmation(decision.reason(), requestId);
                     }
                     try {
                         ProcResult r = bash(sandbox, command, EXEC_MAX_LINES, EXEC_MAX_CHARS);
@@ -264,6 +298,51 @@ public final class BuiltinTools {
                 });
     }
 
+    /** 把命令包成 exec 的参数 JSON（FIFO 里存的就是可直接回放的 argsJson）。 */
+    private static String commandArgsJson(String command) {
+        StringBuilder sb = new StringBuilder("{\"").append(Confirmations.COMMAND_ARG).append("\":\"");
+        for (int i = 0; i < command.length(); i++) {
+            char c = command.charAt(i);
+            switch (c) {
+                case '"':
+                    sb.append("\\\"");
+                    break;
+                case '\\':
+                    sb.append("\\\\");
+                    break;
+                case '\n':
+                    sb.append("\\n");
+                    break;
+                case '\r':
+                    sb.append("\\r");
+                    break;
+                case '\t':
+                    sb.append("\\t");
+                    break;
+                default:
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        return sb.append("\"}").toString();
+    }
+
+    /** 配置里的前缀白名单 + 运行时新加的一起交给闸门（去重、保序）。 */
+    private static List<String> mergeWhitelist(ApprovalService approvals, List<String> configured) {
+        List<String> merged = new java.util.ArrayList<String>(approvals.prefixWhitelist());
+        if (configured != null) {
+            for (String entry : configured) {
+                if (entry != null && !entry.trim().isEmpty() && !merged.contains(entry.trim())) {
+                    merged.add(entry.trim());
+                }
+            }
+        }
+        return merged;
+    }
+
     public static Tool mvnBuild(final Sandbox sandbox) {
         return Toolkit.of("mvn_build", "在项目目录执行 Maven 编译",
                 new ToolSchemaBuilder().string("goal", "Maven 目标 (默认: clean install -DskipTests)", false).build(),
@@ -271,6 +350,11 @@ public final class BuiltinTools {
                     String goal = arg(args, "goal", "");
                     if (goal.trim().isEmpty()) {
                         goal = "clean install -DskipTests";
+                    }
+                    // P11 前这个拼接路径完全不过闸门：goal 里塞 "; rm -rf /" 就是直通车。
+                    // 现在至少硬线表在任何模式下都拦（危险表仍只管 exec，避免改变 mvn 的免确认语义）。
+                    if (ExecGuard.isHardline("mvn " + goal)) {
+                        return ToolResult.error("安全错误：" + ExecGuard.hardlineMessage("mvn " + goal));
                     }
                     try {
                         ProcResult r = bash(sandbox, "mvn " + goal + " 2>&1 | tail -50", 0, 2000);
@@ -300,6 +384,10 @@ public final class BuiltinTools {
                             + " -H 'Content-Type: application/json'"
                             + " -d '" + body.replace("'", "'\\''") + "' 2>&1 | head -c 2000"
                             : "curl -s --max-time 10 -X " + method + " '" + url + "' 2>&1 | head -c 2000";
+                    // method/url/body 都是裸拼接 ⇒ 这里必须补硬线（同 mvn_build，P11 前是直通车）
+                    if (ExecGuard.isHardline(cmd)) {
+                        return ToolResult.error("安全错误：" + ExecGuard.hardlineMessage(cmd));
+                    }
                     try {
                         return text(bash(null, cmd, 0, 2000).output);
                     } catch (Exception e) {

@@ -390,13 +390,72 @@ public class BotAgentTest {
                 .sandbox(new Sandbox(sandboxDir.getAbsolutePath()))
                 .sessionManager(new SessionManager(sessionDir))
                 .build();
-        llm.script(toolReply(call("c1", "exec", "{\"command\":\"sudo ls\"}")));
+        llm.script(toolReply(call("c1", "exec", "{\"command\":\"rm -rf p11-absent-dir\"}")));
 
-        String reply = agent.chat("run sudo", StreamListener.NOOP);
+        String reply = agent.chat("run it", StreamListener.NOOP);
 
         assertTrue(reply, reply.startsWith("WAIT_CONFIRM:exec|"));
-        String after = agent.confirmTool("exec", "{\"command\":\"echo hi\"}");
+        String after = agent.confirmTool("exec", "{\"command\":\"rm -rf p11-absent-dir\"}");
         assertTrue(after, after.contains("exit=0"));
+    }
+
+    /**
+     * 审批绑命令（P11 真进程 E2E 实测到的替换洞）：人放行的是<b>队列里那一条</b>，
+     * 调用方在 confirm 时换一份参数，不能拿这次放行去跑另一条命令。
+     */
+    @Test
+    public void confirmCannotBeRepointedToADifferentCommand() throws Exception {
+        File approved = new File(sandboxDir, "approved.txt");
+        File substituted = new File(sandboxDir, "substituted.txt");
+        assertTrue(approved.createNewFile() && substituted.createNewFile());
+        BotAgent agent = BotAgent.builder(config("agent.exec.confirm=dangerous"))
+                .provider(llm)
+                .sandbox(new Sandbox(sandboxDir.getAbsolutePath()))
+                .sessionManager(new SessionManager(sessionDir))
+                .build();
+        llm.script(toolReply(call("c1", "exec", "{\"command\":\"rm -rf approved.txt\"}")));
+
+        String reply = agent.chat("delete approved", StreamListener.NOOP);
+
+        assertTrue(reply, reply.startsWith("WAIT_CONFIRM:exec|"));
+        // 人点的是"放行刚才那条"，客户端把参数换成另一条命令
+        String after = agent.confirmTool("exec", "{\"command\":\"rm -rf substituted.txt\"}");
+
+        assertTrue(after, after.contains("exit=0"));
+        assertFalse("人批准的命令没跑", approved.exists());
+        assertTrue("放行被挪用去跑了另一条命令", substituted.exists());
+    }
+
+    /**
+     * 待批取代（红线 8 账实一致）：z-bot 的确认是中断回合，同一会话里新待批到来时旧的那条
+     * 永远不会再被执行 —— 必须离开队列，否则 {@code /confirm} 消费的是与真实动作无关的旧账。
+     */
+    @Test
+    public void newerPendingSupersedesTheAbandonedOne() throws Exception {
+        File older = new File(sandboxDir, "older.txt");
+        File newer = new File(sandboxDir, "newer.txt");
+        assertTrue(older.createNewFile() && newer.createNewFile());
+        BotAgent agent = BotAgent.builder(config("agent.exec.confirm=dangerous"))
+                .provider(llm)
+                .sandbox(new Sandbox(sandboxDir.getAbsolutePath()))
+                .sessionManager(new SessionManager(sessionDir))
+                .build();
+        llm.script(toolReply(call("c1", "exec", "{\"command\":\"rm -rf older.txt\"}")));
+        llm.script(toolReply(call("c2", "exec", "{\"command\":\"rm -rf newer.txt\"}")));
+
+        agent.chat("drop older", StreamListener.NOOP);
+        agent.chat("drop newer", StreamListener.NOOP);
+
+        assertEquals("活待批只可能有一条", 1, agent.pendingApprovals().size());
+        assertTrue(agent.pendingApprovals().get(0).command(),
+                agent.pendingApprovals().get(0).command().contains("newer.txt"));
+
+        String after = agent.confirmTool("exec", "{\"command\":\"rm -rf newer.txt\"}");
+
+        assertTrue(after, after.contains("exit=0"));
+        assertTrue("被取代的旧待批竟被执行了", older.exists());
+        assertFalse("活待批没执行", newer.exists());
+        assertEquals(0, agent.pendingApprovals().size());
     }
 
     /**
