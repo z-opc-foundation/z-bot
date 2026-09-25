@@ -206,7 +206,7 @@ public final class Supervisor {
                     spawnAttempt(handle, task, restartOnCrash, effective + 1);
                 }
             }
-        }, "z-bot-supervised-" + name);
+        }, "z-bot-supervised-" + handle.name());
         t.setDaemon(true);
         t.start();
     }

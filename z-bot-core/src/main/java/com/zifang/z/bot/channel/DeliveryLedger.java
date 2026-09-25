@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 送达义务台账（对标 {@code hermes gateway/delivery_ledger.py} 341 行）：
@@ -134,6 +135,7 @@ public final class DeliveryLedger {
     private final File dbFile;
     private final SqliteTx.Config txConfig;
     private final SqliteTx.Counters counters = new SqliteTx.Counters();
+    private final AtomicLong records = new AtomicLong();
     private final ProcessLiveness liveness;
 
     public DeliveryLedger(File dbFile, SqliteTx.Config cfg) {
@@ -442,6 +444,7 @@ public final class DeliveryLedger {
             LOG.warn("[delivery-ledger] record 失败 id={}: {}", obligationId, e.getMessage());
             return;
         }
+        records.incrementAndGet();
         prune();
     }
 
@@ -779,9 +782,9 @@ public final class DeliveryLedger {
         return counters;
     }
 
-    /** 本轮进程内 record 次数（诊断用）。 */
+    /** 本轮进程内成功 record 的次数（诊断用；台账写入失败不计）。 */
     public long recordsInThisProcess() {
-        return generation.get();
+        return records.get();
     }
 
     private static int countAll(Connection c) throws SQLException {
