@@ -49,6 +49,10 @@ public final class BotConfig {
     private List<String> fallbackModels = new ArrayList<String>();
     /** 会话持久化库路径（agent.state.db）；空 = 只用 JSON 会话文件。 */
     private String stateDbPath;
+    /** delegate_task 子代理最大委托深度（agent.delegate.max.depth）：0=关闭，默认 2。 */
+    private int delegateMaxDepth = 2;
+    /** 异步委托并发宽度（agent.delegate.max.children）：同时在跑的子代理上限，默认 3。 */
+    private int delegateMaxChildren = 3;
     private String centerUrl;
     private String appCode = "default-chat";
     private boolean loaded;
@@ -146,6 +150,14 @@ public final class BotConfig {
                     System.getProperty("user.home") + "/.zbot/state.db");
         }
         this.stateDbPath = stateDb;
+        String delegateDepth = trim(props.getProperty("agent.delegate.max.depth"));
+        if (!delegateDepth.isEmpty()) {
+            this.delegateMaxDepth = parseInt(delegateDepth, this.delegateMaxDepth);
+        }
+        String delegateChildren = trim(props.getProperty("agent.delegate.max.children"));
+        if (!delegateChildren.isEmpty()) {
+            this.delegateMaxChildren = parseInt(delegateChildren, this.delegateMaxChildren);
+        }
         this.centerUrl = trim(props.getProperty("center.url"));
         String appCode = trim(props.getProperty("center.app.code"));
         if (!appCode.isEmpty()) {
@@ -317,6 +329,16 @@ public final class BotConfig {
 
     public void setStateDbPath(String stateDbPath) {
         this.stateDbPath = stateDbPath;
+    }
+
+    /** {@code agent.delegate.max.depth}：delegate_task 最大委托深度，0 = 关闭委托。 */
+    public int getDelegateMaxDepth() {
+        return delegateMaxDepth;
+    }
+
+    /** {@code agent.delegate.max.children}：异步委托并发宽度。 */
+    public int getDelegateMaxChildren() {
+        return delegateMaxChildren;
     }
 
     public void setToolChoice(String toolChoice) {

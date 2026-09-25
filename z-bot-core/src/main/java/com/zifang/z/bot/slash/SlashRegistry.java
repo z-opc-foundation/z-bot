@@ -352,6 +352,44 @@ public final class SlashRegistry {
                 return agent.rollbackCheckpoint(args);
             }
         });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/background";
+            }
+
+            @Override
+            public String description() {
+                return "异步委托子代理: /background <task>，/background result <id> 取回结果";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                if (args != null && args.toLowerCase().startsWith("result")) {
+                    return agent.backgroundResult(args.substring(6).trim());
+                }
+                if (args == null || args.trim().isEmpty()) {
+                    return "格式: /background <task> 或 /background result <id>";
+                }
+                return agent.submitBackground(args);
+            }
+        });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/agents";
+            }
+
+            @Override
+            public String description() {
+                return "查看异步委托台账（在跑/已完成/失败的子代理）";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return agent.describeAgents();
+            }
+        });
         return r;
     }
 

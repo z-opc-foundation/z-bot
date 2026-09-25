@@ -93,6 +93,13 @@ public class StateStore {
                     + " session_id TEXT NOT NULL,"
                     + " model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER,"
                     + " api_calls INTEGER, ts TEXT NOT NULL)");
+            st.execute("CREATE TABLE IF NOT EXISTS async_delegations ("
+                    + " id TEXT PRIMARY KEY,"
+                    + " task TEXT NOT NULL,"
+                    + " status TEXT NOT NULL,"
+                    + " reply TEXT NOT NULL DEFAULT '',"
+                    + " created_at TEXT NOT NULL,"
+                    + " finished_at TEXT)");
         }
     }
 
@@ -384,6 +391,48 @@ public class StateStore {
         }
     }
 
+    /** 异步委托台账落库：状态/回复覆盖更新，完成时补 finished_at。 */
+    public synchronized void upsertDelegation(String id, String task, String status, String reply) {
+        String now = java.time.Instant.now().toString();
+        boolean finished = "DONE".equals(status) || "FAILED".equals(status);
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "INSERT INTO async_delegations(id,task,status,reply,created_at,finished_at)"
+                             + " VALUES(?,?,?,?,?,?)"
+                             + " ON CONFLICT(id) DO UPDATE SET status=excluded.status,"
+                             + " reply=excluded.reply, finished_at=excluded.finished_at")) {
+            ps.setString(1, id);
+            ps.setString(2, task);
+            ps.setString(3, status);
+            ps.setString(4, reply == null ? "" : reply);
+            ps.setString(5, now);
+            ps.setString(6, finished ? now : null);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("[StateStore] upsertDelegation 失败: " + e.getMessage());
+        }
+    }
+
+    /** 最近 limit 条异步委托（新的在前），跨重启可见。 */
+    public synchronized List<DelegationRow> listDelegations(int limit) {
+        List<DelegationRow> out = new ArrayList<DelegationRow>();
+        try (Connection c = connect();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT id, task, status, reply, created_at, finished_at FROM async_delegations"
+                             + " ORDER BY created_at DESC LIMIT ?")) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    out.add(new DelegationRow(rs.getString(1), rs.getString(2), rs.getString(3),
+                            rs.getString(4), rs.getString(5), rs.getString(6)));
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("[StateStore] listDelegations 失败: " + e.getMessage());
+        }
+        return out;
+    }
+
     // ===== 行类型 =====
 
     public static class SessionRow {
@@ -418,6 +467,25 @@ public class StateStore {
         public SearchHit(String sessionId, String snippet) {
             this.sessionId = sessionId;
             this.snippet = snippet;
+        }
+    }
+
+    public static class DelegationRow {
+        public final String id;
+        public final String task;
+        public final String status;
+        public final String reply;
+        public final String createdAt;
+        public final String finishedAt;
+
+        public DelegationRow(String id, String task, String status, String reply,
+                             String createdAt, String finishedAt) {
+            this.id = id;
+            this.task = task;
+            this.status = status;
+            this.reply = reply;
+            this.createdAt = createdAt;
+            this.finishedAt = finishedAt;
         }
     }
 

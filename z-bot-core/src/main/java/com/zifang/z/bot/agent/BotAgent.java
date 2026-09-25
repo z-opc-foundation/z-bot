@@ -17,6 +17,7 @@ import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
 import com.zifang.z.bot.checkpoint.CheckpointManager;
 import com.zifang.z.bot.context.CompressorEngine;
+import com.zifang.z.bot.delegate.DelegateManager;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
 import com.zifang.z.bot.session.SessionManager;
@@ -109,6 +110,8 @@ public class BotAgent {
     private final CheckpointManager checkpoints;
     /** 最近一次生效的快照 id，/rollback 不带参数时回滚到它。 */
     private volatile String lastCheckpointId;
+    /** delegate_task 子代理管理器（null = 未启用委托）。 */
+    private final DelegateManager delegation;
 
     /** 执行前需要打快照的破坏性工具（写文件 / 任意命令 / Maven 构建都会改沙箱）。 */
     private static final Set<String> CHECKPOINT_TOOLS = new HashSet<String>(
@@ -126,7 +129,8 @@ public class BotAgent {
         this.maxTokens = b.maxTokens;
         this.temperature = b.temperature;
         this.memory = new ConversationMemory(buildSystemPrompt(b.systemPrompt, b.toolkit));
-        this.context = AgentContext.root(new IterationBudget(b.maxSteps, b.tokenBudget));
+        this.context = AgentContext.root(b.budgetOverride != null
+                ? b.budgetOverride : new IterationBudget(b.maxSteps, b.tokenBudget));
         this.provider = b.provider != null ? Builder.wrapResilient(b.provider, b.config)
                 : Builder.wrapResilient(LlmRouter.create(b.config.activeProvider()), b.config);
         if (b.contextEngine != null) {
@@ -140,6 +144,10 @@ public class BotAgent {
             this.summarizer = null;
         }
         this.checkpoints = b.checkpointManager;
+        this.delegation = b.delegation;
+        if (delegation != null) {
+            delegation.attach(this);
+        }
 
         if (centerClient != null && centerClient.isEnabled()) {
             this.lifecycle = registerAndStartLifecycle(centerClient, b.appCode);
@@ -744,6 +752,35 @@ public class BotAgent {
         }
     }
 
+    /** {@code /background <task>} — 异步委托子代理；{@code /background result <id>} 取回结果。 */
+    public String submitBackground(String args) {
+        if (delegation == null) {
+            return "未启用子代理委托（agent.delegate.max.depth=0 或测试桩）";
+        }
+        return delegation.submitAsync(args == null ? "" : args.trim());
+    }
+
+    /** {@code /agents} — 查看异步委托台账。 */
+    public String describeAgents() {
+        if (delegation == null) {
+            return "未启用子代理委托";
+        }
+        return delegation.describeAsync();
+    }
+
+    /** {@code /background result <id>} 的取回入口。 */
+    public String backgroundResult(String id) {
+        if (delegation == null) {
+            return "未启用子代理委托";
+        }
+        return delegation.asyncResult(id);
+    }
+
+    /** delegate_task 管理器（null = 未启用）；测试与 /agents 渲染用。 */
+    public DelegateManager getDelegation() {
+        return delegation;
+    }
+
     public void reset() {
         memory.clear();
         context.interrupt().reset();
@@ -991,6 +1028,14 @@ public class BotAgent {
         private boolean noCompress;
         /** 影子 git checkpoint；config 模式缺省自动建在 {@code <configDir>/checkpoints/store}。 */
         private CheckpointManager checkpointManager;
+        /** delegate_task 子代理管理器（build 时按深度创建并注册）。 */
+        private DelegateManager delegation;
+        /** 当前 agent 的委托深度：-1 = 未显式指定（config 模式默认按 0 处理）。 */
+        private int delegateDepth = -1;
+        /** 覆盖默认 IterationBudget（子代理注入父预算的 1/4 用）。 */
+        private IterationBudget budgetOverride;
+        /** 子代理禁接入 center，避免重复注册生命周期。 */
+        private boolean noCenter;
         private BotCenterClient centerClient;
         private int maxSteps;
         private int maxTokens;
@@ -1066,6 +1111,24 @@ public class BotAgent {
             return this;
         }
 
+        /** 覆盖默认 IterationBudget（delegate 子代理注入父预算 1/4 用）。 */
+        public Builder budget(IterationBudget budget) {
+            this.budgetOverride = budget;
+            return this;
+        }
+
+        /** 显式指定委托深度（root 测试注入 0；子代理装配时传父深度+1）。 */
+        public Builder delegateDepth(int depth) {
+            this.delegateDepth = depth;
+            return this;
+        }
+
+        /** 禁接入 center（子代理用）。 */
+        public Builder withoutCenter() {
+            this.noCenter = true;
+            return this;
+        }
+
         public BotCenterClient centerClient() {
             return centerClient;
         }
@@ -1129,7 +1192,7 @@ public class BotAgent {
                     sessionManager = new SessionManager();
                 }
             }
-            if (centerClient == null && config != null && config.getCenterUrl() != null
+            if (centerClient == null && !noCenter && config != null && config.getCenterUrl() != null
                     && !config.getCenterUrl().isEmpty()) {
                 centerClient = new BotCenterClient(config.getCenterUrl());
             }
@@ -1139,6 +1202,16 @@ public class BotAgent {
             if (checkpointManager == null && config != null && config.getConfigDir() != null) {
                 checkpointManager = new CheckpointManager(
                         new File(config.getConfigDir(), "checkpoints/store"), sandbox.root());
+            }
+            int maxDepth = config == null ? 2 : config.getDelegateMaxDepth();
+            int d = delegateDepth >= 0 ? delegateDepth : (config != null ? 0 : -1);
+            if (maxDepth > 0 && d >= 0 && d < maxDepth) {
+                LlmProvider raw = provider != null ? provider : LlmRouter.create(config.activeProvider());
+                File childSessions = config != null && config.getConfigDir() != null
+                        ? new File(config.getConfigDir(), "delegate/children")
+                        : new File(sandbox.root().getParentFile(), "delegate-children");
+                delegation = new DelegateManager(config, raw, sandbox, childSessions, d, maxDepth);
+                toolkit.register(delegation.delegateTool());
             }
             if (systemPrompt == null && centerClient != null) {
                 systemPrompt = augmentWithLongTermMemory(null, centerClient);

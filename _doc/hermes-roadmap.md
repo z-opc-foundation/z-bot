@@ -122,6 +122,24 @@
 - 异步委托: `/background <task>` 落 async_delegations 表, 完成后回投消息; `/agents` 查看在跑子代理
 - 验收: 单测(预算限制/深度限制/工具剥离); E2E: 父 agent 委派子 agent 完成两步任务并汇总
 
+> ✅ 完成 (09-25)。`delegate.DelegateManager`: delegate_task 工具同步委托 — 子 BotAgent 共享
+> provider/沙箱, 独立会话目录(`<configDir>/delegate/children/d<N>-<seq>`)、独立预算
+> (kernel `IterationBudget.childBudget(0.25)`, 经 Builder.budget 注入)、不接 center
+> (`Builder.withoutCenter()`); 深度防递归 = 工具只注册在 depth<maxDepth 的 agent 上
+> (`agent.delegate.max.depth`, 0=关闭, 默认 2), 深度用尽的子代理工具列表里自然没有 delegate_task。
+> config 模式 Builder 默认注册(delegateDepth=0), 测试桩可 `.delegateDepth(0)` 显式开启。
+> 异步: `/background <task>` 投 cachedThreadPool(宽度 `agent.delegate.max.children` 默认 3) →
+> `/agents` 台账(QUEUED/RUNNING/DONE/FAILED) → `/background result <id>` 取回;
+> 台账落 state.db `async_delegations` 表(upsert + 跨重启 listDelegations)。
+> 完成后"回投消息"简化为 result 取回式(主动回灌到父会话留给通道层做)。
+> 单测 4 个(子代理 1/4 预算实证 maxIter=2/maxTokens=10000、深度剥离 delegate_task、
+> depth=0 关闭、异步完成+result 取回), 全模块 106/106(真跑: 先清 surefire XML 再验 MVN_RC,
+> 此前一次"全绿"实为编译失败后解析陈旧 XML 的假绿 — duplicate getSessionManager)。
+> E2E (piped REPL + stub): DELEGATE→delegate_task→子代理真实 write_file 进共享沙箱
+> (notes2.txt=child-was-here)→父汇总"子代理已完成两步任务"; /background→/agents DONE→
+> sqlite3 查 async_delegations 落库。已知坑: RawTerminalReader 管道模式吞非 ASCII 输入
+> (slash 中文参数变空, E2E 改用 ASCII 任务名; 交互 TTY 不受影响, 属通道层既有问题)。
+
 ### P6 记忆 + 技能 + 人格 — Hermes #8 #13
 - `~/.zbot/memories/MEMORY.md` + `USER.md`(.lock 并发保护); `memory` 工具(agent 主动读写) + 系统提示注入
 - 记忆写审批: `/memory pending|approve|reject`
