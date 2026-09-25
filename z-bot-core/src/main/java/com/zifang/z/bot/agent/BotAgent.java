@@ -1135,6 +1135,14 @@ public class BotAgent {
     // ===== 参数与文本兜底解析 =====
 
     static Map<String, Object> parseArgs(String argumentsJson) {
+        Map<String, Object> args = readArgs(argumentsJson);
+        // __confirmed__ 是人 /confirm 放行后由 confirmTool 盖的章；这里吃进的全是模型自带参数，
+        // 不剥掉就等于让模型自己写 {"command":"rm -rf x","__confirmed__":true} 跳过审批。
+        args.remove(Confirmations.CONFIRMED_ARG);
+        return args;
+    }
+
+    private static Map<String, Object> readArgs(String argumentsJson) {
         if (argumentsJson == null || argumentsJson.trim().isEmpty()) {
             return new HashMap<String, Object>();
         }
