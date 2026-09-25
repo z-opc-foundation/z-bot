@@ -50,6 +50,12 @@ public final class DelegateManager {
     private final AtomicReference<BotAgent> parent = new AtomicReference<BotAgent>();
     /** 最近一次创建的子代理（测试断言预算/工具剥离用，包级可见）。 */
     BotAgent lastChild;
+    /**
+     * 正在飞的子代理（P12）：{@code /stop} 落在父 agent 上时，父的中断旗子与子是两套，
+     * 不显式叫停子的话，父已经"中止"了而子的循环还在继续烧预算、继续跑工具。
+     */
+    private final java.util.Set<BotAgent> inFlight =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     public DelegateManager(BotConfig config, LlmProvider provider, Sandbox sandbox,
                            File childSessionDir, int depth, int maxDepth) {
@@ -89,6 +95,9 @@ public final class DelegateManager {
 
     /** 同步执行一次委托：构建子 agent → 跑完 → 返回其最终回复与用量。 */
     private ToolResult runChild(String task, String label) {
+        // 委托子循环的两个检查点：入口（父已按 stop 就不该再把子代理拉起来）
+        // 与收工（子跑完这段时间里用户按了 stop，就别再回灌结果给模型继续下一轮）。
+        com.zifang.z.bot.agent.InterruptScope.checkpoint();
         BotAgent child;
         try {
             child = buildChild(label);
@@ -97,18 +106,44 @@ public final class DelegateManager {
             return ToolResult.error("子代理构建失败: " + e.getMessage());
         }
         lastChild = child;
+        inFlight.add(child);
         try {
             String reply = child.chat(task, StreamListener.NOOP);
             IterationBudget used = child.context().budget();
             String head = "（子代理" + (label.isEmpty() ? "" : "[" + label + "] ")
                     + "完成 steps=" + used.apiCalls() + " tokens=" + used.tokensUsed() + "）";
+            com.zifang.z.bot.agent.InterruptScope.checkpoint();
             return ToolResult.text(head + "\n" + reply);
+        } catch (com.zifang.z.agent.kernel.agent.InterruptFlag.AgentInterruptedException e) {
+            // 用户按了停止，不是子代理出了错：揉成 ToolResult.error 回灌给模型，
+            // 等于告诉它「换个办法再试」，父 agent 就停不下来了。原样上抛交给 chat()。
+            throw e;
         } catch (RuntimeException e) {
             LOG.warn("[delegate] 子代理执行失败: {}", e.getMessage());
             return ToolResult.error("子代理执行失败: " + e.getMessage());
         } finally {
+            inFlight.remove(child);
             child.shutdown();
         }
+    }
+
+    /**
+     * 叫停所有在飞的子代理（父 {@code /stop} 时由 {@link BotAgent#stop()} 调）。
+     *
+     * @return 被叫停的子代理条数（0 = 没有在飞的）
+     */
+    public int stopChildren() {
+        int n = 0;
+        for (BotAgent child : inFlight) {
+            child.stop();
+            n++;
+        }
+        return n;
+    }
+
+    /** 当前在飞的子代理条数（测试对账用）。 */
+    public int inFlightCount() {
+        return inFlight.size();
     }
 
     /**
@@ -170,9 +205,14 @@ public final class DelegateManager {
                 try {
                     BotAgent child = buildChild("bg");
                     lastChild = child;
-                    String reply = child.chat(task, StreamListener.NOOP);
-                    d.reply = reply;
-                    d.status = "DONE";
+                    inFlight.add(child);
+                    try {
+                        String reply = child.chat(task, StreamListener.NOOP);
+                        d.reply = reply;
+                        d.status = "DONE";
+                    } finally {
+                        inFlight.remove(child);
+                    }
                 } catch (Exception e) {
                     d.reply = "执行失败: " + e.getMessage();
                     d.status = "FAILED";

@@ -39,6 +39,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -78,6 +80,19 @@ public class BotAgent {
     /** 需要人工确认时 {@link #chat} 的返回值前缀，后接 {@code tool|args|reason}。 */
     public static final String WAIT_CONFIRM_PREFIX = "WAIT_CONFIRM:";
 
+    /**
+     * 动态上下文的抬头（P12 prompt 缓存不变量）：记忆 / 技能 / center 召回 / 时钟
+     * 全部走 user 消息，标记必须显式，否则模型会把它当成用户原话的一部分。
+     */
+    static final String VOLATILE_CONTEXT_HEADER = "[z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）";
+
+    /** user 消息里动态上下文与用户原话的分隔。 */
+    static final String VOLATILE_CONTEXT_FOOTER = "\n---\n";
+
+    /** 时钟格式：带时区偏移，模型据此判断「今天」「上周」。 */
+    private static final DateTimeFormatter CLOCK =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss xxx zzz", Locale.ROOT);
+
     /** 模型用文本描述工具调用时的兜底解析（弱模型不吐 tool_calls 数组）。 */
     private static final Pattern TEXT_TOOL_CALL = Pattern.compile(
             "functions\\.(\\w+)\\(\\s*(\\{.*?\\})\\s*\\)", Pattern.DOTALL);
@@ -105,9 +120,13 @@ public class BotAgent {
     private final AtomicBoolean running = new AtomicBoolean(false);
     /**
      * kernel 0.2.0 的显式运行状态：预算 / 中断 / steer 队列都在这里。
-     * 中断是协作式的 — 只在迭代与工具边界经 {@code checkpoint()} 生效。
+     * 中断是协作式的 — 迭代与工具边界经 {@code checkpoint()} 生效，
+     * 工具内部（exec 读输出循环 / 文件读写 / mvn_build / delegate 子循环）经
+     * {@link InterruptScope} 按<b>执行线程</b>找回本次会话的旗子后同样生效。
      */
     private final AgentContext context;
+    /** 预算账本：在 kernel 累计口径之上补「压缩后退还」，主循环的「还能不能再打一次」由它判。 */
+    private final BudgetLedger budgetLedger;
     /** 被 {@link ToolConfirmationNeeded} 暂停的那次调用；确认后要用它回灌 tool 结果。 */
     private volatile ToolCall pendingConfirmation;
     /**
@@ -150,10 +169,13 @@ public class BotAgent {
         this.maxSteps = b.maxSteps;
         this.maxTokens = b.maxTokens;
         this.temperature = b.temperature;
-        this.memory = new ConversationMemory(appendSkillGuidance(withPersonalityAndMemory(
-                buildSystemPrompt(b.systemPrompt, b.toolkit), b.memoryStore), b.skillsRoot));
+        // prompt 缓存不变量（P12）：system prompt 只在这里算一次，此后每轮逐字节重放。
+        // 记忆 / 技能指引 / center 召回 / 时钟这些会变的-content 一律改道进 user 消息
+        // （见 volatileContextBlock），否则任何一次重算都是缓存击穿。
+        this.memory = new ConversationMemory(buildSystemPrompt(b.systemPrompt, b.toolkit, b.memoryStore));
         this.context = AgentContext.root(b.budgetOverride != null
                 ? b.budgetOverride : new IterationBudget(b.maxSteps, b.tokenBudget));
+        this.budgetLedger = new BudgetLedger(this.context.budget());
         this.provider = b.provider != null ? Builder.wrapResilient(b.provider, b.config)
                 : Builder.wrapResilient(LlmRouter.create(b.config.activeProvider()), b.config);
         if (b.contextEngine != null) {
@@ -222,7 +244,10 @@ public class BotAgent {
         StreamListener l = listener == null ? StreamListener.NOOP : listener;
         context.interrupt().reset();
         pendingConfirmation = null;
-        memory.add(Msg.user(mergeQueued(userMessage)));
+        memory.add(Msg.user(withVolatileContext(mergeQueued(userMessage))));
+        // 把本次会话的旗子绑到执行线程上：工具内部（exec / 文件 / mvn / delegate）
+        // 从这里拿到它，才能在「工具正飞着」的时候断，而不是只在循环边界断。
+        InterruptFlag boundBefore = InterruptScope.bind(context.interrupt());
         try {
             String reply = runReActLoop(userMessage, l);
             persistSession();
@@ -238,6 +263,7 @@ public class BotAgent {
             persistSession();
             return aborted;
         } finally {
+            InterruptScope.restore(boundBefore);
             running.set(false);
         }
     }
@@ -258,7 +284,7 @@ public class BotAgent {
     private String runReActLoop(String userMessage, StreamListener listener) {
         IterationBudget budget = context.budget();
         int step = 0;
-        while (budget.canCall()) {
+        while (budgetLedger.canCall()) {
             maybeAnnounceGrace(budget);
             budget.onCall();
             step++;
@@ -320,18 +346,22 @@ public class BotAgent {
             return content;
         }
         String exhausted = "已达到预算上限(steps=" + budget.apiCalls() + "/" + budget.maxIterations()
-                + ", tokens=" + budget.tokensUsed() + "/" + budget.maxTokens() + ")，请简化您的请求。";
+                + ", tokens=" + budgetLedger.effectiveTokensUsed() + "/" + budget.maxTokens()
+                + (budgetLedger.refundedTokens() > 0 ? "（压缩已退还 " + budgetLedger.refundedTokens() + "）" : "")
+                + ")，请简化您的请求。";
         listener.onEvent(new StreamEvent.Done(exhausted, budget.apiCalls(), null, null));
         return exhausted;
     }
 
     /** 预算耗尽走 grace 通道时给模型的收尾指令（对齐 hermes 的 grace call）。 */
     private void maybeAnnounceGrace(IterationBudget budget) {
+        // 判「还没到上限」必须用净占用：压缩退还过的 token 已经不在请求里了，
+        // 按累计值判会把还能干活的一轮误判成收尾轮。
         boolean underLimits = budget.apiCalls() < budget.maxIterations()
-                && budget.tokensUsed() < budget.maxTokens();
+                && budgetLedger.effectiveTokensUsed() < budget.maxTokens();
         if (!underLimits) {
             memory.add(Msg.user("[system] 预算即将耗尽(steps=" + budget.apiCalls() + "/" + budget.maxIterations()
-                    + ", tokens=" + budget.tokensUsed() + "/" + budget.maxTokens()
+                    + ", tokens=" + budgetLedger.effectiveTokensUsed() + "/" + budget.maxTokens()
                     + ")，这是最后一次收尾机会：请立即总结当前进展并直接给出面向用户的最终答案，不要再调用工具。"));
         }
     }
@@ -344,14 +374,14 @@ public class BotAgent {
         if (hasUsage) {
             int prompt = (int) response.getUsage().getPromptTokens();
             int completion = (int) response.getUsage().getCompletionTokens();
-            budget.recordTokens(prompt, completion);
+            budgetLedger.recordTokens(prompt, completion);
             if (compressor != null) {
                 compressor.update(prompt, completion);
             }
             return;
         }
         if (response != null && response.getUsage() != null) {
-            budget.recordTokens((int) response.getUsage().getPromptTokens(),
+            budgetLedger.recordTokens((int) response.getUsage().getPromptTokens(),
                     (int) response.getUsage().getCompletionTokens());
         }
         // 网关不回传 usage 时按请求体字符数粗估上下文规模喂给压缩引擎
@@ -373,12 +403,34 @@ public class BotAgent {
         if (compressed == history || compressed.size() >= history.size()) {
             return;
         }
+        // 省下来的空间必须当场还回预算，否则「压缩」只是把消息换短、账面上却一秒都没回本
+        long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, compressed));
         memory.load(compressed);
         listener.onEvent(new StreamEvent.Compacted(compressor.getLastSummary(),
                 compressor.getLastFromCount(), compressor.getLastToCount()));
-        LOG.info("[BotAgent] 上下文压缩: {} -> {} 条 (累计 {} 次)",
-                compressor.getLastFromCount(), compressor.getLastToCount(), compressor.getCompressCount());
+        LOG.info("[BotAgent] 上下文压缩: {} -> {} 条 (累计 {} 次, 本次退还预算 {} tokens)",
+                compressor.getLastFromCount(), compressor.getLastToCount(),
+                compressor.getCompressCount(), refunded);
         persistSession();
+    }
+
+    /**
+     * 压缩带来的净节省（token 估算口径：字符数 / 2，与 {@link #recordUsage}
+     * 里网关不回 usage 时的口径一致）。
+     */
+    static long freedTokensOfCompression(List<Msg> before, List<Msg> after) {
+        long saved = charsOf(before) - charsOf(after);
+        return saved <= 0 ? 0L : saved / 2;
+    }
+
+    private static long charsOf(List<Msg> msgs) {
+        long chars = 0;
+        if (msgs != null) {
+            for (Msg m : msgs) {
+                chars += m.getContent() == null ? 0 : m.getContent().length();
+            }
+        }
+        return chars;
     }
 
     /** 摘要调主 provider（无工具、低温），prompt 带事实承诺保留约束。 */    private String summarizeWithProvider(List<Msg> middle) {
@@ -402,7 +454,13 @@ public class BotAgent {
         }
     }
 
-    /** 运行中排队的用户插话在工具间隙注入消息流（/steer 语义）。 */
+    /**
+     * 运行中排队的用户插话在工具间隙注入消息流（hermes 的 steer 语义）：
+     * <b>追加到最后一条 tool 结果尾部</b>，而不是新插一条 user 消息 ——
+     * assistant 的 {@code tool_calls} 与 tool 结果在 OpenAI 协议里必须成对，
+     * 中间塞一条 user 消息会让消息序列变成非法形状。没有任何 tool 结果可挂时
+     * （首轮就插话）退回独立 user 消息。
+     */
     private void injectSteer(StreamListener listener) {
         List<String> pending = context.steer().drain();
         if (pending.isEmpty()) {
@@ -416,7 +474,9 @@ public class BotAgent {
             sb.append("[User steer]: ").append(p);
         }
         listener.onEvent(new StreamEvent.SteerInjected(sb.toString()));
-        memory.add(Msg.user(sb.toString()));
+        if (!memory.appendToLastToolResult("\n" + sb)) {
+            memory.add(Msg.user(sb.toString()));
+        }
     }
 
     private void executeToolCall(ToolCall tc, String name, String argsJson, StreamListener listener) {
@@ -508,6 +568,28 @@ public class BotAgent {
     }
 
     /**
+     * 把本次会话的中断旗子带进池线程（提交时刻捕获，不是执行时刻）。
+     *
+     * <p>不带的话，并行批次里的工具就查不到「我这会话已被要求停止」，
+     * 工具侧检查点在并行路径上形同虚设；也不还原的话，池线程会被复用，
+     * 上一条会话的旗子会跟着线程漂到下一条会话上 —— 那是串台的另一种写法。</p>
+     */
+    private <T> java.util.concurrent.Callable<T> bindToPoolThread(final java.util.concurrent.Callable<T> task) {
+        final InterruptFlag flag = context.interrupt();
+        return new java.util.concurrent.Callable<T>() {
+            @Override
+            public T call() throws Exception {
+                InterruptFlag previous = InterruptScope.bind(flag);
+                try {
+                    return task.call();
+                } finally {
+                    InterruptScope.restore(previous);
+                }
+            }
+        };
+    }
+
+    /**
      * 一个工具批次调度：批内全部 parallel-safe（只读）才并发执行，否则按原顺序串行。
      *
      * <p>并行批次的事件时序保持对 listener 单线程回调：请求事件先按序广播，
@@ -542,12 +624,12 @@ public class BotAgent {
                 final ToolCall tc = calls.get(i);
                 final Map<String, Object> args =
                         parseArgs(tc.getArgumentsJson() == null ? "{}" : tc.getArgumentsJson());
-                futures.add(pool.submit(new Callable<ToolResult>() {
+                futures.add(pool.submit(bindToPoolThread(new Callable<ToolResult>() {
                     @Override
                     public ToolResult call() {
                         return toolkit.execute(tc.getName(), args);
                     }
-                }));
+                })));
             }
             for (int i = 0; i < calls.size(); i++) {
                 ToolCall tc = calls.get(i);
@@ -557,8 +639,15 @@ public class BotAgent {
                 try {
                     result = futures.get(i).get();
                 } catch (java.util.concurrent.ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof InterruptFlag.AgentInterruptedException) {
+                        // 并行批次里的工具是被 /stop 断下来的，不是自己失败的：
+                        // 揉成 ToolResult.failure 回灌给模型，等于告诉它「继续想别的办法」，
+                        // 用户按了 stop 却还有一整轮在跑。原样上抛，由 chat() 走中止分支。
+                        throw (InterruptFlag.AgentInterruptedException) cause;
+                    }
                     result = ToolResult.failure(callId, tc.getName(),
-                            "工具执行失败: " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                            "工具执行失败: " + (cause == null ? e.getMessage() : cause.getMessage()));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     result = ToolResult.failure(callId, tc.getName(), "工具执行被中断");
@@ -813,10 +902,19 @@ public class BotAgent {
     // ===== 运行时控制 =====
 
     /**
-     * 协作式软中断：置位 kernel {@link InterruptFlag}，主循环在最近的迭代/工具边界停下，不强杀线程。
+     * 协作式软中断：置位 kernel {@link InterruptFlag}，主循环在最近的迭代/工具边界停下，
+     * 工具内部经 {@link InterruptScope} 在同一面旗子上停下（含把在飞的子进程整个杀掉）。
+     *
+     * <p>硬中断的附带语义（对齐 hermes）：<b>丢弃尚未注入的 steer 插话</b> —— 用户已经按了停止，
+     * 那条「改道」的插话就永远没有落点了，留着它会在下一轮 chat 开头以 {@code [User steer]} 的
+     * 形式冒出来，等于替用户记住了一件他自己叫停的事。</p>
      */
     public void stop() {
         context.interrupt().request("用户请求停止");
+        context.steer().clear();
+        if (delegation != null) {
+            delegation.stopChildren();
+        }
     }
 
     public boolean isStopRequested() {
@@ -824,16 +922,40 @@ public class BotAgent {
     }
 
     /**
-     * 用户插话：agent 运行中时在工具间隙注入（/steer 语义）；空闲时入队，
-     * 下次 {@link #chat} 开头并入用户消息（/queue 语义）。
+     * 用户插话（{@code /steer}）：<b>单槽</b>语义 —— 后到的盖掉先到的，运行中时在工具间隙
+     * 追加到最后一条 tool 结果；空闲时入队，下次 {@link #chat} 开头并入用户消息。
+     *
+     * <p>为什么是单槽而不是队列：插话的语义是「从现在起按这个来」，两条互相冲突的插话
+     * 同时生效没有意义（hermes 的 {@code _pending_steer} 同样是单槽）。
+     * 要一次排好几件事，走 {@link #enqueue}（{@code /queue}）。</p>
      */
     public void steer(String message) {
+        context.steer().clear();
         context.steer().add(message);
+    }
+
+    /**
+     * 排队消息（{@code /queue}）：多条按序保留，下次 {@link #chat} 开头以
+     * {@code [User queued]} 逐条并入。与 {@link #steer} 共用 kernel {@code SteerQueue}
+     * 作存储，差别只在写入端是否覆盖 —— 单槽是 steer 的语义，不是存储的语义。
+     */
+    public void enqueue(String message) {
+        context.steer().add(message);
+    }
+
+    /** 当前待注入的插话/排队条数（{@code /usage} 与测试对账用）。 */
+    public boolean hasPendingSteer() {
+        return context.steer().hasPending();
     }
 
     /** kernel 显式运行状态（预算 / 中断 / steer 队列），供 /usage 与子代理派生使用。 */
     public AgentContext context() {
         return context;
+    }
+
+    /** 预算账本（累计 token + 压缩退还）；{@code /usage} 读它，不直接读 kernel 的累计值。 */
+    public BudgetLedger budgetLedger() {
+        return budgetLedger;
     }
 
     /** {@code /compress [preview]} — 查看或手动触发上下文压缩。 */
@@ -854,9 +976,10 @@ public class BotAgent {
             return "没有可压缩的内容（历史太短或摘要为空）";
         }
         memory.load(out);
+        long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, out));
         persistSession();
         return "已压缩: " + history.size() + " -> " + out.size() + " 条 (累计 "
-                + compressor.getCompressCount() + " 次)";
+                + compressor.getCompressCount() + " 次，本次退还预算 " + refunded + " tokens)";
     }
 
     /**
@@ -1151,8 +1274,22 @@ public class BotAgent {
         return chars;
     }
 
-    private static String buildSystemPrompt(String base, Toolkit toolkit) {
+    /**
+     * system prompt 骨架：身份（SOUL + 人设）+ 工具面 + 执行规则。
+     *
+     * <p>只在构造期算一次，此后每轮逐字节重放。任何会在一轮之后改变的东西（长期记忆、
+     * 技能指引、center 召回、当前时间）都不许进来 —— 它们一旦进 system prompt，
+     * 同一会话第 2 轮请求的前缀就和第 1 轮不同，provider 侧的 prompt cache 直接击穿；
+     * 更要紧的是「中途写盘不进 prompt」这件事根本没法保证。这些内容改道走
+     * {@link #volatileContextBlock()}。</p>
+     */
+    private static String buildSystemPrompt(String base, Toolkit toolkit, MemoryStore store) {
         StringBuilder sb = new StringBuilder();
+        String soul = store == null ? "" : store.readSoul();
+        if (!soul.trim().isEmpty()) {
+            // SOUL 属身份不属记忆（roadmap §2#9），所以它是骨架的一部分，但不随每轮重读
+            sb.append(soul.trim()).append("\n\n");
+        }
         sb.append(base == null || base.trim().isEmpty()
                 ? "你是 z-bot，本地运行的 ReAct Agent，通过调用工具完成任务。\n" : base).append("\n");
         sb.append("可用工具：\n").append(toolkit.getToolsDescription()).append('\n');
@@ -1165,13 +1302,64 @@ public class BotAgent {
         return sb.toString();
     }
 
-    /** 已安装技能的指引注入（最多 3 个、正文各截 600 字符），让模型能直接按技能干活。 */
-    private static String appendSkillGuidance(String prompt, File skillsRoot) {
+    /**
+     * 本轮 user 消息的运行时上下文头：记忆 / 技能指引 / center 召回 / 时钟。
+     *
+     * <p>每轮重算（这正是它可以存在的前提：它在<b>请求尾部</b>，不在缓存前缀里）。
+     * 时钟始终在场，所以这个块永不为空；三条来源全空时只剩一行时间戳 + 分隔线。</p>
+     */
+    private String volatileContextBlock() {
+        StringBuilder body = new StringBuilder();
+        String memory = memoryContextBlock(memoryStore);
+        String skills = skillContextBlock(skillsRoot);
+        String recall = centerRecallBlock(centerClient);
+        body.append("当前时间: ").append(ZonedDateTime.now().format(CLOCK)).append('\n');
+        if (!recall.isEmpty()) {
+            body.append(recall);
+        }
+        if (!memory.isEmpty()) {
+            body.append(memory);
+        }
+        if (!skills.isEmpty()) {
+            body.append(skills);
+        }
+        return VOLATILE_CONTEXT_HEADER + "\n" + body.toString().trim() + "\n---\n";
+    }
+
+    /** 动态上下文并入用户消息开头（用户原话保持在最后，别让模板盖过正事）。 */
+    private String withVolatileContext(String userMessage) {
+        String block = volatileContextBlock();
+        String plain = userMessage == null ? "" : userMessage;
+        return block + plain;
+    }
+
+    /** 长期记忆两层（用户画像 + 记忆）；SOUL 不在这里（它在冻结的 system prompt 里）。 */
+    static String memoryContextBlock(MemoryStore store) {
+        if (store == null) {
+            return "";
+        }
+        String user = store.readUser();
+        String mem = store.readMemory();
+        if (user.isEmpty() && mem.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("长期记忆（历史积累，供参考）：\n");
+        if (!user.isEmpty()) {
+            sb.append("[用户画像]\n").append(user).append('\n');
+        }
+        if (!mem.isEmpty()) {
+            sb.append("[记忆]\n").append(mem).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** 已安装技能的指引（最多 3 个、正文各截 600 字符），让模型能直接按技能干活。 */
+    static String skillContextBlock(File skillsRoot) {
         List<SkillLoader.Skill> skills = SkillLoader.scan(skillsRoot);
         if (skills.isEmpty()) {
-            return prompt;
+            return "";
         }
-        StringBuilder sb = new StringBuilder(prompt).append("\n可用技能指引：\n");
+        StringBuilder sb = new StringBuilder("可用技能指引：\n");
         int n = 0;
         for (SkillLoader.Skill s : skills) {
             if (n++ >= 3) {
@@ -1190,42 +1378,17 @@ public class BotAgent {
         return sb.toString();
     }
 
-    /** SOUL 人格注入头部 + 记忆三层注入尾部（store 为 null 时原样返回）。 */
-    private static String withPersonalityAndMemory(String base, MemoryStore store) {
-        if (store == null) {
-            return base;
-        }
-        StringBuilder sb = new StringBuilder();
-        String soul = store.readSoul();
-        if (!soul.isEmpty()) {
-            sb.append(soul).append("\n\n");
-        }
-        sb.append(base);
-        String user = store.readUser();
-        String mem = store.readMemory();
-        if (!user.isEmpty() || !mem.isEmpty()) {
-            sb.append("\n长期记忆（历史积累，供参考）：\n");
-            if (!user.isEmpty()) {
-                sb.append("[用户画像]\n").append(user).append('\n');
-            }
-            if (!mem.isEmpty()) {
-                sb.append("[记忆]\n").append(mem).append('\n');
-            }
-        }
-        return sb.toString();
-    }
-
-    /** 默认身份 + center 长期记忆前缀。 */
-    static String augmentWithLongTermMemory(String base, BotCenterClient client) {
+    /** center 下发的长期记忆召回；拿不到就空串（不阻塞本轮）。 */
+    static String centerRecallBlock(BotCenterClient client) {
         if (client == null) {
-            return base;
+            return "";
         }
         try {
             String recall = client.recallMemory();
-            return recall == null || recall.isEmpty() ? base : recall + "\n---\n\n" + base;
+            return recall == null || recall.isEmpty() ? "" : "center 召回：\n" + recall + '\n';
         } catch (Exception e) {
             LOG.debug("[BotAgent] recallMemory failed, fall through: {}", e.getMessage());
-            return base;
+            return "";
         }
     }
 
@@ -1686,9 +1849,9 @@ public class BotAgent {
                     LOG.warn("[BotAgent] MCP 装配失败: {}", e.getMessage());
                 }
             }
-            if (systemPrompt == null && centerClient != null) {
-                systemPrompt = augmentWithLongTermMemory(null, centerClient);
-            }
+            // 注意：center 召回不再折进 systemPrompt。它是每轮都可能变的东西，
+            // 进 system prompt 就等于每轮击穿一次 prompt cache —— 改走 user 消息
+            // （BotAgent#centerRecallBlock）。
             return new BotAgent(this);
         }
     }

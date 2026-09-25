@@ -27,7 +27,7 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * memory 工具接线测试：append 直写、rewrite 走 WAIT_CONFIRM 审批、
- * SOUL/记忆注入 system prompt。全部落 TemporaryFolder。
+ * 人格留在 system prompt 而长期记忆走 user 消息（P12 缓存不变量）。全部落 TemporaryFolder。
  */
 public class BotAgentMemoryTest {
 
@@ -48,7 +48,7 @@ public class BotAgentMemoryTest {
         store = new MemoryStore(tmp.newFolder("memories"));
     }
 
-    /** agent 在测试体里构建 — 先写好记忆再装配，system prompt 才能带上注入内容。 */
+    /** agent 在测试体里构建 — 先写好记忆再装配，本轮 user 消息才带上注入内容。 */
     private BotAgent buildAgent() {
         return BotAgent.builder(null)
                 .provider(llm)
@@ -60,7 +60,7 @@ public class BotAgentMemoryTest {
     }
 
     @Test
-    public void soulAndMemoryAreInjectedIntoSystemPrompt() throws Exception {
+    public void soulStaysInSystemPromptAndMemoryGoesToUserMessage() throws Exception {
         store.appendMemory("记住：部署走 250 机器");
         store.appendUser("用户偏好简短回复");
         agent = buildAgent();
@@ -70,9 +70,13 @@ public class BotAgentMemoryTest {
 
         ChatCompletionsRequest sent = llm.requests.get(0);
         String system = sent.getMessages().get(0).getContent();
-        assertTrue(system, system.contains("z-bot"));          // 默认 SOUL 人格
-        assertTrue(system, system.contains("部署走 250 机器"));  // MEMORY 注入
-        assertTrue(system, system.contains("用户偏好简短回复"));  // USER 注入
+        String user = sent.getMessages().get(1).getContent();
+        assertTrue(system, system.contains("z-bot"));           // 人格属身份，留在冻结前缀
+        // P12 prompt 缓存不变量：易变的长期记忆改道进 user 消息，system 前缀逐字节不动
+        assertFalse(system, system.contains("部署走 250 机器"));
+        assertFalse(system, system.contains("用户偏好简短回复"));
+        assertTrue(user, user.contains("部署走 250 机器"));
+        assertTrue(user, user.contains("用户偏好简短回复"));
         // 工具列表里有 memory
         assertTrue(sent.getTools().toString(), sent.getTools().toString().contains("memory"));
     }
