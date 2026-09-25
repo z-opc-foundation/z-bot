@@ -125,27 +125,185 @@ $ git diff --name-only c3ab4da HEAD -- '*/src/*' | wc -l
 
 ## 2. 杠② —— 注入自证（p20b_mutation.py → LEDGER.tsv）
 
-TODO-2
+命令（全量 21 个变异体，一条；约 7 分钟）：
+```
+P20B_MVN_WAIT=600 python3 -u _doc/acceptance/p20b/p20b_mutation.py     # console 留档 logs/mutation_console2.log
+```
+交付态那一跑的**原始读数行原文**（含它自己打的两条"期望集为空"警告 —— 跑前就写死，不是跑完补的）：
+```
+== 变异体 21 个，基线 git rev = a2b5e49dd7b64ad504e113309498b65f0f57814c，锁 = /Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock
+  注：TK9 溢出目录解析不看 $ZBOT_HOME 的期望集为空 —— 该守卫在单测层没有活的猎物，脚本会把它判成 GREEN-BUT-MUTATED 并记'未覆盖'
+  注：MB2 桥按'记住的名字'逐个注销 的期望集为空 —— 该守卫在单测层没有活的猎物，脚本会把它判成 GREEN-BUT-MUTATED 并记'未覆盖'
+  预检过：锚点次数 + 盘上原文 == git show + 无漂移
+== 控制跑（不注入）
+  控制跑 rc=0 跑了 525 条 红=无 名字集=525 条 日志=_doc/acceptance/p20b/logs/mut_control.log
+== 台账 ==
+  RED-OK             14
+  PARTIAL            4
+  GREEN-BUT-MUTATED  3
+  BROKEN             0
+  LEDGER.tsv 21 行 / LEDGER_RESTORE.tsv 21 行（均为脚本产物）
+  SRC_MD5_STABLE=yes
+ATTEMPT_1 rc=0 04:07:26
+```
+- **控制跑的意义**：不注入先确认 525 条全绿，并**收全部 testcase 名**；期望集里点到一个不存在的名字
+  就 FATAL 拒绝注入（防"拿一条不存在的用例当猎物"）。
+- **期望集是跑前写死的**：21 个变异体连同各自的具名期望用例在 `438ea50`（本棒第二次提交）就进库了，
+  两次全量跑用的都是**同一份**期望集，一字未回改；台账里 3 条 `GREEN-BUT-MUTATED` 与 4 条 `PARTIAL`
+  全部照原样记账，**没有一条被洗成 RED-OK**。
+- **两轮全量跑的判定逐字一致**（复算见 §8：把两轮台账的 `id/verdict/named_expected/named_hit` 四列 diff，
+  输出为空 ⇒ `TWO_RUNS_IDENTICAL=yes`）。第一轮台账（`9059ca7`）与本轮的唯一差别是 §6(7) 那条标签修正。
+- 判定分布不靠"mvn 退出码"：只认 surefire XML 里的**具名 testcase**（`BROKEN 0` ⇒ 全程没有编译不过的注入）。
 
 ### 2.1 逐条的账
 
-TODO-2.1
+下表由下面这条命令直接生成（本文只是把它的答案粘进来；`LEDGER.tsv` 是脚本产物，人一行没敲）：
+```
+python3 -c "import io,csv;rows=list(csv.reader(io.open('_doc/acceptance/p20b/LEDGER.tsv',encoding='utf-8'),delimiter='\t'));
+h,rs=rows[0],[r for r in rows[1:] if r]
+[print('| %s | %s | %s/%s | %d |'%(dict(zip(h,r))['id'],dict(zip(h,r))['verdict'],dict(zip(h,r))['named_hit'],dict(zip(h,r))['named_expected'],len([x for x in dict(zip(h,r))['tests_that_went_red'].split(',') if x]) if '全绿' not in dict(zip(h,r))['tests_that_went_red'] else 0) for r in rs]"
+```
 
-### 2.2 非 RED-OK 的那几条：多红/少红是什么、为什么如实记（不改写成 RED-OK）
+| 变异体（判据） | 判定 | 点名红/点名期望 | 真红总条数 |
+| --- | --- | --- | --- |
+| TS1 `emptyCapabilityToolsets` 写死空表 | RED-OK | 1/1 | 1 |
+| TS2 `undeclaredToolsets` 过滤反了 | RED-OK | 2/2 | 2 |
+| TS3 `manifestToolsNeverRegistered` 过滤反了 | RED-OK | 2/2 | 2 |
+| TS4 `toolsetForTool` 一律退回兜底槽 | PARTIAL | 4/5 | 4 |
+| TS5 `mcpToken` 放过中划线 | RED-OK | 2/2 | 2 |
+| TS6 `capabilityNames` 把兜底槽/动态族也算能力 | RED-OK | 3/3 | 3 |
+| TK1 快照键丢掉不可用名单 | RED-OK | 4/4 | 4 |
+| TK2 `unavailableToolNames` 恒空 | RED-OK | 6/6 | 6 |
+| TK3 代际计数不外露（钉死 0） | PARTIAL | 3/7 | 3 |
+| TK4 上限不走注册表 | RED-OK | 1/1 | 1 |
+| TK5 `UNBOUNDED` 哨兵失效 | GREEN-BUT-MUTATED | 0/1 | 0 |
+| TK6 预览不受上限约束 | RED-OK | 1/1 | 1 |
+| TK7 溢出落盘被摘掉 | RED-OK | 3/3 | 3 |
+| TK8 上限边界 `<=` 改成 `<` | RED-OK | 1/1 | 1 |
+| TK9 溢出目录解析不看 `$ZBOT_HOME` | GREEN-BUT-MUTATED | 0/0 | 0 |
+| TK10 溢出文件名净化失效 | RED-OK | 1/1 | 1 |
+| TK11 `deregisterToolset` 的 owner 被顶成内建 owner | PARTIAL | 13/13 | 16 |
+| MB1 桥不接可用性探测 | RED-OK | 1/1 | 1 |
+| MB2 桥按"记住的名字"逐个注销 | GREEN-BUT-MUTATED | 0/0 | 0 |
+| MB3 退回同名 stub 覆盖（P20 要杀的旧实现） | PARTIAL | 8/8 | 10 |
+| E1 `stopAll` 只断连不注销 | RED-OK | 3/3 | 3 |
 
-TODO-2.2
+覆盖面对照工单点名的每一条守卫：toolset 声明/清单三查 = TS1/TS2/TS3（外加 TS4 归属真源、TS5 拼法、TS6 能力名口径）；
+探测 TTL 与宽限窗 = TK1/TK2/TK3 + MB1；结果上限（全局 / 单工具声明 / UNBOUNDED）与溢出落盘 = TK4/TK5/TK6/TK7/TK8/TK9/TK10；
+桥级注销与 `reload()` 改名不留旧名 = TK11/MB1/MB2/MB3；`stopAll` 清空注册表与外发清单 = E1。
+
+### 2.2 非 RED-OK 的那 7 条：红/绿在哪、为什么如实记
+
+点名/漏点名的差集也是机器算的（把 `MUTANTS` 用 `ast.literal_eval` 取出来与台账的 `tests_that_went_red` 求差），
+所以下面每条都能复算，不是我读出来的印象：
+
+1. **TS4 `PARTIAL` 4/5** —— 漏的那条是 `readOnlyToolsDeclareParallelSafetyAndWriteToolsDoNot`。
+   原因在**测试自己**：`ToolsetsManifestTest.java:128` 写的是
+   `assertEquals(name, Toolsets.toolsetForTool(name), tk.toolsetOf(name))`，
+   而注册侧 `BuiltinTools.java:82` 也是 `toolkit.register(tool, Toolsets.toolsetForTool(...))` ——
+   **expected 与 actual 同源**：把 `toolsetForTool` 摘成恒回兜底槽，两边一起退化，等式照样成立。
+   ⇒ 这是一条真洞（该用例判不出归属真源丢失），修法是把期望换成清单常量而不是同一个函数。本棒没改测试。
+2. **TK3 `PARTIAL` 3/7** —— 漏的 4 条（`registerAndDeregisterEachInvalidateTheSchemaSnapshot`、
+   `exposedNamesTrackTheRegistryAfterNukeAndRepave`、`unregisteringIsNotStubOverwrite`、
+   `reloadDropsTheDeadServersToolNamesFromGetToolNames`）不红的理由是**注入面偏窄**：
+   锚点 `return registry.generation();` 全仓只 1 处，即外露 accessor `Toolkit.generation()`（`:221`）；
+   快照键用的是 `snapshot()` 里的 `long generation = registry.generation();`（`:310`），没被顶掉。
+   ⇒ 期望集写宽了（我把读快照行为的用例也算成该 accessor 的猎物）。要真打"代际不外露"这条守卫，
+   下一棒的注点在 `:310` 那一行（或把键改成常量）。这是**量具的账**，不是产品的红。
+3. **TK5 `GREEN-BUT-MUTATED` 0/1** —— 这条判下来是**等价变异**，不是"测试没猎物"：
+   `javap -constants … ToolDescriptor` ⇒ `UNBOUNDED_RESULT_CHARS = 9223372036854775807L`。
+   摘掉 `cap == UNBOUNDED_RESULT_CHARS ||` 之后剩下的 `content.length() <= cap` 里
+   `int` 提升为 `long` 与 `Long.MAX_VALUE` 比 ⇒ **恒真**，两种写法逐值等价 ⇒ 没有任何测试能把它判红。
+   语义的外部读数在杠③ C7（`CAP3_UNBOUNDED_INTACT=true`，PASS）。想让它可判，得换成**不等价**的注入
+   （例如把 `NO_MAX_RESULT_CHARS=-1` 与 UNBOUNDED 对调），本期没做（§7）。
+4. **TK9 `GREEN-BUT-MUTATED` 0/0（期望集跑前就空）** —— 单测层结构上打不到：
+   唯一碰这一级的 `ToolkitResultCapTest.overflowDirResolvesInjectedFirstThenSystemProperty` 自己写着
+   `if (System.getenv(Toolkit.ZBOT_HOME_ENV) == null) { …assertNull… }` —— JUnit 里改不了本进程 env，
+   所以 surefire 下这一支**永远不被断言**；把 `$ZBOT_HOME` 那一摘，测试照常绿。
+   ⇒ 记"未覆盖"，不算过。它唯一有猎物的地方是真进程：杠③ C1（`ZBOT_HOME=<临时目录>` 下
+   `CAP_RESOLVED_OVERFLOW_DIR=<tmp>/tool-results`，PASS）。
+5. **MB2 `GREEN-BUT-MUTATED` 0/0（期望集跑前就空）** —— 把 `deregisterToolset(toolset(), owner())`
+   换成"按桥自己记住的 `registered` 列表逐个 `deregister(name, owner())`"，525 条全绿。
+   原因：看着最像猎物的 `deregisterToolsetCleansNamesTheBridgeNoLongerKnowsAbout`（`ToolkitRegistryTest.java:134`）
+   是**注册表层**的用例（裸 `tk.register` + `tk.deregisterToolset`，根本不经过 `McpBridge`），
+   而桥层用例里 `registered` 与注册表在替身上永远一致 ⇒ 造不出"注册表有、桥没记住"的那个分歧。
+   ⇒ 记"未覆盖"：缺一条**桥级**用例（server 改名后老名字仍挂在注册表上，而桥的记忆里只有新名字）。
+   本期没补。真进程侧这条有读数：杠③ M11（`reload()` 后只剩 `mcp-alpha2-renamed`）与 M12。
+6. **TK11 `PARTIAL` 13/13 + 3 条未点名红** —— 点名的 13 条全红，另外
+   `bridgeRegistersAnAvailabilityProbeBackedByTheConnection`、`reloadDropsTheDeadServersToolNamesFromGetToolNames`、
+   `repavingWithTheSameToolNameWorksAfterUnregister` 也红了：owner 参数被顶成内建 owner 之后，
+   桥级 nuke 变静默 no-op，连带把探测/reload 路径一起打断。⇒ 期望集写窄了（不是产品问题，红是好事）。
+7. **MB3 `PARTIAL` 8/8 + 2 条未点名红** —— 这条是工单点名的**反向断言**（"旧实现注回去必须先红一次"）：
+   把 `stubTool(name)` 同名覆盖那套注回去，10 条红，其中 `unregisteringIsNotStubOverwrite`、
+   `oldServerToolNamesAreGoneAfterUnregisterInsideTheSameJvm`、`unregisterLeavesNoPlaceholderBehindInAnyListView`
+   三条正是"不许留桩"的正面判据 ⇒ 说明现在的产品码真的在判这件事。
+   未点名的 2 条（`bridgeOnlyNukesItsOwnToolset`、`serverNamesWithDashesGetUnambiguousToolsets`）是 toolset 拼法连带。
 
 ### 2.3 测试替身还原的独立取证
 
-TODO-2.3
+`LEDGER_RESTORE.tsv` 也是脚本产物（21 行），每行记：
+`id / file / git_show_md5_baseline / disk_md5_during_injection / injection_landed / disk_md5_after_restore / restored`。
+判据不吃脚本自己那句"restored=ok"，而是**每一行都拿 `git show <基线 rev>:<path>` 的 md5 当独立权威**：
 
-### 2.4 锁的双向实测
+```
+$ cut -f5 _doc/acceptance/p20b/LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c
+  21 yes(disk!=git show)
+$ cut -f7 _doc/acceptance/p20b/LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c
+  21 ok
+$ git status --porcelain      # 全量跑完（含控制跑）之后：四个被测源文件一字未变，只剩本棒的 _doc 改动
+```
+⇒ 21/21「注入确实改了盘」且 21/21「还原后与 `git show` 逐字节同」。基线 rev 由脚本自己在第一列写死
+（`a2b5e49…`），不是我口头指定的；`injection_landed` 这一列的第一版标签写反了，见 §6(7)。
 
-TODO-2.4
+### 2.4 锁的双向实测（`flock(LOCK_EX|LOCK_NB)`，落在 git 公共目录）
+
+锁路径：`$(git rev-parse --git-common-dir)/zbot-mutlock` =
+`/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock`（跨 worktree 才叫锁）。
+
+- **攥锁侧**（`python3 -u … p20b_mutation.py --hold-lock 24`）：
+  ```
+  LOCK HELD pid=18053 24s
+  LOCK RELEASED pid=18053
+  ```
+- **邻居侧（攥锁期间真跑全量注入）**：
+  ```
+  预检过：锚点次数 + 盘上原文 == git show + 无漂移
+  FATAL 锁被占（/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock）: [Errno 35] Resource temporarily unavailable ⇒ 本棒不硬跑，按工单记'杠②未跑完：锁被占'
+  rc_busy=5
+  ```
+  当场核对四个被测源文件（python 算的 md5，逐字节比 `git show HEAD:<path>`）：
+  ```
+  Toolsets.java   f6785851f188d681c531a377249f9cdf True
+  Toolkit.java    4ae1a491cd73b0f1c1ac869db59723ad True
+  McpBridge.java  2938f85b32213e0bd7d7041e478d35b2 True
+  McpManager.java 37a141454ca06331bfdb3341e0af3c83 True
+  ```
+  ⇒ **拒跑且源码一字不变**（预检只读、`acquire_lock` 在任何写盘之前）。
+  这一跑还留下 `LEDGER.tsv` 21 行 `BROKEN / 未跑：锁被占`（正是"拿不到锁就记账"那条要求）；
+  记账完成后本棒用 `git show HEAD:_doc/acceptance/p20b/LEDGER.tsv` 的字节写回 + `fsync` + md5 比对
+  （`restored equal= True`）把台账还原成真实那一版 ⇒ 现在库里的 `LEDGER.tsv` 是 14/4/3/0 那份。
+  （这条兜底路径的第一版会 `NameError` 崩溃，见 §6(8)。）
+- **松开后**（`--want-lock`）：
+  ```
+  LOCK ACQUIRED-THEN-RELEASED pid=18679
+  rc_free=0
+  ```
+- 顺带一条真实撞车：本棒 03:5x 那一次就是在别人攥着锁时被这条挡住（`rc_busy` 当场 5），
+  重试到 04:0x 拿到锁才跑完全量 ⇒ 不是只在测试里好用。
+- 跑前还会 `ps` 等别人的 maven 真身（`P20B_MVN_WAIT`），等待期间不碰源码；
+  这一判据的第一版错把含 "mvn" 字样的自家 shell 当邻居，见 §6(5)。
 
 ### 2.5 未覆盖的守卫（注入不出的，说明为什么不可观测）
 
-TODO-2.5
+| 守卫 | 为什么单测层注入不出 | 唯一有读数的一面 |
+| --- | --- | --- |
+| 溢出目录第三级解析 `$ZBOT_HOME`（TK9） | JUnit 进程改不了自己的 env，唯一相关用例自带 `if (getenv==null)` 跳过 ⇒ 结构上没有猎物 | 杠③ C1（真进程 `ZBOT_HOME=<tmp>`）PASS |
+| 桥"不拿记住的名字当结论"（MB2） | 最像猎物的用例是注册表层的，不经过 `McpBridge`；桥级替身造不出"注册表有、桥没记住"的分歧 | 杠③ M11/M12（改名 server + stopAll）PASS |
+| `UNBOUNDED` 哨兵（TK5） | 这条根本不是"没猎物"，而是**等价变异**（`cap=Long.MAX_VALUE` 时两个写法逐值同） | 杠③ C7 PASS；想判红要换不等价的注入 |
+| `check_fn` 真时间（TTL 30 s / 宽限 60 s 的**时序**） | 单测用的是注入的 `LongSupplier` 假钟，能判语义判不了真时间 | 杠③ M4–M7（`first_hidden=60281ms`、`wall=60.6s`）PASS |
+
+⇒ 上表四条按工单口径都算"杠② 未覆盖"，**不算过**；它们都由杠③ 的真进程读数兜着，两边不是一把尺。
+
 
 ## 3. 杠③ —— 真进程 E2E（三阶段全量一次跑完 + M4/M5 裁决）
 
