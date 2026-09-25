@@ -25,8 +25,10 @@ public class PairingServiceTest {
     @Before
     public void setUp() throws Exception {
         file = new File(tmp.newFolder("data"), "pairing.json");
-        // TTL 短一些好测过期
-        service = new PairingService(file, 200);
+        // fixture 用宽 TTL：懒清理是按 expiresAt 判定的一次写入即过期，200ms 意味着
+        // "issue 落盘 + 下一步断言" 只要慢过 200ms 就被自己删掉（冷 JVM 下必挂）。
+        // 过期语义只在 expiredCodesAreLazyCleaned 里用短 TTL 自建实例测。
+        service = new PairingService(file, 60_000);
     }
 
     @Test
@@ -57,11 +59,16 @@ public class PairingServiceTest {
 
     @Test
     public void expiredCodesAreLazyCleaned() throws Exception {
-        service.issue("webhook", "conv-1", "alice");
-        TimeUnit.SECONDS.sleep(1); // 超过 200ms TTL
+        // expiresAt 由签发方按其 TTL 写入 ⇒ 必须用短 TTL 实例自己签发，宽 TTL 实例签的码
+        // 换个小 TTL 读端也不会过期。3s（而非 200ms）是"未过期"这一侧的余量：懒清理按
+        // now 判定，TTL 必须显著大于两次落盘 I/O 的尾延迟，否则又是构造出来的竞态。
+        PairingService shortLived = new PairingService(file, 3000);
+        shortLived.issue("webhook", "conv-1", "alice");
+        assertTrue(shortLived.list().size() > 0);
+        TimeUnit.MILLISECONDS.sleep(5000); // 超过 3s TTL
         // 触发一次访问触发懒清理
-        assertEquals(0, service.list().size());
-        assertEquals(null, service.consume("ANYCODE"));
+        assertEquals(0, shortLived.list().size());
+        assertEquals(null, shortLived.consume("ANYCODE"));
     }
 
     @Test
