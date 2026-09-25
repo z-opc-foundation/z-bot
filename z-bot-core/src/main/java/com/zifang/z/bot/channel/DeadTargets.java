@@ -42,6 +42,9 @@ public final class DeadTargets {
     static final String UNKNOWN = "unknown";
     static final String THREAD_NOT_FOUND = "thread_not_found";
 
+    /** 分类时最多往下读几层 cause（再深就是无意义包装，且怕自环）。 */
+    static final int MAX_CAUSE_DEPTH = 5;
+
     private final ReentrantLock lock = new ReentrantLock();
     private final Map<String, Map<String, Object>> dead = new LinkedHashMap<String, Map<String, Object>>();
     private final File path;
@@ -118,11 +121,19 @@ public final class DeadTargets {
 
     private static String blob(Throwable exc, String errorText) {
         StringBuilder sb = new StringBuilder();
-        if (exc != null) {
-            sb.append(exc.toString()).append(' ');
-            if (exc.getMessage() != null) {
-                sb.append(exc.getMessage()).append(' ');
+        // 一路往下读 cause：通道层普遍把 HTTP 失败包成 IllegalStateException/RuntimeException，
+        // 只看最外层 message 的话「chat not found」永远落在 cause 里 ⇒ 全部降级成 UNKNOWN，
+        // 死目标登记就成了摆设（每次投递继续撞墙）。深度封顶 + 自环防护。
+        Throwable t = exc;
+        for (int depth = 0; t != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            sb.append(t.toString()).append(' ');
+            if (t.getMessage() != null) {
+                sb.append(t.getMessage()).append(' ');
             }
+            if (t.getCause() == t) {
+                break;
+            }
+            t = t.getCause();
         }
         if (errorText != null) {
             sb.append(errorText);

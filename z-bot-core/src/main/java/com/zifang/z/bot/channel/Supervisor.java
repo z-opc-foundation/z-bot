@@ -434,13 +434,19 @@ public final class Supervisor {
 
         /** 干净收尾时删掉自己的锁（幂等；只删内容仍是本实例的那份，绝不误删别人的新锁）。 */
         public boolean release() {
-            if (file == null || !released.compareAndSet(false, true)) {
+            if (file == null || released.get()) {
                 return false;
             }
             try {
                 String raw = Supervisor.readSmall(file);
                 if (raw != null && raw.contains("\"pid\":" + pid)) {
-                    return file.delete();
+                    boolean gone = file.delete();
+                    // 只有真删掉了才盖章 released：拒删（锁已被新实例接手）和读失败都必须留下
+                    // 下次再试的余地；半途盖章会让本实例的锁永久赖在盘上，下次启动白白撞一次自愈。
+                    if (gone) {
+                        released.set(true);
+                    }
+                    return gone;
                 }
                 return false;
             } catch (RuntimeException e) {

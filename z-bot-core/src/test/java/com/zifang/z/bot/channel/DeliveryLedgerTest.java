@@ -157,7 +157,7 @@ public class DeliveryLedgerTest {
     }
 
     @Test
-    public void rowsOwnedByALiveProcessAreLeftAlone() {
+    public void rowsOwnedByALiveProcessAreLeftAlone() throws Exception {
         ledger.recordObligation("oL", "c1", "webhook", "c1", "别的网关正在发");
         ledger.markAttempting("oL");
         // 探针一口咬定归属进程还活着（本进程就是 owner，真实现场也是这样）
@@ -172,7 +172,7 @@ public class DeliveryLedgerTest {
     }
 
     @Test
-    public void secondSweeperBacksOffOnceALiveOwnerHoldsTheRow() {
+    public void secondSweeperBacksOffOnceALiveOwnerHoldsTheRow() throws Exception {
         ledger.recordObligation("oT", "c1", "webhook", "c1", "只能被认领一次");
         ledger.markAttempting("oT");
         assertEquals(1, ledgerWith(db, ALWAYS_DEAD).sweepRecoverable(ALL, null).size());
@@ -208,7 +208,7 @@ public class DeliveryLedgerTest {
     }
 
     @Test
-    public void sweepOnlyClaimsRowsThisBootCanActuallyDeliver() {
+    public void sweepOnlyClaimsRowsThisBootCanActuallyDeliver() throws Exception {
         ledger.recordObligation("oFeishu", "c1", "feishu", "c1", "发到没起来的平台");
         ledger.recordObligation("oHook", "c2", "webhook", "c2", "发到在线的平台");
         List<DeliveryLedger.Claimed> claimed = ledgerWith(db, ALWAYS_DEAD)
