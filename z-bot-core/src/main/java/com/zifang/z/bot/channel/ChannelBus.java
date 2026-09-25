@@ -292,8 +292,9 @@ public final class ChannelBus {
         }
         Channel source = byName.get(platform);
         if (source == null) {
-            // 来源通道已经不在了：这条义务没有可发的副作用，直接结清，别留悬挂行
-            markLedger(led, oid, STATE_DELIVERED, "no-channel");
+            // 来源通道已经不在了：这条义务本次发不出去。记 failed 而不是 delivered ——
+            // 谎报结清会让台账和真实世界分叉，而 failed 行在通道回来后还能被 sweep 认领。
+            markLedger(led, oid, STATE_FAILED, "no-channel: " + platform);
             return;
         }
         if (dead != null && dead.isDead(platform, chatId)) {
