@@ -2,7 +2,10 @@ package com.zifang.z.bot;
 
 import com.zifang.z.bot.cli.AgentOptions;
 import com.zifang.z.bot.cli.ChatCommand;
+import com.zifang.z.bot.cli.GatewayCommand;
+import com.zifang.z.bot.cli.PairCommand;
 import com.zifang.z.bot.cli.ReplCommand;
+import com.zifang.z.bot.cli.SendCommand;
 import com.zifang.z.bot.cli.ServeCommand;
 import com.zifang.z.bot.cli.SessionsCommand;
 import com.zifang.z.bot.cli.StatusCommand;
@@ -21,15 +24,18 @@ import java.util.concurrent.Callable;
  *   z-bot                           进入终端 TUI
  *   z-bot chat -v "读一下 README"    单轮 + 工具过程打到 stderr
  *   z-bot repl                       终端 TUI（/status /sessions /confirm …）
- *   z-bot serve --port 8080          HTTP + SSE + web 控制台
+ *   z-bot serve --port 8080          HTTP + SSE + web 控制台（单通道）
+ *   z-bot gateway --webhook-port 8090 多通道常驻（HTTP + Webhook，可选 pairing）
  *   z-bot status                     打印生效配置
+ *   z-bot send webhook <conv> <text> 脚本化外发到 channel
+ *   z-bot pair <8位码>                消费 gateway 发出的配对码
  * </pre>
  *
  * <p>模型 / key 默认取 {@code ~/.zbot/config.properties}，命令行选项只做覆盖。</p>
  */
 @Command(name = "z-bot", mixinStandardHelpOptions = true, version = "z-bot 0.2.0",
-        subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, StatusCommand.class,
-                SessionsCommand.class},
+        subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, GatewayCommand.class,
+                StatusCommand.class, SessionsCommand.class, SendCommand.class, PairCommand.class},
         description = "本地 agent 应用（ReAct + 工具 + 沙箱 + 会话）")
 public class ZBot implements Callable<Integer> {
 

@@ -203,3 +203,21 @@
   - 工具: `cronjob` (add/list/remove/pause/resume), 注册到 BotAgent 工具表; `/cron` slash 命令同步操作; `BotAgent.Builder.cronScheduler(...)` 注入短 tick scheduler 便于测试。
   - 副修: `SessionManager.INSTANCE_TAG` static → instance, 同进程多 SessionManager 实例同毫秒 `createSession()` 不再撞 id (orphansFromAnotherProcessAreAdopted 假红根因)。
   - 单测 152/152 连续 3 跑绿 (新增 CronScheduleTest 17 + CronSchedulerTest 13 + BotAgentCronTest 6)。
+
+### P8 gateway + 多通道 — Hermes #3 ✅ 完成 (2026-09-25)
+**实现**:
+- `channel.Channel` SPI: 5 个方法 (name/start/stop/awaitTermination/send + isRunning)
+- `channel.ChannelMessage` / `OutboundMessage` POJO
+- `channel.ChannelBus`: per-conversationId agent fork (`prototype.forkFor(cid)`) + 异步 deliver + 200 条 history ring buffer
+- `channel.WebhookChannel`: `POST /webhook/in` 入站 + `GET /webhook/out` 长轮询出站 (20s); 可选 callbackUrl POST 回执
+- `channel.FeishuChannel`: `GET /feishu/event?echostr=` URL 校验; `POST /feishu/event` 事件分发; `verifySignature` SHA-1(timestamp+nonce+encryptKey+body); conversationId = `chat_type:chat_id`
+- `channel.DingTalkChannel`: HMAC-SHA256 签名 URL (`base64(hmac-sha256(secret, ts+"\n"+secret))`); SHA-1 hex helper
+- `channel.PairingService`: 8 位配对码 (去 0/O/1/I 字母表), JSON 持久化 + tmp+ATOMIC_MOVE, 默认 60min TTL, 一次性消费
+- `channel.Gateway`: 聚合 prototype/bus/pairing/channels, register/start/stop/status
+- `cli.GatewayCommand`: `z-bot gateway --port 8080 --webhook-port 8090 --pairing`; 注册 HttpChannelAdapter(包原 HttpChannel) + WebhookChannel
+- `cli.SendCommand`: `z-bot send <channel> <conv> <text>` → webhook 或 http 模式
+- `cli.PairCommand`: `z-bot pair <8位码>` 消费配对码
+
+**BotAgent.forkFor(conversationId)**: 共享 provider/tools/sandbox/context/checkpoint, 独立 SessionManager 在 `<configDir>/delegate/children/fork-<cid>/`(P5 delegate 子代理的同模式复用)。
+
+**单测**: 181/181 连续 3 跑绿 (新增 29: PairingServiceTest 7 + WebhookChannelTest 5 + FeishuChannelTest 7 + DingTalkChannelSignTest 5 + GatewayTest 5)。webhook/飞书是真 HTTP 端到端; 配对/钉钉签名/Gateway 是纯算法/桩。

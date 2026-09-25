@@ -946,6 +946,26 @@ public class BotAgent {
         return sessionManager;
     }
 
+    /**
+     * 给一个会话 id 派生新 agent：共享 provider / 工具 / sandbox / 上下文引擎 / checkpoint，
+     * 独立 SessionManager（落在 {@code <configDir>/sessions/<id>/}）。
+     * gateway / 通道层用 — 让每个会话拥有独立记忆。
+     */
+    public BotAgent forkFor(String conversationId) {
+        File root = sessionManager == null ? null : sessionManager.getSessionDir().getParentFile();
+        File convDir = root == null ? null : new File(root, conversationId);
+        SessionManager newSm = convDir == null ? new SessionManager() : new SessionManager(convDir);
+        return BotAgent.builder(config)
+                .provider(provider)
+                .sandbox(sandbox)
+                .sessionManager(newSm)
+                .model(model)
+                .withoutCenter()
+                .memoryStore(memoryStore)
+                .skillsRoot(skillsRoot)
+                .build();
+    }
+
     public String getModel() {
         return model;
     }
