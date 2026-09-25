@@ -1,0 +1,26 @@
+id	verdict	named_expected_red	test_that_went_red	surefire_rc	restored
+M1 先落账再跑被改成先跑再落账	PARTIAL	2/3	claimIsOnDiskBeforeTheRunnerRuns,everyDispatchGoesThroughBothLockLayers,executeBeatsHeartbeatWhileRunnerIsStillGoing,oneShotQuotaIsOnDiskBeforeTheRunnerRuns	1	True
+M2 一次性额度判定放过第二次	RED-OK	1/1	oneShotQuotaRemovesTheStaleJobInsteadOfRerunningIt	1	True
+M3 负年龄的认领也算活着	RED-OK	1/2	futureStampedClaimIsNotTreatedAsLive	1	True
+M4 心跳去掉 compare-and-refresh	RED-OK	2/2	executeBeatsHeartbeatWhileRunnerIsStillGoing,heartbeatKeepsTheClaimLivePastItsTtl	1	True
+M5 心跳谁都能续	RED-OK	1/1	heartbeatAfterATakeoverIsRejected	1	True
+M6 重入计数被摘掉（嵌套也去抢 flock）	RED-OK	1/1	nestedStoreCallsTakeTheFlockOnce	1	True
+M7 进程内监视器挂回实例上	RED-OK	1/1	twoInstancesOnOneDirNeverDegradeTheirLock	1	True
+M8 跨进程 flock 的等待上限归零	GREEN-BUT-MUTATED	0/0	全绿（跑了 82 条）	0	True
+M9 gateway 不把通道表接进 cron	GREEN-BUT-MUTATED	0/0	全绿（跑了 82 条）	0	True
+M10 local 档不打印（结果又静默蒸发）	RED-OK	2/2	localDeliveryDefaultsToStandardOut,localDeliveryPrintsTheResultToTheGivenStream	1	True
+M11 origin 没有来源时改成报错	BROKEN	0/2	全绿（跑了 0 条）	1	True
+M12 unknown channel 被静默吞掉	RED-OK	1/1	unknownChannelIsAnErrorNotASilentSuccess	1	True
+M13 组合路由的重复目标不再去重	RED-OK	1/1	duplicateTargetsFromACombinedRouteAreSentOnce	1	True
+M14 投递口抛异常被当成成功	RED-OK	1/1	sendFailureIsCollectedButOtherTargetsStillGetIt	1	True
+M15 cronjob 工具丢掉 deliver 参数	RED-OK	1/1	cronToolCarriesTheDeliverArgumentIntoTheJob	1	True
+M16 空输出也记成投递 ok	RED-OK	1/1	emptyResultIsNotDeliveredAtAll	1	True
+M17 一次性任务的 due 判定恒假	RED-OK	1/1	onceIsDueOnlyAtAndAfterTheInstant	1	True
+M18 路由白名单放过 origin:xxx 这种写法	RED-OK	1/1	routeSyntaxIsChecked	1	True
+M19 validateRoute 用回会丢尾空段的 split	RED-OK	1/1	routeSyntaxIsChecked	1	True
+M20 ownerId 丢掉随机后缀	PARTIAL	2/2	claimOfFreshForeignOwnerBlocksDispatch,heartbeatAfterATakeoverIsRejected,heartbeatKeepsTheClaimLivePastItsTtl	1	True
+# tally	RED-OK=15	PARTIAL=2	GREEN-BUT-MUTATED=2	BROKEN=1
+# mutants_injected	20
+# tests_ran_per_round	82
+# expected_total_after_p17	451
+# ledger_generated_by	p17_mutation.py	at	2026-09-25T22:00:57+0800

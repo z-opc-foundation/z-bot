@@ -162,6 +162,54 @@ public class CronClaimTest {
     }
 
     @Test
+    public void tickDoesNotRerunAOneShotThatAnotherProcessAlreadyFinished() {
+        // 双实例同刻竞争的进程内版本（E2E 里用两个真 JVM 再跑一遍）：
+        // b 启动时把这条一次性任务搬进了自己的内存，a 先跑完并把它从盘上摘掉；
+        // b 的下一拍如果看内存里那份旧单子，就会拿着"库里已经没有账"的 job 去认领，
+        // 撞上 claimDispatch 的"无账可落，按原样放行"分支 —— 于是又跑一遍。
+        final AtomicInteger runs = new AtomicInteger();
+        CronScheduler.TaskRunner countAndGo = prompt -> {
+            runs.incrementAndGet();
+            return "x";
+        };
+        CronScheduler a = scheduler(countAndGo);
+        a.add("once", "p", "once 2020-01-01T00:00:00Z");
+        CronScheduler b = scheduler(countAndGo);
+        assertEquals("b 启动时确实把这条搬进了自己的内存", 1, b.list().size());
+
+        java.time.ZonedDateTime longAgo = java.time.ZonedDateTime.now().minusSeconds(3600);
+        a.tickWithOffset(longAgo);
+        assertEquals(1, runs.get());
+        assertEquals("跑完就该从盘上摘掉", 0, a.list().size());
+
+        b.tickWithOffset(longAgo);
+        assertEquals("隔壁已经跑完并摘除的一次性任务，被 b 用过期内存副本又跑了一遍",
+                1, runs.get());
+    }
+
+    @Test
+    public void tickStillSeesJobsThatAreReallyOnDisk() {
+        // 上一条的反向保险：改成"读盘"之后，正常到点的任务必须照跑（别把调度器读哑）。
+        final AtomicInteger runs = new AtomicInteger();
+        CronScheduler a = scheduler(prompt -> {
+            runs.incrementAndGet();
+            return "x";
+        });
+        a.add("t", "p", "every 5s");
+        CronScheduler b = scheduler(countingRunner(runs));
+        b.tickWithOffset(java.time.ZonedDateTime.now().minusSeconds(3600));
+        assertEquals(1, runs.get());
+        assertEquals("ok", b.list().get(0).lastResult);
+    }
+
+    private CronScheduler.TaskRunner countingRunner(final AtomicInteger runs) {
+        return prompt -> {
+            runs.incrementAndGet();
+            return "ok";
+        };
+    }
+
+    @Test
     public void claimOfFreshForeignOwnerBlocksDispatch() {
         CronScheduler a = quietScheduler();
         CronScheduler b = quietScheduler();

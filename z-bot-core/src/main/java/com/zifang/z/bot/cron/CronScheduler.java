@@ -371,7 +371,18 @@ public final class CronScheduler {
         ZonedDateTime now = ZonedDateTime.now();
         ZonedDateTime last = lastTick;
         lastTick = now;
-        for (CronJob j : jobs) {
+        tickAgainst(last, now);
+    }
+
+    /** 测试钩子：以指定 lastTick 触发一次 tick，用于验证 due 边界。 */
+    public void tickWithOffset(ZonedDateTime last) {
+        ZonedDateTime now = ZonedDateTime.now();
+        lastTick = now;
+        tickAgainst(last, now);
+    }
+
+    private void tickAgainst(ZonedDateTime last, ZonedDateTime now) {
+        for (CronJob j : jobsOnDisk()) {
             if (!j.enabled || !j.schedule().due(last, now)) {
                 continue;
             }
@@ -379,16 +390,21 @@ public final class CronScheduler {
         }
     }
 
-    /** 测试钩子：以指定 lastTick 触发一次 tick，用于验证 due 边界。 */
-    public void tickWithOffset(ZonedDateTime last) {
-        ZonedDateTime now = ZonedDateTime.now();
-        lastTick = now;
-        for (CronJob j : jobs) {
-            if (!j.enabled || !j.schedule().due(last, now)) {
-                continue;
+    /**
+     * 这一拍要看的是<b>盘上</b>的任务表，不是内存里那份。
+     *
+     * <p>内存副本只被<b>本实例</b>的事务刷新过：隔壁进程在上一拍把一次性任务跑完摘掉了，
+     * 我这边它还在原地 due —— 于是拿一条"库里已经没有账"的旧单子去 {@link #claimDispatch}，
+     * 会撞上"无账可落，按原样放行"那一支，双实例就又双跑了（正是本期要堵的那个洞）。
+     * 一拍一次读盘的代价，换来"看到的账本永远比手头的单子新"。</p>
+     */
+    private List<CronJob> jobsOnDisk() {
+        return withStore(new LockedCall<List<CronJob>>() {
+            @Override
+            public List<CronJob> call(StoreTxn tx) {
+                return new ArrayList<CronJob>(tx.jobs());
             }
-            execute(j);
-        }
+        });
     }
 
     // ===== 先落账再跑（红线 8） =====
