@@ -31,7 +31,8 @@ import java.util.concurrent.Callable;
  *   z-bot pair <8位码>                消费 gateway 发出的配对码
  * </pre>
  *
- * <p>模型 / key 默认取 {@code ~/.zbot/config.properties}，命令行选项只做覆盖。</p>
+ * <p>模型 / key 默认取<b>当前 profile</b>（{@code -Dzbot.home} &gt; {@code ZBOT_HOME} &gt;
+ * {@code ~/.zbot}）下的 {@code config.properties}，命令行选项只做覆盖。</p>
  */
 @Command(name = "z-bot", mixinStandardHelpOptions = true, version = "z-bot 0.2.0",
         subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, GatewayCommand.class,

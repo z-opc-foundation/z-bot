@@ -28,7 +28,7 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 | 8 | P9 "stdio + HTTP 两种 transport" | 只有 stdio — 工厂类自己的注释写着"HTTP+SSE 留到后续版本"; 且"反注册"是假的: `Toolkit` 没有 unregister API, `McpBridge.unregisterAll()` 用**同名 stub 覆盖**收尾, reload 后工具名仍占表 | `mcp/McpClientFactory.java:17,29`, `mcp/McpBridge.java:62-66` |
 | 9 | 头部 "hermes ~189 万行" | 见文首口径 (可复算的 find 命令), 713,095 (源码) / 1,536,919 (含测试) | 同上 |
 | 10 | v1 §0 锚点表 15 个 hermes 文件路径 | 13 个真存在, **2 个路径错**: `toolsets.py` 在顶层 (不在 `tools/`), `interrupt.py` 在 `tools/` (不在 `agent/`) | `find . -name '*toolset*' -o -name '*interrupt*'` |
-| 11 | P10b "WebhookChannelTest 401 = 环境级临时端口复用, 未复现不修" | **该归因已被自己的量具推翻**: 12 轮全量 (每轮 36 个绑定端口) 里重复端口 **0 次**、失败 **0 次**。今天同型故障再现于 `FeishuChannelTest` ⇒ 旧结论作废。**09-25 已定位真因**: 通道绑通配地址, 与邻居进程的 `127.0.0.1:P` 特定绑定在 macOS 上共存, 客户端被路由到邻居那儿 —— 详见 §6 首条 (含 `curl`/`lsof`/`BindProbe` 三份实测), 修法 P11c | `/tmp/zbot_flake/summary.txt`, 脚本 `/tmp/zbot_flake_loop.sh`, `/tmp/BindProbe.java` |
+| 11 | P10b "WebhookChannelTest 401 = 环境级临时端口复用, 未复现不修" | **该归因已被自己的量具推翻**: 12 轮全量 (每轮 36 个绑定端口) 里重复端口 **0 次**、失败 **0 次**。今天同型故障再现于 `FeishuChannelTest` ⇒ 旧结论作废。**09-25 已定位真因**: 通道绑通配地址, 与邻居进程的 `127.0.0.1:P` 特定绑定在 macOS 上共存, 客户端被路由到邻居那儿 —— 详见 §6 首条 (含 `curl`/`lsof`/`BindProbe` 三份实测)。**修法已于 P11c 落地** (09-25 收口: 缺省绑回环 + 显式 `--host` 才通配), 四道杠读数见 §5 W2 该条与 `_doc/acceptance/p11c/EVIDENCE.md` | `/tmp/zbot_flake/summary.txt`, 脚本 `/tmp/zbot_flake_loop.sh`, `/tmp/BindProbe.java` (三份已归档进 `_doc/acceptance/p11c/`) |
 | 12 | (本轮新发现·安全) 模型可自带 `__confirmed__:true` 跳过审批 | 已修: `parseArgs` 无条件剥除该标记, 附 3 条回归 | commit `cd32730` |
 | 13 | (本轮新发现·红线 1) `state.db` 缺省写死 `~/.zbot` | 已修: 缺省跟随 `configDir`, `z-bot sessions` 同步支持 `--config-dir` | commit `a91de90` |
 
@@ -130,9 +130,10 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 
 ### W2 — 主循环节律 + 注册表 + 送达 (4 代理并行)
 
-**P11c 通道监听收口 (插队, 先于 P12)** — 锚点 §6"`*.channel` HTTP 抖动真因" · 边界 `channel/HttpChannel.java`, `channel/WebhookChannel.java`, `channel/FeishuChannel.java`, `channel/DingTalkChannel.java` 的 `start()` + 对应测试
-缺省一律绑**回环** (`InetAddress.getLoopbackAddress()`), 要暴露到 LAN 必须显式给 `--host`/配置项; 撞车从"哑巴成功"变成 `BindException`。附带收益: 全量套件里那条 1/9 抖动归零, 且不再把无鉴权的 `/bot/chat`、`/api/*` 摆到局域网。
-验收: ①四道杠; ②变异 = 把任一通道改回通配绑定, 要有**具名测试**红; ③真进程 E2E = 邻居先占 `127.0.0.1:P` 时 `z-bot serve --port P` 必须报错退出, 而不是"启动成功但没人应答"。
+**P11c ✅ 09-25 收口 — 通道监听收口 (插队, 先于 P12)** — 锚点 §6"`*.channel` HTTP 抖动真因" · 边界 `channel/HttpChannel.java`, `channel/WebhookChannel.java`, `channel/FeishuChannel.java`, `channel/DingTalkChannel.java` 的 `start()` + 对应测试
+落地: 新增 `channel/ChannelBind.java` 统一解析 —— host 空 ⇒ `InetAddress.getLoopbackAddress()`, 显式写 `0.0.0.0` 才通配; 四通道各加末位 `host` 构造重载; CLI 侧 `serve --host` / `gateway --host`(两通道共用)。**没加配置项** (`--host`/配置项里的那半个"配置项"): 四个通道的实例化点全在 CLI, `BotConfig` 无消费者, 加了就是红线 2 的 0 消费者抽象 (记在 `_doc/acceptance/p11c/EVIDENCE.md` §6"这一项没做什么")。横幅改印**实际**地址并在非回环时打 LAN 警告。
+验收读数: 杠① 最终树 411 条 (基线 399 + `ChannelBindTest` 11 + `ProfileIsolationTest` 新增 1) ×3 连绿、每跑 socket 类错误 0 次; 杠② 8 个变异体 ⇒ 7 RED-OK + 1 PARTIAL, **0 GREEN-BUT-MUTATED** (含 M6 这个反空跑探针: 把 `resolve()` 钉成"永远回环", 显式 opt-in 那层必红); 杠③ 真进程 22/22, 其中 E3 = 邻居占 `127.0.0.1:P` 时 serve rc=1 + `BindException`, E4 = 同一处境下 `--host 0.0.0.0` 照样起得来而请求被邻居抢答 (拿到盖章串 `FOREIGN-NEIGHBOR-OWNED-THIS-PORT`) —— 这就是修复前"哑巴成功"的真身; 杠④ `~/.zbot` 8 项 + 两个 md5 一字未动。
+**"1/9 抖动归零"这句撤回**: 修复后又跑 24 轮全量 (3+9 轮在 410 那版树、3+9 轮在最终树 411), 全绿、每轮 socket 类错误 0 次 —— 但**同一棵树**只有 12 轮, 按 1/9 先验"12 连绿纯属运气"还有 (8/9)^12 ≈ 24% 的概率 (24 轮混了树形, 只当参考: (8/9)^24 ≈ 6%), 不足以把"归零"写成一个读数。能写的是**机制被封死**: 缺省绑回环后"通配与邻居共存"这条路在代码里不存在了, 撞车只会以 `BindException` 出现 (E3 实测)。原始读数 `_doc/acceptance/p11c/post-fix-flake-summary.txt`, 长期观测项留在 §6/§8。
 
 **P12 主循环节律包: 中断/steer/预算/prompt cache** — 锚点 §2#3 #4 #5 · 边界 `agent/BotAgent.java`, kernel-agent
 - 中断: 线程作用域的中断集合 (按执行线程定向, 防并发会话串台) + **工具侧检查点** (exec 读输出循环、文件读写、mvn_build、delegate 子循环各插 1 处以上), 目标从 0 处到 ≥6 处;
@@ -227,13 +228,14 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 
 ## 6. 未决与已知抖动
 
-- **`*.channel` HTTP 抖动 —— 真因已定位 (09-25 21:3x)**: 四个通道清一色用 `new InetSocketAddress(port)` **绑通配地址** (`HttpChannel.java:69`, `WebhookChannel.java:77`, `FeishuChannel.java:88`, `DingTalkChannel.java:72`)。macOS 上"别人的进程显式监听 `127.0.0.1:P`" 与"我们带 SO_REUSEADDR 的通配绑定"**可以共存**, 而客户端连 `127.0.0.1:P` 被路由到**更具体的那个 listener** ⇒ 我们的服务器一个字节都没收到, `getPort()` 却报"我占了 P"。命中与否取决于 OS 当时发到哪个号, 所以成簇出现、隔天不复现。
-  | 复算: `java /tmp/BindProbe.java` (邻居 specific listener + 我们 wildcard 同端口 + 客户端探测)
+- **`*.channel` HTTP 抖动 —— 真因已定位，并已修掉 (09-25 21:3x 定位 ⇒ 22:1x P11c 收口)**: 四个通道**修前**清一色用 `new InetSocketAddress(port)` **绑通配地址** (修前位置 `HttpChannel.java:69`, `WebhookChannel.java:77`, `FeishuChannel.java:88`, `DingTalkChannel.java:72`)。macOS 上"别人的进程显式监听 `127.0.0.1:P`" 与"我们带 SO_REUSEADDR 的通配绑定"**可以共存**, 而客户端连 `127.0.0.1:P` 被路由到**更具体的那个 listener** ⇒ 我们的服务器一个字节都没收到, `getPort()` 却报"我占了 P"。命中与否取决于 OS 当时发到哪个号, 所以成簇出现、隔天不复现。
+  | 复算: `java _doc/acceptance/p11c/BindProbe.java` (邻居 specific listener + 我们 wildcard 同端口 + 客户端探测；原 `/tmp/BindProbe.java` 已归档进仓)
   | 实测: `[wildcard] bind 成功 -> 共存成立` / `客户端连 127.0.0.1:51804 拿到 -> code=200 ct=text/x-foreign body=FOREIGN` / `[loopback] bind 失败(预期 EADDRINUSE)` ⇒ 绑回环能让撞车**变红**而不是变哑。
   | 本轮那次 (`mvn -o test` run=2, `toolsEndpointReflectsToolkit expected:<200> but was:<400>`): run 日志里有 `[HTTP] z-bot 已启动: http://127.0.0.1:56510`, 而 `lsof -nP -iTCP -sTCP:LISTEN` 显示 `Qoder PID 10598` 正持有 `127.0.0.1:56510`; `curl -i http://127.0.0.1:56510/bot/tools` → `HTTP/1.1 400 Bad Request` + `Sec-Websocket-Version: 13` + body `Bad Request`(12 B)。`dispatch()` 对 `/bot/tools` 只有 200/500 两条出口, 这个 400 不可能出自我们。`ps -o lstart -p 10598` = `Sep 24 22:55:44`, 比那次绑定早 22.5 小时。当前 `49152-65535` 区间内有 **10 个**邻居 listener (`lsof -nP -iTCP -sTCP:LISTEN | awk '$9 ~ /^127\.0\.0\.1:/'`), 每轮全量约 36 次绑定 ⇒ 千分之几到百分之几的量级, 与观测到的 1/9、1/15 吻合。
   | 同一条因由解释 §1#11 的 `WebhookChannelTest 401` (WebhookChannel 全仓无鉴权代码, 401 本就不可能出自它) 与本期记过的 `SocketException: Unexpected end of file from server` (非 HTTP 的邻居 listener)。
   | **旧量具查错了方向** (三次): `uniq -d` 只比对我们自己绑过的端口, 从没跟 `lsof` 里邻居的端口对账 ⇒ "0 重复端口"是真的, 但推不出"没有端口冲突"。`/tmp/KeepAliveProbe*.java` 的 450 次碰撞同样只在"我们自己的服务互换"这一维里试。
-  ⇒ 修法排 **P11c** (默认绑回环 + 显式 opt-in 才通配), 顺带关掉"`z-bot serve` 缺省把无鉴权 `/bot/chat`、`/api/*` 暴露到局域网"这个真实暴露面。旧结论"未定位, 不修不封"**作废**。
+  ⇒ 修法**已落地于 P11c** (09-25 22:1x 收口: 默认绑回环 + 显式 `--host` 才通配), 顺带关掉"`z-bot serve` 缺省把无鉴权 `/bot/chat`、`/api/*` 暴露到局域网"这个真实暴露面。旧结论"未定位, 不修不封"**作废**。
+  | 修后状态: 缺省绑回环后"通配与邻居 `127.0.0.1:P` 共存"这条路在代码里不存在了 —— 真撞车只会 `BindException` 起不来 (E3 真进程实测 rc=1), 不再"启动了却拿到别人的 400"。**但不写成"抖动归零"**: 修复后共 24 轮全量 rc 全 0、每轮 socket 类错误 0 次, 可**同一棵树**只累计到 12 轮 (最终树 411: 杠① 3 轮 + 速率专测 9 轮, 原始读数 `_doc/acceptance/p11c/post-fix-flake-summary.txt`)。若旧速率真是 1/9, "12 连绿"本身还有 24% 的概率是运气; 要把这条假设打到 20% 以下需 14 轮、要把速率上界压到 1% 以下需 40 轮 —— 所以现在只能说"旧速率大概率不成立", 不能说"归零"。这一条**留作长期观测项**: 后续任何一次 `*.channel` 单条 4xx/`SocketException` 都要先按 pid 对 `lsof` 再定性 (量具 `_doc/acceptance/p11c/{flake_loop.sh,hc_rate.sh}`, 撤回理由与算法见 `_doc/acceptance/p11c/EVIDENCE.md` §5)。
 - **共享工作区纪律**: 本机同时有别的会话在建 `z-lc` 等项目 (17:10 有外部 mvn 失败日志为证) ⇒ 本仓所有提交只准 `git commit -- <pathspec>`, 禁 `git add -A`, 禁裸 `git stash`。
 - **今天一次意外真实 API 调用**: pty 量具缺陷 (JLine 应用光标模式下 ↑ 是 `\x1bOA`) 导致 `[A` 被当普通消息发往 minimax (返回 429)。已加 A11 守卫。含活凭据的临时目录 `/tmp/zbot-pty` 已删除, `~/.zbot/` 回到 8 项 pre-state。
 
@@ -292,10 +294,10 @@ _(W1 起逐期追加)_
 - 2026-09-25 **红线 1 泄漏收口（P11 发现 → P11b 修完）** ✅ 见 `_doc/acceptance/p11b/EVIDENCE.md`。原记账"三处硬编码"**是低估**：开工前实测 **10 处** —— `git grep -n 'user\.home' e92cccc -- 'z-bot-core/src/main/*'` = 8 处/7 文件（`BotAgent`×2、`BotCenterClient`、`AgentOptions`、`SessionsCommand`、`BotConfig`、`SessionManager`、`Sandbox`），加上 `RawTerminalReader.java:234/244` 两处 shell 里写死的 `~/.zbot/.stty.bak`（⇒ 两个 profile 的 REPL 互相踩对方的终端恢复）。同期发现 **`ZBOT_HOME` 从来没被读过**：`git grep -n 'ZBOT_HOME' e92cccc -- 'z-bot-core/src/main/*'` 只有 1 处命中，且是 `PairCommand.java:33` 的报错文案自己许愿。
   | 修法: 三段各抄一遍的优先级链收成 `BotConfig.defaultConfigDir()`（`-Dzbot.home` > `ZBOT_HOME` > `~/.zbot`）+ `resolveWorkspaceDir(configDir, cliOverride)`（`--sandbox` > `-Dzbot.sandbox` > `<profile>/workspace`）；sessions/state.db/skills/instance.json/stty 备份全改由 profile 派生；`BotCenterClient` 那条猜 `~/.zbot` 的单参构造器删掉（红线 2）。
 - 2026-09-25 **P11b 四道杠**（新增 `ProfileIsolationTest` 8 条 + `_doc/acceptance/p11b/` 三件量具）
-  | 复算: ①`rm -rf z-bot-core/target/surefire-reports && mvn -o test` ×3 ②`python3 _doc/acceptance/p11b/p11b_mutation.py` ③`mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p11b/p11b_e2e.py` ④`ls -a ~/.zbot | wc -l` + `md5 -q ~/.zbot/{config.properties,state.db}`
+  | 复算: ①`rm -rf z-bot-core/target/surefire-reports && mvn -o test` ×3 ②`python3 _doc/acceptance/p11b/p11b_mutation.py` ③`mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p11b/p11b_e2e.py` ④`ls -A ~/.zbot | wc -l` + `md5 -q ~/.zbot/{config.properties,state.db}`（原文这里写的 `ls -a` 会把 `.` 和 `..` 一起数进去打出 10 —— 与记录的 `entries=8` 对不上；量具 `p11b_e2e.py` 用的是 `os.listdir`，正确命令是 `-A`，09-25 P11c 那批顺手改正）
   | 实测: ① `Tests run: 399, Failures: 0, Errors: 0, Skipped: 0` × 3 跑 rc=0（基线 391 ⇒ +8；同树合计 11 连绿）② 13 支注入 = **11 RED-OK / 0 PARTIAL / 2 GREEN-BUT-MUTATED / 0 BROKEN**，收尾 `final md5 ok: True`；那 2 支是设计上进程内证不了的（M1 要真 env、M12 要真 pty），证据在③ ③ **E2E 23/23**，含 `E3c 两者都不给才落 <profile>/workspace`、`E4c A=有 probe B=共 0 个会话`（真 sqlite3 塞行验互不相见）、`E5b stty -g 前后同值`、`E5c 守望线程抓到=True`/`E5d 0 残留`、`E6 0 处` ④ `entries=8`、`2dadaed0→2dadaed0`、`690ddbc0→690ddbc0`。
   | 未打满处如实记: M2 `2/3`、M3 `1/2` —— 差额那两条都显式传值、走不到缺省链，杀不死"缺省被写死"；判定仍按具名红算，不改期望集凑数。
-  | 杠①第二跑曾红一次（`HttpChannelTest.toolsEndpointReflectsToolkit 200→400`）：追出是 §6 那条老抖动的**真因**（通道绑通配地址，客户端被路由到邻居进程），与本期无关 —— 同树 8 跑 0 红 + `e92cccc` 基线 8 跑 0 红 + 通道四类单跑 18 跑 0 红。全文见 §6 首条，修法排 **P11c**。
+  | 杠①第二跑曾红一次（`HttpChannelTest.toolsEndpointReflectsToolkit 200→400`）：追出是 §6 那条老抖动的**真因**（通道绑通配地址，客户端被路由到邻居进程），与本期无关 —— 同树 8 跑 0 红 + `e92cccc` 基线 8 跑 0 红 + 通道四类单跑 18 跑 0 红。全文见 §6 首条，修法排 **P11c**（已于同日 22:1x 落地，读数见下方 P11c 条）。
 - 2026-09-25 **P15 state.db 收口** ✅ 提交 `d64ad44`: 10 个 `agent.state.*` 配置键接进 `BotConfig.stateStoreOptions()`（两个建库点 `BotAgent.Builder` / `SessionsCommand.openStore` 都走它，11 处 `new StateStore` 收成一处）+ E2E 抓到的"在飞"漏洞修掉。
   | 复算: `rm -rf z-bot-core/target/surefire-reports && mvn -o test` 连续 3 跑
   | 实测: `Tests run: 391, Failures: 0, Errors: 0, Skipped: 0` × 3 跑、`RC=0` × 3（修 CLI 默认档前是 390 × 3 全绿，那 3 跑也是同一条命令跑的，不覆盖本次改动）。§2 矩阵 #7 的实测列同期改为 3,152 行 / 8 实表 / sessions 15 列 / 3 步阶梯 / 10 键接线。
@@ -316,6 +318,11 @@ _(W1 起逐期追加)_
 - 2026-09-25 **待办 · P15 未交部分（不遮蔽，另片记账）**: §5 P15 验收行里的"sessions 列对齐（她 46 列，逐列注明 要/不要/占位）"**只做了加 4 列**，`SchemaMigrations` 类注释里那句"理由表见本期 notes"目前**没有对应的表**。
   | 复算: `python3 - <<'PY' … 数 hermes `hermes_state.py:872` 的 sessions 列声明 ⇒ 46；`sqlite3 <head 库> 'PRAGMA table_info(sessions)' | wc -l` ⇒ 15`（hermes 实测 46 列名已在本轮取到：`user_id/session_key/chat_id/chat_type/thread_id/origin_json` 通道身份 6 列、`input/output/cache_read/cache_write/reasoning_tokens` token 分档 5 列、`estimated_cost_usd/actual_cost_usd/cost_status/cost_source/pricing_version/billing_*` 成本台账 8 列、`handoff_state/platform/error` 3 列、`cwd/git_branch/rewind_count/expiry_finalized/profile_name` 等）
   | 实测: `handoff_*` 三列**没加**（§5 计划里点名要）；差额 31 列里"成本台账"依赖 P12 的 token 记账、"通道身份"依赖 P16 的送达模型，硬堆就是红线 2 的 0 消费者列 ⇒ 逐列理由表随 P14（血统/压缩列）与 P16（路由列）各自补片时产出，本期不虚报。
+- 2026-09-25 **P11c 通道监听收口（默认绑回环 + 显式 `--host` 才通配）** ✅ 见 `_doc/acceptance/p11c/EVIDENCE.md`（本项主编自己做，无代理自述）。四通道 `start()` 的绑定点收成一处 `channel/ChannelBind.resolve(host)`；`serve --host` / `gateway --host`（两通道共用一个）是**唯一**能摊开通配的口子；横幅与控制台地址改印**实际**监听地址（`HttpChannel.consoleUrl()`），非回环追加一行 LAN 警告。顺带把 P11b 漏网的用户可见文案改到 profile 口径（`--config-dir` 说明、缺 key 报错打印实际 profile 路径、`ZBot` 类文档），并加厚 `HttpChannelTest` 的 23 处断言（打印 `url + code + ct + body`）。
+  | 复算: ①`rm -rf z-bot-core/target/surefire-reports && mvn -o test` ×3 ②`python3 _doc/acceptance/p11c/p11c_mutation.py` ③`mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p11c/p11c_e2e.py` ④`ls -A ~/.zbot | wc -l` + `md5 -q ~/.zbot/{config.properties,state.db}`
+  | 实测: ① 最终树 `Tests run: 411, Failures: 0, Errors: 0, Skipped: 0` × 3 跑 rc=0、每跑 socket 类错误 `grep -c` = 0（411 = 基线 399 + `ChannelBindTest` 11 + `ProfileIsolationTest` 新增 1；此前 410 那三跑量的是加最后一条测试之前的树）② 8 支注入 = **7 RED-OK / 1 PARTIAL / 0 GREEN-BUT-MUTATED**，`LEDGER.tsv` 由脚本自己写；那 1 支 `PARTIAL` 是 M6（`resolve()` 钉成永远回环）额外红了 `consoleUrlReportsTheActualBindNotAHardcodedLoopback` —— 红得对，是我推期望集时漏的一格，按纪律不洗成 RED-OK ③ **E2E 22/22**，且提交前按最终树重打包重跑过一次（同次命令对 21 个源文件前后 md5 比对 ⇒ `SRC_MD5_STABLE=yes`；变异量具按字节还原过这些文件，mtime 不可信）④ `entries=8`、`2dadaed0→2dadaed0`、`690ddbc0→690ddbc0`。
+  | 决定性两条: **E3** 邻居占住 `127.0.0.1:P` 时缺省 `serve` ⇒ `rc=1` + `java.net.BindException: Address already in use`，且**没有**先印"已启动"；**E4** 同一处境下 `--host 0.0.0.0` 照样绑上（lsof 按 pid 过滤读到 `*:P`），而 curl 打到 `127.0.0.1:P` 拿到邻居盖章串 `FOREIGN-NEIGHBOR-OWNED-THIS-PORT` —— E4 就是修前缺省的处境，它是这一项的**必要性**证据。
+  | 如实记: "顺带收益：1/9 抖动归零"**已撤回**（修复后共 24 轮全量 0 复现，但同一棵树只 12 轮 ⇒ 按 1/9 先验仍有 24% 的运气概率，打到 20% 以下要 14 轮、压速率上界到 1% 以下要 40 轮 ⇒ 只主张机制封死，不主张速率归零，留作长期观测项见 §6）；`bind.host` 配置项**没做**（`BotConfig` 无消费者 = 红线 2），飞书/钉钉的 `host` 重载目前只被守卫测试消费，接线归 P21；无 TLS/鉴权（`/bot/chat` 无鉴权本身仍在，收口归 P26）；Windows/Linux 未实测。
 
 ---
 

@@ -53,6 +53,8 @@ public final class HttpChannel {
 
     private final BotAgent agent;
     private final int port;
+    /** null/空 = 只绑回环；显式写地址才暴露到别的网卡。 */
+    private final String host;
 
     private HttpServer server;
     private ExecutorService workers;
@@ -61,12 +63,17 @@ public final class HttpChannel {
     private volatile com.zifang.z.bot.llm.ModelCatalogCache modelCatalog;
 
     public HttpChannel(BotAgent agent, int port) {
+        this(agent, port, null);
+    }
+
+    public HttpChannel(BotAgent agent, int port, String host) {
         this.agent = agent;
         this.port = port;
+        this.host = host;
     }
 
     public void start() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        server = HttpServer.create(new InetSocketAddress(ChannelBind.resolve(host), port), 0);
         workers = Executors.newCachedThreadPool(runnable -> {
             Thread t = new Thread(runnable, "z-bot-http");
             t.setDaemon(true);
@@ -75,7 +82,13 @@ public final class HttpChannel {
         server.createContext("/", this::dispatch);
         server.setExecutor(workers);
         server.start();
-        System.out.println("[HTTP] z-bot 已启动: http://127.0.0.1:" + getPort() + "/index.html");
+        System.out.println("[HTTP] z-bot 已启动: " + consoleUrl());
+        warnIfNotLoopback();
+    }
+
+    /** 控制台地址 — 印的是**实际**监听地址，绑通配时不能谎报成 127.0.0.1。 */
+    public String consoleUrl() {
+        return "http://" + ChannelBind.describe(getBindAddress()) + ":" + getPort() + "/index.html";
     }
 
     public void stop() {
@@ -96,6 +109,18 @@ public final class HttpChannel {
     /** 实际监听端口（传入 0 时由系统分配）。 */
     public int getPort() {
         return server == null ? port : server.getAddress().getPort();
+    }
+
+    /** 实际监听的地址 — 守卫测试据此确认缺省没有绑到通配。 */
+    java.net.InetAddress getBindAddress() {
+        return server == null ? null : server.getAddress().getAddress();
+    }
+
+    private void warnIfNotLoopback() {
+        String warning = ChannelBind.exposureWarning(getBindAddress());
+        if (warning != null) {
+            System.out.println("[HTTP] 警告: " + warning);
+        }
     }
 
     /** 阻塞到 {@link #stop()}，供 serve 子命令保持进程存活。 */

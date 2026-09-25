@@ -1,0 +1,23 @@
+# 修复前抖动速率实测原始数据（脚本 flake_loop.sh 12 轮全量，逐轮日志在 /tmp/zbot_flake/r*.log）
+# 归档时间 2026-09-25 22:08；正文逐字同步自 /tmp/zbot_flake/summary.txt（只加了本块注释）
+# 跑的是 17:23–17:26 的 main 树（`ae5aff7` 18:01 之前的形态，P11/P15 都还没进 main），
+#   所以 Tests run 是 234 —— 与 §8 首条当天测得的"234 单测"是同一棵树，不是今天的 399/410/411。
+# 这份数据证明的是 §1#11 那一条：12 轮里 dupPorts 恒 0、失败 0 —— 即"我们自己的端口没重复占用"，
+#   它**不能**证明"没有端口冲突"（真冲突在邻居那一侧，旧量具从没跟 lsof 对账）。
+#   更具体一层：修前 HttpChannel 的横幅是**写死**的 `http://127.0.0.1:P`（socket 其实绑通配），
+#   所以 dupPorts/uniqPorts 这一列数的是"我们自己报出去的字符串"，不是实际监听地址 ——
+#   §6 那次实测就是它报"我占了 56510"而 lsof 显示 56510 在邻居手里。修后同一列才量到真东西
+#   （见 post-fix-flake-summary.txt 头注）。
+# 它也不是"1/9 抖动速率"的出处 —— 那个速率来自更早的跨会话观测（roadmap §6）。
+r1 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r2 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r3 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r4 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r5 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r6 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r7 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r8 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r9 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r10 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r11 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0
+r12 rc=0 sockErr=0 dupPorts=0/uniqPorts=36  Tests run: 234, Failures: 0, Errors: 0, Skipped: 0

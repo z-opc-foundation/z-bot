@@ -1,0 +1,9 @@
+id	verdict	named_expected	named_hit	tests_that_went_red	note	restored
+M1 Http 改回通配绑定	RED-OK	4	4	consoleUrlReportsTheActualBindNotAHardcodedLoopback,httpChannelDefaultsToLoopback,loopbackDefaultAndWildcardOptInAreDistinguishable,occupiedLoopbackPortFailsFastInsteadOfSilentlyCoexisting	这就是 §6 记的那次间歇 400 的成因：通配能和邻居的 127.0.0.1:P 共存	ok
+M2 Webhook 改回通配绑定	RED-OK	2	2	occupiedLoopbackPortAlsoFailsFastForWebhook,webhookChannelDefaultsToLoopback	gateway 的第二个监听面	ok
+M3 飞书改回通配绑定	RED-OK	1	1	feishuChannelDefaultsToLoopback	IM 通道同样不得摊到 LAN	ok
+M4 钉钉改回通配绑定	RED-OK	1	1	dingTalkChannelDefaultsToLoopback	同上	ok
+M5 resolve 永远通配	RED-OK	9	9	blankHostResolvesToLoopbackAndAnyResolvesToWildcard,consoleUrlReportsTheActualBindNotAHardcodedLoopback,dingTalkChannelDefaultsToLoopback,feishuChannelDefaultsToLoopback,httpChannelDefaultsToLoopback,loopbackDefaultAndWildcardOptInAreDistinguishable,occupiedLoopbackPortAlsoFailsFastForWebhook,occupiedLoopbackPortFailsFastInsteadOfSilentlyCoexisting,webhookChannelDefaultsToLoopback	缺省那一半全塌：4 条缺省 + 2 条占端口 + 2 条双向 + 1 条横幅	ok
+M6 resolve 永远回环（host 被忽略）	PARTIAL	4	4	blankHostResolvesToLoopbackAndAnyResolvesToWildcard,consoleUrlReportsTheActualBindNotAHardcodedLoopback,explicitAnyHostActuallyBindsWildcardForHttp,explicitAnyHostActuallyBindsWildcardForWebhook,loopbackDefaultAndWildcardOptInAreDistinguishable	反空跑探针：显式 opt-in 那层若不断真地址，这里就该一直绿	ok
+M7 横幅写死 127.0.0.1	RED-OK	1	1	consoleUrlReportsTheActualBindNotAHardcodedLoopback	绑到通配却说只在本机 = 把暴露范围报反	ok
+M8 缺 key 提示写死 ~/.zbot	RED-OK	1	1	missingKeyHintNamesTheProfileItWasLoadedFrom	P11b 漏网的用户可见文案：第二 profile 里缺 key 会被指引去改一个不生效的文件	ok

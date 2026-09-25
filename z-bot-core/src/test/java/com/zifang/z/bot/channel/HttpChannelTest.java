@@ -97,7 +97,7 @@ public class HttpChannelTest {
     public void statusDescribesRunningAgent() throws Exception {
         Response r = call("GET", "/bot/status", null);
 
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertTrue(r.body, r.body.contains("model=test-model"));
         // tools=2 (echo/risky) + cronjob (注入 CronScheduler 时自动注册)
         assertTrue(r.body, r.body.contains("tools=3"));
@@ -109,7 +109,7 @@ public class HttpChannelTest {
     public void toolsEndpointReflectsToolkit() throws Exception {
         Response r = call("GET", "/bot/tools", null);
 
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertTrue(r.body, r.body.contains("\"name\":\"echo\""));
         assertTrue(r.body, r.body.contains("\"name\":\"risky\""));
         assertTrue(r.body, r.body.contains("\"description\":\"回显文本\""));
@@ -122,7 +122,7 @@ public class HttpChannelTest {
         disk.delete();
 
         Response r = call("GET", "/api/models", null);
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertTrue(r.body, r.body.contains("\"provider\":\"scripted\""));
         assertTrue(r.body, r.body.contains("\"id\":\"scripted-model-a\""));
         assertTrue(r.body, r.body.contains("\"id\":\"scripted-model-b\""));
@@ -133,12 +133,12 @@ public class HttpChannelTest {
 
         // 第二次请求命中 TTL 缓存，内容一致
         Response r2 = call("GET", "/api/models", null);
-        assertEquals(200, r2.code);
+        assertEquals(String.valueOf(r2), 200, r2.code);
         assertTrue(r2.body, r2.body.contains("\"id\":\"scripted-model-a\""));
 
         // ?refresh=1 触发异步重拉，立即返回且标记 refreshing
         Response r3 = call("GET", "/api/models?refresh=1", null);
-        assertEquals(200, r3.code);
+        assertEquals(String.valueOf(r3), 200, r3.code);
         assertTrue(r3.body, r3.body.contains("\"refreshing\":true"));
 
         disk.delete();
@@ -150,13 +150,13 @@ public class HttpChannelTest {
     public void cronAddListPauseResumeRemoveRoundTrip() throws Exception {
         Response add = call("POST", "/api/cron",
                 "{\"action\":\"add\",\"name\":\"晨报\",\"prompt\":\"生成晨报\",\"schedule\":\"daily 08:00\"}");
-        assertEquals(200, add.code);
+        assertEquals(String.valueOf(add), 200, add.code);
         assertTrue(add.body, add.body.contains("\"ok\":true"));
         String id = field(add.body, "id");
         assertNotNull("add 应返回 job id", id);
 
         Response list = call("GET", "/api/cron", null);
-        assertEquals(200, list.code);
+        assertEquals(String.valueOf(list), 200, list.code);
         assertTrue(list.body, list.body.contains("\"count\":1"));
         assertTrue(list.body, list.body.contains("daily 08:00"));
         assertTrue(list.body, list.body.contains("\"enabled\":true"));
@@ -207,11 +207,11 @@ public class HttpChannelTest {
         try {
             String bareBase = "http://127.0.0.1:" + ch.getPort();
             Response list = callAt(bareBase, "GET", "/api/cron", null);
-            assertEquals(200, list.code);
+            assertEquals(String.valueOf(list), 200, list.code);
             assertTrue(list.body, list.body.contains("\"count\":0"));
             Response post = callAt(bareBase, "POST", "/api/cron",
                     "{\"action\":\"add\",\"prompt\":\"x\",\"schedule\":\"daily 08:00\"}");
-            assertEquals(200, post.code);
+            assertEquals(String.valueOf(post), 200, post.code);
             assertTrue(post.body, post.body.contains("\"ok\":false"));
             assertTrue(post.body, post.body.contains("cron scheduler not enabled"));
         } finally {
@@ -233,7 +233,7 @@ public class HttpChannelTest {
     public void unknownPathReturnsJsonError() throws Exception {
         Response r = call("GET", "/nope", null);
 
-        assertEquals(404, r.code);
+        assertEquals(String.valueOf(r), 404, r.code);
         assertTrue(r.body, r.body.contains("\"ok\":false"));
         assertTrue(r.body, r.body.contains("not found"));
     }
@@ -246,7 +246,7 @@ public class HttpChannelTest {
 
         Response r = call("POST", "/bot/chat", "{\"message\":\"hi\"}");
 
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertEquals("你好", r.body);
         assertEquals(1, llm.callCount);
     }
@@ -265,7 +265,7 @@ public class HttpChannelTest {
     public void chatEndpointRejectsEmptyMessage() throws Exception {
         Response r = call("POST", "/bot/chat", "{}");
 
-        assertEquals(400, r.code);
+        assertEquals(String.valueOf(r), 400, r.code);
         assertTrue(r.body, r.body.contains("消息不能为空"));
         assertEquals(0, llm.callCount);
     }
@@ -280,12 +280,12 @@ public class HttpChannelTest {
             awaitUntilRunning();
 
             Response second = call("POST", "/bot/chat", "{\"message\":\"another\"}");
-            assertEquals(409, second.code);
+            assertEquals(String.valueOf(second), 409, second.code);
             assertTrue(second.body, second.body.contains("还在处理中"));
 
             release.countDown();
             Response handled = first.get(10, TimeUnit.SECONDS);
-            assertEquals(200, handled.code);
+            assertEquals(String.valueOf(handled), 200, handled.code);
             assertEquals("slow-answer", handled.body);
             assertEquals("上一条仍占着 agent，第二条不该打到 LLM", 1, llm.callCount);
         } finally {
@@ -310,7 +310,7 @@ public class HttpChannelTest {
 
         Response r = call("POST", "/bot/confirm",
                 "{\"toolName\":\"risky\",\"argsJson\":\"{\\\"cmd\\\":\\\"rm\\\"}\"}");
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertEquals("risk-accepted", r.body);
 
         // 确认后补一条 tool 结果，且 id 与待确认那次调用对齐（不再合成 assistant）
@@ -323,7 +323,7 @@ public class HttpChannelTest {
     public void confirmEndpointRequiresToolName() throws Exception {
         Response r = call("POST", "/bot/confirm", "{}");
 
-        assertEquals(400, r.code);
+        assertEquals(String.valueOf(r), 400, r.code);
         assertTrue(r.body, r.body.contains("toolName"));
     }
 
@@ -336,7 +336,7 @@ public class HttpChannelTest {
 
         Response r = call("POST", "/bot/chat/stream", "{\"message\":\"use echo\"}");
 
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertTrue(r.contentType, r.contentType.contains("text/event-stream"));
         assertTrue(r.body, r.body.contains("event: step\ndata: Step 1\n\n"));
         assertTrue(r.body, r.body.contains("event: tool_call\ndata: [tool] echo args={\"message\":\"ping\"}\n\n"));
@@ -363,7 +363,7 @@ public class HttpChannelTest {
     public void streamReportsEmptyMessageWithoutCallingLlm() throws Exception {
         Response r = call("POST", "/bot/chat/stream", "{}");
 
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertTrue(r.body, r.body.contains("event: error\ndata: 消息不能为空\n\n"));
         assertEquals(0, llm.callCount);
     }
@@ -375,7 +375,7 @@ public class HttpChannelTest {
         assertEquals("[]", call("GET", "/api/sessions", null).body);
 
         Response created = call("POST", "/api/sessions", null);
-        assertEquals(200, created.code);
+        assertEquals(String.valueOf(created), 200, created.code);
         String id = field(created.body, "id");
         assertNotNull(id);
         assertTrue(created.body, created.body.contains("\"ok\":true"));
@@ -399,7 +399,7 @@ public class HttpChannelTest {
     public void sessionSwitchRejectsMissingId() throws Exception {
         Response r = call("POST", "/api/session/switch", "{}");
 
-        assertEquals(400, r.code);
+        assertEquals(String.valueOf(r), 400, r.code);
         assertTrue(r.body, r.body.contains("id 不能为空"));
     }
 
@@ -420,7 +420,7 @@ public class HttpChannelTest {
     @Test
     public void skillEndpointsReportLocalOnlyState() throws Exception {
         Response list = call("GET", "/api/skill/list", null);
-        assertEquals(200, list.code);
+        assertEquals(String.valueOf(list), 200, list.code);
         assertTrue(list.body, list.body.contains("\"count\":0"));
         assertTrue(list.body, list.body.contains("\"skillCodes\":[]"));
 
@@ -433,7 +433,7 @@ public class HttpChannelTest {
     public void registerEndpointReportsDisabledCenter() throws Exception {
         Response r = call("POST", "/api/agent/register", "{}");
 
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertTrue(r.body, r.body.contains("\"ok\":false"));
         assertTrue(r.body, r.body.contains("center client not enabled"));
     }
@@ -444,7 +444,7 @@ public class HttpChannelTest {
     public void consoleHtmlIsServed() throws Exception {
         Response r = call("GET", "/", null);
 
-        assertEquals(200, r.code);
+        assertEquals(String.valueOf(r), 200, r.code);
         assertTrue(r.contentType, r.contentType.contains("text/html"));
         assertTrue(r.body, r.body.contains("z-bot 控制台"));
         assertTrue("控制台必须渲染 final 事件", r.body.contains("fullReply += text"));
@@ -508,6 +508,7 @@ public class HttpChannelTest {
             }
         }
         Response r = new Response();
+        r.url = method + " " + baseUrl + path;
         r.code = conn.getResponseCode();
         r.contentType = conn.getContentType();
         InputStream is = r.code >= 400 ? conn.getErrorStream() : conn.getInputStream();
@@ -572,6 +573,17 @@ public class HttpChannelTest {
         int code;
         String contentType;
         String body;
+        /** 实际打到的 URL —— 间歇性 4xx 只有靠 body 才认得出是谁应答的（见 roadmap §8"HTTP 测试偶发抖动"）。 */
+        String url;
+
+        @Override
+        public String toString() {
+            String snippet = body == null ? "" : body.replace('\n', ' ');
+            if (snippet.length() > 200) {
+                snippet = snippet.substring(0, 200) + "…";
+            }
+            return url + " -> " + code + " ct=" + contentType + " body=" + snippet;
+        }
     }
 
     /** 脚本化 LLM 替身：按序吐出预设响应。 */

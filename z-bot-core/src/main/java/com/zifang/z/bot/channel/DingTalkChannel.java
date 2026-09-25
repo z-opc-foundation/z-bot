@@ -43,6 +43,8 @@ public final class DingTalkChannel implements Channel {
     private final int port;
     private final String webhookUrl;
     private final String secret;
+    /** null/空 = 只绑回环；显式写地址才暴露到别的网卡。 */
+    private final String host;
 
     private HttpServer server;
     private ExecutorService workers;
@@ -51,10 +53,16 @@ public final class DingTalkChannel implements Channel {
     private volatile boolean running;
 
     public DingTalkChannel(ChannelBus bus, int port, String webhookUrl, String secret) {
+        this(bus, port, webhookUrl, secret, null);
+    }
+
+    /** 末位 host：null/空 = 只绑回环；显式写地址才暴露到别的网卡。 */
+    public DingTalkChannel(ChannelBus bus, int port, String webhookUrl, String secret, String host) {
         this.bus = bus;
         this.port = port;
         this.webhookUrl = webhookUrl;
         this.secret = secret;
+        this.host = host;
     }
 
     @Override
@@ -69,7 +77,8 @@ public final class DingTalkChannel implements Channel {
 
     @Override
     public void start() throws IOException {
-        server = HttpServer.create(new java.net.InetSocketAddress(port), 0);
+        server = HttpServer.create(
+                new java.net.InetSocketAddress(ChannelBind.resolve(host), port), 0);
         workers = Executors.newCachedThreadPool(runnable -> {
             Thread t = new Thread(runnable, "z-bot-dingtalk");
             t.setDaemon(true);
@@ -80,7 +89,16 @@ public final class DingTalkChannel implements Channel {
         server.setExecutor(workers);
         server.start();
         running = true;
-        LOG.info("[dingtalk] 已启动: http://127.0.0.1:{}/dingtalk/in", getPort());
+        LOG.info("[dingtalk] 已启动: http://{}:{}/dingtalk/in", ChannelBind.describe(getBindAddress()), getPort());
+        String warning = ChannelBind.exposureWarning(getBindAddress());
+        if (warning != null) {
+            LOG.warn("[dingtalk] 警告: {}", warning);
+        }
+    }
+
+    /** 实际监听的地址 — 守卫测试据此确认缺省没有绑到通配。 */
+    java.net.InetAddress getBindAddress() {
+        return server == null ? null : server.getAddress().getAddress();
     }
 
     @Override

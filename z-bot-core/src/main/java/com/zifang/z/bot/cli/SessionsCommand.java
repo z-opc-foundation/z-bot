@@ -43,7 +43,7 @@ public class SessionsCommand {
     String db;
 
     @Option(names = {"--config-dir"}, paramLabel = "DIR",
-            description = "配置目录（默认 ~/.zbot）；state.db 缺省落在这个目录下")
+            description = "配置目录 = profile（默认 $ZBOT_HOME，再退 ~/.zbot）；state.db 缺省落在这个目录下")
     File configDir;
 
     /** 解析优先级：--db &gt; 配置里的 agent.state.db &gt; -Dzbot.state.db &gt; &lt;configDir&gt;/state.db。 */

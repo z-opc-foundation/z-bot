@@ -53,6 +53,8 @@ public final class FeishuChannel implements Channel {
     private final String verificationToken;
     private final String encryptKey;
     private final String staticToken;
+    /** null/空 = 只绑回环；显式写地址才暴露到别的网卡。 */
+    private final String host;
 
     private HttpServer server;
     private ExecutorService workers;
@@ -64,6 +66,14 @@ public final class FeishuChannel implements Channel {
                          String appId, String appSecret,
                          String verificationToken, String encryptKey,
                          String staticToken) {
+        this(bus, port, appId, appSecret, verificationToken, encryptKey, staticToken, null);
+    }
+
+    /** 末位 host：null/空 = 只绑回环；显式写地址才暴露到别的网卡。 */
+    public FeishuChannel(ChannelBus bus, int port,
+                         String appId, String appSecret,
+                         String verificationToken, String encryptKey,
+                         String staticToken, String host) {
         this.bus = bus;
         this.port = port;
         this.appId = appId;
@@ -71,6 +81,7 @@ public final class FeishuChannel implements Channel {
         this.verificationToken = verificationToken;
         this.encryptKey = encryptKey;
         this.staticToken = staticToken;
+        this.host = host;
     }
 
     @Override
@@ -85,7 +96,7 @@ public final class FeishuChannel implements Channel {
 
     @Override
     public void start() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(port), 0);
+        server = HttpServer.create(new InetSocketAddress(ChannelBind.resolve(host), port), 0);
         workers = Executors.newCachedThreadPool(runnable -> {
             Thread t = new Thread(runnable, "z-bot-feishu");
             t.setDaemon(true);
@@ -96,7 +107,11 @@ public final class FeishuChannel implements Channel {
         server.setExecutor(workers);
         server.start();
         running = true;
-        LOG.info("[feishu] 已启动: http://127.0.0.1:{}/feishu/event", getPort());
+        LOG.info("[feishu] 已启动: http://{}:{}/feishu/event", ChannelBind.describe(getBindAddress()), getPort());
+        String warning = ChannelBind.exposureWarning(getBindAddress());
+        if (warning != null) {
+            LOG.warn("[feishu] 警告: {}", warning);
+        }
     }
 
     @Override
@@ -122,6 +137,11 @@ public final class FeishuChannel implements Channel {
 
     public int getPort() {
         return server == null ? port : server.getAddress().getPort();
+    }
+
+    /** 实际监听的地址 — 守卫测试据此确认缺省没有绑到通配。 */
+    java.net.InetAddress getBindAddress() {
+        return server == null ? null : server.getAddress().getAddress();
     }
 
     @Override

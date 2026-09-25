@@ -1,0 +1,18 @@
+# 修复后抖动速率实测原始数据（`zsh _doc/acceptance/p11c/flake_loop.sh 9`，逐轮完整日志留在 /tmp/zbot_flake/r*.log，机器重启即失）
+# 生成 2026-09-25 22:31；跑的是 P11c 提交前的最终树，所以 Tests run 恒 411（= 399 基线 + ChannelBindTest 11 + ProfileIsolationTest 1）
+# 口径：sockErr = 每轮 `grep -cE 'Unexpected end of file|SocketException'`；
+#   dupPorts/uniqPorts = 每轮日志 `grep -oE 'http://127\.0\.0\.1:[0-9]+/'` 去重后看有没有重复。
+#   注意这一列修前修后量的**不是同一样东西**：修前那行横幅是写死的 `http://127.0.0.1:P`（socket 其实绑在通配），
+#   所以修前那份档案里的 36 个"唯一端口"数的是我们自己报出去的字符串，邻居占没占同一个口它看不见；
+#   修后横幅印的是实际地址，42 是回环侧真绑上的数量，另有 4 个显式 opt-in 的通配口（同轮实测
+#   `http://0.0.0.0:` 去重 = 4）按这个 pattern 不计。36→42 的差额来自 ChannelBindTest 那 11 条用例开的
+#   服务器，未逐条归因 —— 也就是说这一列不能跨修前修后直接比大小。
+r1 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r2 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r3 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r4 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r5 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r6 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r7 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r8 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0
+r9 rc=0 sockErr=0 dupPorts=0/uniqPorts=42  Tests run: 411, Failures: 0, Errors: 0, Skipped: 0

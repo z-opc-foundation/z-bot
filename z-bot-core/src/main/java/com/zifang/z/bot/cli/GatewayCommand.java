@@ -36,6 +36,11 @@ public class GatewayCommand implements Callable<Integer> {
     @Option(names = {"--webhook-port"}, defaultValue = "8090", description = "Webhook 通道端口（0 = 关闭）")
     int webhookPort;
 
+    @Option(names = {"--host"}, defaultValue = "",
+            description = "HTTP 与 Webhook 两个通道共用的监听地址：缺省只绑 127.0.0.1，"
+                    + "要同一网络的其他机器能连才显式写 0.0.0.0")
+    String host;
+
     @Option(names = {"--pairing"}, description = "启用配对码授权（<configDir>/pairing.json）")
     boolean pairing;
 
@@ -50,9 +55,9 @@ public class GatewayCommand implements Callable<Integer> {
 
         Gateway gw = new Gateway(agent, pairingService);
         // HttpChannel 已经实现了原 /bot/* 端点；适配为 Channel SPI（不入总线，只暴露 HTTP 控制台）
-        gw.register(new HttpChannelAdapter(new HttpChannel(agent, httpPort)));
+        gw.register(new HttpChannelAdapter(new HttpChannel(agent, httpPort, host)));
         if (webhookPort > 0) {
-            gw.register(new WebhookChannel(gw.bus(), webhookPort));
+            gw.register(new WebhookChannel(gw.bus(), webhookPort, "webhook", host));
         }
 
         Runtime.getRuntime().addShutdownHook(new Thread(gw::stop, "z-bot-gateway-shutdown"));

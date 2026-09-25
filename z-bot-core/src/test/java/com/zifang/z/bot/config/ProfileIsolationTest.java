@@ -100,6 +100,32 @@ public class ProfileIsolationTest {
         return null;
     }
 
+    /**
+     * 缺 key 的提示要指向<strong>你正在用的那个 profile</strong>。写死 {@code ~/.zbot} 时，
+     * 第二个 profile 里缺 key 会把人引去改错文件 —— 改了也不生效，因为进程读的是 {@code -Dzbot.home}。
+     */
+    @Test
+    public void missingKeyHintNamesTheProfileItWasLoadedFrom() throws Exception {
+        File home = profile();
+        Files.write(new File(home, "config.properties").toPath(),
+                ("provider=minimax\nminimax.type=openai\nminimax.api.key=\n")
+                        .getBytes(StandardCharsets.UTF_8));
+        prop("zbot.home", home.getAbsolutePath());
+        com.zifang.z.bot.cli.AgentOptions opts = new com.zifang.z.bot.cli.AgentOptions();
+        BotConfig cfg = opts.loadConfig();
+        PrintStream realErr = System.err;
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        try {
+            System.setErr(new PrintStream(err, true, "UTF-8"));
+            opts.warnIfUnusable(cfg);
+        } finally {
+            System.setErr(realErr);
+        }
+        String msg = new String(err.toByteArray(), StandardCharsets.UTF_8);
+        assertTrue("提示该指向 profile " + home + "，实得: " + msg, msg.contains(home.getAbsolutePath()));
+        assertFalse("不该再写死 ~/.zbot: " + msg, msg.contains("~/.zbot"));
+    }
+
     // ===== 缺省 profile 的解析 =====
 
     @Test

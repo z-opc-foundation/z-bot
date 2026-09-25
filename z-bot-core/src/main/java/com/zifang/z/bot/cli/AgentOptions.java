@@ -51,7 +51,8 @@ public class AgentOptions {
     @Option(names = {"--new-session"}, description = "启动时新建会话")
     boolean newSession;
 
-    @Option(names = {"--config-dir"}, paramLabel = "DIR", description = "配置目录（默认 ~/.zbot）")
+    @Option(names = {"--config-dir"}, paramLabel = "DIR",
+            description = "配置目录 = profile（默认 $ZBOT_HOME，再退 ~/.zbot）")
     File configDir;
 
     /** 读配置并套用命令行覆盖。 */
@@ -105,7 +106,10 @@ public class AgentOptions {
         BotConfig.Provider provider = config.activeProvider();
         if (provider.getApiKey() == null || provider.getApiKey().trim().isEmpty()) {
             System.err.println("[z-bot] provider=" + provider.getCode() + " 没有 API key："
-                    + "用 --api-key 或写进 ~/.zbot/config.properties 的 "
+                    + "用 --api-key 或写进 "
+                    + (config.getConfigDir() == null
+                       ? "~/.zbot" : config.getConfigDir().getPath())
+                    + "/config.properties 的 "
                     + provider.getCode() + ".api.key（本地网关可填占位值）");
         }
     }
