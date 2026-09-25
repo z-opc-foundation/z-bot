@@ -41,6 +41,7 @@ OUT = os.path.join(HERE, "out")
 STUB_KEY = "stub-key-not-real"
 
 RESULTS = []
+SPAWNED = []           # 本场 E2E 起过的每一个真 JVM（凭证检查要看它们的环境）
 LLM_HITS = []          # 每次 stub LLM 被调用记一条（用来数"到底跑了几回"）
 LLM_LOCK = threading.Lock()
 LLM_DELAY = [0.0]      # 让 stub 故意慢答，好在 runner 在飞的时候 kill -9
@@ -109,7 +110,10 @@ class StubHandler(BaseHTTPRequestHandler):
         delay = LLM_DELAY[0]
         with LLM_LOCK:
             LLM_HITS.append({"t": time.time(), "path": self.path, "stream": stream,
-                             "model": req.get("model"), "n_msgs": len(req.get("messages") or [])})
+                             "model": req.get("model"), "n_msgs": len(req.get("messages") or []),
+                             # 出口凭证只在这儿可观测：key 从不落盘，所以"没漏"必须靠这一面来证
+                             "headers": {k.lower(): str(v)
+                                         for k, v in self.headers.items()}})
             seq = len(LLM_HITS)
         body_text = "P17-E2E-REPLY-%03d" % seq
         if delay:
@@ -175,6 +179,7 @@ class Gateway(object):
         })
         env.update(env_extra or {})
         self.env = env
+        SPAWNED.append(self)
         self.cmd = ["java", "-jar", JAR, "gateway",
                     "--config-dir", profile,
                     "--port", str(http_port), "--webhook-port", str(webhook_port)]
@@ -303,32 +308,50 @@ def main():
                     real_key = line.split("=", 1)[1].strip() or None
     except Exception:
         pass
-    leaked = []
-    for dirpath, _dirs, files in os.walk(OUT):
-        for fn in files:
-            p = os.path.join(dirpath, fn)
-            try:
-                with open(p, encoding="utf-8", errors="replace") as fh:
-                    blob = fh.read()
-            except Exception:
-                continue
-            if real_key and real_key in blob:
-                leaked.append(fn)
-    check("X1 真 key 没进任何输出产物", not leaked,
-          "泄漏文件=%s（真 key 长度 %s，未打印）" % (leaked, len(real_key or "")))
-    tmpblobs = []
-    for dirpath, _dirs, files in os.walk(root):
-        for fn in files:
-            try:
-                with open(os.path.join(dirpath, fn), encoding="utf-8", errors="replace") as fh:
-                    tmpblobs.append(fh.read())
-            except Exception:
-                pass
-    joined = "\n".join(tmpblobs)
-    check("X2 临时目录里只有 stub 凭证",
-          (STUB_KEY in joined) and (real_key is None or real_key not in joined),
-          "临时根=%s 含 %s=%s 含真 key=%s" % (root, STUB_KEY, STUB_KEY in joined,
-                                            bool(real_key) and real_key in joined))
+    def blobs(base):
+        found = []
+        for dirpath, _dirs, files in os.walk(base):
+            for fn in files:
+                p = os.path.join(dirpath, fn)
+                try:
+                    with open(p, encoding="utf-8", errors="replace") as fh:
+                        found.append((p, fh.read()))
+                except Exception:
+                    pass
+        return found
+
+    # X0 先自证探测器：放一个与真 key 同量级的哨兵进扫描面，它必须被抓到。
+    #     没这一步，下面那条"零命中"可能只是因为根本没读到文件（负向断言要有猎物）。
+    sentinel = "SENTINEL-NOT-A-KEY-" + ("s" * 98)
+    prey = os.path.join(OUT, "_hygiene_prey.txt")
+    with open(prey, "w", encoding="utf-8") as fh:
+        fh.write("minimax.api.key=%s\n" % sentinel)
+    caught = [p for p, blob in blobs(OUT) if sentinel in blob]
+    os.remove(prey)
+    check("X0 泄漏探测读得到产物（哨兵必须被抓到）", bool(caught),
+          "目录=%s 抓到 %d 处" % (OUT, len(caught)))
+
+    leaked = [p for p, blob in blobs(OUT) + blobs(root) if real_key and real_key in blob]
+    check("X1 真 key 没进任何输出产物或临时 profile", not leaked,
+          "泄漏=%s（真 key 长度 %s，未打印）" % (leaked or "无", len(real_key or "")))
+    if real_key:
+        bad_env = [g.tag for g in SPAWNED
+                   if any(real_key in str(v) for v in g.env.values())]
+        check("X2 每个真 JVM 的环境里都不带真 key", not bad_env,
+              "起过 %d 个 JVM，违规=%s" % (len(SPAWNED), bad_env or "无"))
+    else:
+        check("X2 每个真 JVM 的环境里都不带真 key", False,
+              "读不到真 key ⇒ 这条没有猎物，按未覆盖记账（不许默认通过）")
+    joined_hdr = [" ".join(h["headers"].values()) for h in LLM_HITS]
+    stub_hits = sum(1 for s in joined_hdr if STUB_KEY in s)
+    real_hits = sum(1 for s in joined_hdr if real_key and real_key in s)
+    check("X3 每一次出口请求带的都是 stub 凭证（这条同时钉住"
+          "「真有请求」，免得 X1 的反面是空跑）",
+          bool(LLM_HITS) and stub_hits == len(LLM_HITS) and real_hits == 0,
+          "请求 %d 次 / 带 stub %d 次 / 带真 key %d 次" % (len(LLM_HITS), stub_hits, real_hits))
+    cfgs = [p for p, _b in blobs(root) if p.endswith("config.properties")]
+    check("X4 临时 profile 从不落 config.properties（key 无落盘面）", not cfgs,
+          "临时根=%s 命中=%s" % (root, cfgs or "无"))
 
     passed = sum(1 for _n, ok, _d in RESULTS if ok)
     print("\n== E2E: %d/%d 通过 ==" % (passed, len(RESULTS)))
