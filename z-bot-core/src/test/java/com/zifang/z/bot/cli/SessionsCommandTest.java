@@ -170,6 +170,22 @@ public class SessionsCommandTest {
     }
 
     @Test
+    public void emptyInFlightSessionIsOnlyGoneWithItsOwnSwitch() throws Exception {
+        // 真进程 E2E 抓到的形状：0 消息的在飞会话。store 层的 P2 兼容档把它算作"可删"
+        // （ended_at IS NULL 但 message_count=0），CLI 照抄的话 --include-in-flight 就成了空话。
+        StateStore store = new StateStore(db);
+        store.upsertSession("live-empty", "t-live", null, null, 0, 0, 0);
+        age("live-empty");
+
+        assertEquals(0, runPrune("--days", "7"));
+        assertTrue("默认档删掉了 0 消息的在飞会话: " + out(), exists("live-empty"));
+        assertEquals(0, runPrune("--days", "7", "--include-non-empty"));
+        assertTrue("扩了消息范围也不该顺带动在飞: " + out(), exists("live-empty"));
+        assertEquals(0, runPrune("--days", "7", "--include-in-flight"));
+        assertFalse("给了在飞自己的开关才动", exists("live-empty"));
+    }
+
+    @Test
     public void archiveIsReversibleAndHidesFromDefaultList() throws Exception {
         seedEnded("full", 2);
         assertEquals(0, runPrune("--days", "7", "--archive"));

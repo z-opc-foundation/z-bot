@@ -1607,7 +1607,10 @@ public class BotAgent {
                     // state.db 是唯一事实来源；会话 JSON 目录仍作一次性迁移入口
                     sessionManager = new SessionManager(
                             new java.io.File(System.getProperty("user.home") + "/.zbot/sessions"),
-                            new StateStore(new java.io.File(config.getStateDbPath().trim())));
+                            new StateStore(new java.io.File(config.getStateDbPath().trim()),
+                                    // P15：PRAGMA/重试窗口/BEGIN IMMEDIATE/坏库自愈/自动清理
+                                    // 全部由 profile 的 config.properties 决定（CLI 侧读同一份）
+                                    config.stateStoreOptions()));
                 } else {
                     sessionManager = new SessionManager();
                 }

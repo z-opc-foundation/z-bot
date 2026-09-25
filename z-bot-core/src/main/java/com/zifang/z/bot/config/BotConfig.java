@@ -71,6 +71,8 @@ public final class BotConfig {
     private String appCode = "default-chat";
     private boolean loaded;
 
+    private Properties rawProps = new Properties();
+
     private BotConfig(File configDir) {
         this.configDir = configDir;
     }
@@ -103,6 +105,8 @@ public final class BotConfig {
     }
 
     private void fromProperties(Properties props) {
+        this.rawProps = new Properties();
+        this.rawProps.putAll(props);
         for (Map.Entry<String, String> e : LEGACY_PROVIDERS.entrySet()) {
             String code = e.getKey();
             String key = trim(props.getProperty(code + ".api.key"));
@@ -541,6 +545,71 @@ public final class BotConfig {
 
     public void setStateDbPath(String stateDbPath) {
         this.stateDbPath = stateDbPath;
+    }
+
+    /**
+     * P15：把 {@code StateStore.Options.configKeys()} 那 10 个键映成打开库的参数。
+     *
+     * <p>默认值只有一份 —— 先取 {@link StateStore.Options#defaults()}，配置显式写了才覆盖。
+     * 这里再抄一份数字就是等着和 store 里分叉的（红线 2）。键有没有真被读到由
+     * {@code BotConfigStateStoreOptionsTest} 逐条钉住：列进 {@code configKeys()} 但没接的键，
+     * 那个测试会红。</p>
+     */
+    public com.zifang.z.bot.store.StateStore.Options stateStoreOptions() {
+        com.zifang.z.bot.store.StateStore.Options o =
+                com.zifang.z.bot.store.StateStore.Options.defaults();
+        o.busyTimeoutMillis(intOf("agent.state.db.busy.timeout.ms", o.busyTimeoutMillis()));
+        o.writeRetries(intOf("agent.state.db.write.retries", o.writeRetries()));
+        o.retryWindowMillis(longOf("agent.state.db.write.retry.min.ms", o.retryMinMillis()),
+                longOf("agent.state.db.write.retry.max.ms", o.retryMaxMillis()));
+        o.beginImmediate(boolOf("agent.state.db.write.begin.immediate", o.beginImmediate()));
+        o.checkpointEveryNWrites(intOf("agent.state.db.checkpoint.every.n", o.checkpointEveryNWrites()));
+        o.autoRecoverCorrupt(boolOf("agent.state.db.auto.recover.corrupt", o.autoRecoverCorrupt()));
+        o.verifyOnOpen(boolOf("agent.state.db.verify.on.open", o.verifyOnOpen()));
+        o.autoPrune(boolOf("agent.state.prune.auto", o.autoPrune()));
+        o.retentionDays(intOf("agent.state.prune.retention.days", o.retentionDays()));
+        return o;
+    }
+
+    private int intOf(String key, int current) {
+        String raw = trim(rawProps.getProperty(key));
+        if (raw.isEmpty()) {
+            return current;
+        }
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException e) {
+            System.err.println("[BotConfig] " + key + "=" + raw + " 不是整数，沿用 " + current);
+            return current;
+        }
+    }
+
+    private long longOf(String key, long current) {
+        String raw = trim(rawProps.getProperty(key));
+        if (raw.isEmpty()) {
+            return current;
+        }
+        try {
+            return Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            System.err.println("[BotConfig] " + key + "=" + raw + " 不是整数，沿用 " + current);
+            return current;
+        }
+    }
+
+    private boolean boolOf(String key, boolean current) {
+        String raw = trim(rawProps.getProperty(key));
+        if (raw.isEmpty()) {
+            return current;
+        }
+        if ("true".equalsIgnoreCase(raw) || "1".equals(raw) || "yes".equalsIgnoreCase(raw)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(raw) || "0".equals(raw) || "no".equalsIgnoreCase(raw)) {
+            return false;
+        }
+        System.err.println("[BotConfig] " + key + "=" + raw + " 不是布尔值，沿用 " + current);
+        return current;
     }
 
     /** {@code agent.delegate.max.depth}：delegate_task 最大委托深度，0 = 关闭委托。 */

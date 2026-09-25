@@ -47,13 +47,28 @@ public class SessionsCommand {
     File configDir;
 
     /** 解析优先级：--db &gt; 配置里的 agent.state.db &gt; -Dzbot.state.db &gt; &lt;configDir&gt;/state.db。 */
-    static File dbFileOf(SessionsCommand parent) {
+    private static File dbFileOf(SessionsCommand parent, BotConfig cfg) {
         if (parent != null && parent.db != null && !parent.db.trim().isEmpty()) {
             return new File(parent.db.trim());
         }
-        File dir = parent == null || parent.configDir == null
+        return new File(cfg.getStateDbPath());
+    }
+
+    private static File configDirOf(SessionsCommand parent) {
+        return parent == null || parent.configDir == null
                 ? new File(System.getProperty("user.home"), ".zbot") : parent.configDir;
-        return new File(BotConfig.load(dir).getStateDbPath());
+    }
+
+    /**
+     * 开库统一入口：路径见 {@link #dbFileOf}，PRAGMA/重试/校验/自动清理那 10 个参数
+     * 走 profile 的 {@code config.properties}（P15 接线）。
+     *
+     * <p>CLI 与 {@code BotAgent} 必须读同一份参数 —— 否则 {@code z-bot sessions prune} 和
+     * 会话运行期看到的是两套数据库行为，配置就有了两个事实来源。</p>
+     */
+    static StateStore openStore(SessionsCommand parent) {
+        BotConfig cfg = BotConfig.load(configDirOf(parent));
+        return new StateStore(dbFileOf(parent, cfg), cfg.stateStoreOptions());
     }
 
     @Command(name = "list", description = "列出会话（默认隐藏软归档的）")
@@ -69,7 +84,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             List<StateStore.SessionRow> rows = store.listSessions(all);
             java.io.PrintStream out = System.out;
             out.printf("%-28s  %-4s  %-6s  %-30s  %-19s  %s%n",
@@ -106,7 +121,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             List<StateStore.SearchHit> hits = store.search(keyword, limit);
             java.io.PrintStream out = System.out;
             for (StateStore.SearchHit h : hits) {
@@ -133,7 +148,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() throws IOException {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             List<String> lines = store.exportJsonl(session);
             Files.write(out.toPath(), lines, StandardCharsets.UTF_8);
             System.out.println("已导出 " + lines.size() + " 条消息到 " + out.getAbsolutePath());
@@ -148,7 +163,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             StateStore.Stats s = store.stats();
             System.out.println("sessions=" + s.sessions + " messages=" + s.messages
                     + " tokens=" + s.tokens + " api_calls=" + s.apiCalls);
@@ -200,9 +215,13 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             StateStore.PruneCriteria c = StateStore.PruneCriteria.olderThanDays(days)
                     .requireEnded(!includeInFlight)
+                    // store 层的兼容档把"0 消息的在飞会话"也算作可删（P2 语义，auto_prune 走那条），
+                    // 但这条命令的 --include-in-flight 开关不能是空话：在飞就是不能没经授权就被抹掉。
+                    // E2E 实测抓出来的：默认档下 0 消息的在飞会话会被连带删掉（单测那条造的是有消息的在飞，看不见这个形状）。
+                    .treatUnusedEmptyAsEnded(false)
                     .cascadeChildren(cascade)
                     .detachOrphans(!cascade)
                     .dryRun(dryRun);
@@ -247,7 +266,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             System.out.println("schema_version=" + store.schemaVersion()
                     + " head=" + SchemaMigrations.HEAD_VERSION
                     + " db=" + store.getDbFile().getAbsolutePath());
@@ -288,7 +307,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             if (!store.sessionExists(session)) {
                 System.out.println("会话不存在: " + session);
                 return 1;
@@ -334,7 +353,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             boolean ok = store.endSession(session, reason);
             System.out.println(ok ? "已标记结束: " + session + " (" + reason + ")"
                     : "没改动（会话不存在或早已结束）: " + session);
@@ -352,7 +371,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             boolean ok = store.reopenSession(session);
             System.out.println(ok ? "已回到在飞: " + session : "没改动（会话不存在或本就未结束）: " + session);
             return ok ? 0 : 1;
@@ -375,7 +394,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             if (oldDays != null) {
                 StateStore.PruneReport r = store.archiveMatching(
                         StateStore.PruneCriteria.olderThanDays(oldDays.intValue()));
@@ -400,7 +419,7 @@ public class SessionsCommand {
 
         @Override
         public Integer call() {
-            StateStore store = new StateStore(dbFileOf(parent));
+            StateStore store = openStore(parent);
             boolean ok = store.checkpointNow();
             System.out.println(ok ? "wal_checkpoint 完成（写事务计数 " + store.writeCounters() + "）"
                     : "wal_checkpoint 失败: " + store.lastError());
