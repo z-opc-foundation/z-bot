@@ -1,22 +1,22 @@
 id	file	git_show_md5_baseline	disk_md5_during_injection	injection_landed	disk_md5_after_restore	restored
-TS1 emptyCapabilityToolsets 写死空表	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	34b14fff5db09ea6071f16609779f36c	no(注入确实改了盘)	f6785851f188d681c531a377249f9cdf	ok
-TS2 undeclaredToolsets 过滤反了	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	bb7529c3b454de3e5018c142c06fd191	no(注入确实改了盘)	f6785851f188d681c531a377249f9cdf	ok
-TS3 manifestToolsNeverRegistered 过滤反了	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	7664bf18812ceffe9c305168e472641c	no(注入确实改了盘)	f6785851f188d681c531a377249f9cdf	ok
-TS4 toolsetForTool 一律退回兜底槽	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	179d5dd1ce6f3be9f1786e4308293b2e	no(注入确实改了盘)	f6785851f188d681c531a377249f9cdf	ok
-TS5 mcpToken 放过中划线	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	4c25d281b5eabce3339da5c4f73496ce	no(注入确实改了盘)	f6785851f188d681c531a377249f9cdf	ok
-TS6 capabilityNames 把兜底槽/动态族也算能力	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	6ef2fff73a43635204d442bb28e3ae50	no(注入确实改了盘)	f6785851f188d681c531a377249f9cdf	ok
-TK1 快照键丢掉不可用名单	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	74e22d6e97dddb3e30345930b9646b3d	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK2 unavailableToolNames 恒空	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	8f4975918386673fcc11237801e124ef	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK3 代际计数不外露（钉死 0）	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	60e1d134b33ba3b65f08f7d818f01456	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK4 上限不走注册表	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	144fb5e346cfc37354ce5365985b62da	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK5 UNBOUNDED 哨兵失效	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	3819a417c36b6c709628b200b7df5bc5	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK6 预览不受上限约束	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	d757e81e58b99472985f28c21d22aa21	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK7 溢出落盘被摘掉	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	5215e40a1277c5a36aa4069f5e5df413	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK8 上限边界从 <= 改成 <	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	4143651fc06aa2ea1cc34965d5811b66	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK9 溢出目录解析不看 $ZBOT_HOME	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	379275e7f368110083b2dda625e7e48c	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK10 溢出文件名净化失效	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	ea0b12ba8ee5ea6d6b799389ab9dc888	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-TK11 toolset 整组注销的 owner 参数被顶成内建 owner	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	a5cda9e537d1749d34a8ef1b635f641c	no(注入确实改了盘)	4ae1a491cd73b0f1c1ac869db59723ad	ok
-MB1 桥不接可用性探测	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	a6329fa2484cb2198d1d2488f5ef9f58	no(注入确实改了盘)	2938f85b32213e0bd7d7041e478d35b2	ok
-MB2 桥按'记住的名字'逐个注销	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	536164341d60d5986515cb690d988623	no(注入确实改了盘)	2938f85b32213e0bd7d7041e478d35b2	ok
-MB3 退回同名 stub 覆盖（P20 要杀的旧实现）	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	d32f6c6153640340e2996f2c9a297bc8	no(注入确实改了盘)	2938f85b32213e0bd7d7041e478d35b2	ok
-E1 stopAll 只断连不注销	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpManager.java	37a141454ca06331bfdb3341e0af3c83	bf3ee454ddb2a2f3cbdfe3389bbc41ce	no(注入确实改了盘)	37a141454ca06331bfdb3341e0af3c83	ok
+TS1 emptyCapabilityToolsets 写死空表	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	34b14fff5db09ea6071f16609779f36c	yes(disk!=git show)	f6785851f188d681c531a377249f9cdf	ok
+TS2 undeclaredToolsets 过滤反了	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	bb7529c3b454de3e5018c142c06fd191	yes(disk!=git show)	f6785851f188d681c531a377249f9cdf	ok
+TS3 manifestToolsNeverRegistered 过滤反了	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	7664bf18812ceffe9c305168e472641c	yes(disk!=git show)	f6785851f188d681c531a377249f9cdf	ok
+TS4 toolsetForTool 一律退回兜底槽	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	179d5dd1ce6f3be9f1786e4308293b2e	yes(disk!=git show)	f6785851f188d681c531a377249f9cdf	ok
+TS5 mcpToken 放过中划线	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	4c25d281b5eabce3339da5c4f73496ce	yes(disk!=git show)	f6785851f188d681c531a377249f9cdf	ok
+TS6 capabilityNames 把兜底槽/动态族也算能力	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f6785851f188d681c531a377249f9cdf	6ef2fff73a43635204d442bb28e3ae50	yes(disk!=git show)	f6785851f188d681c531a377249f9cdf	ok
+TK1 快照键丢掉不可用名单	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	74e22d6e97dddb3e30345930b9646b3d	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK2 unavailableToolNames 恒空	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	8f4975918386673fcc11237801e124ef	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK3 代际计数不外露（钉死 0）	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	60e1d134b33ba3b65f08f7d818f01456	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK4 上限不走注册表	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	144fb5e346cfc37354ce5365985b62da	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK5 UNBOUNDED 哨兵失效	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	3819a417c36b6c709628b200b7df5bc5	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK6 预览不受上限约束	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	d757e81e58b99472985f28c21d22aa21	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK7 溢出落盘被摘掉	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	5215e40a1277c5a36aa4069f5e5df413	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK8 上限边界从 <= 改成 <	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	4143651fc06aa2ea1cc34965d5811b66	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK9 溢出目录解析不看 $ZBOT_HOME	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	379275e7f368110083b2dda625e7e48c	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK10 溢出文件名净化失效	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	ea0b12ba8ee5ea6d6b799389ab9dc888	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK11 toolset 整组注销的 owner 参数被顶成内建 owner	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	a5cda9e537d1749d34a8ef1b635f641c	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+MB1 桥不接可用性探测	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	a6329fa2484cb2198d1d2488f5ef9f58	yes(disk!=git show)	2938f85b32213e0bd7d7041e478d35b2	ok
+MB2 桥按'记住的名字'逐个注销	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	536164341d60d5986515cb690d988623	yes(disk!=git show)	2938f85b32213e0bd7d7041e478d35b2	ok
+MB3 退回同名 stub 覆盖（P20 要杀的旧实现）	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	d32f6c6153640340e2996f2c9a297bc8	yes(disk!=git show)	2938f85b32213e0bd7d7041e478d35b2	ok
+E1 stopAll 只断连不注销	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpManager.java	37a141454ca06331bfdb3341e0af3c83	bf3ee454ddb2a2f3cbdfe3389bbc41ce	yes(disk!=git show)	37a141454ca06331bfdb3341e0af3c83	ok
