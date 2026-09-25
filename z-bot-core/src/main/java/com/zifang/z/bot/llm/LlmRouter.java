@@ -9,6 +9,8 @@ import com.zifang.z.agent.kernel.llm.provider.OpenAIProvider;
 import com.zifang.z.agent.kernel.llm.provider.QwenProvider;
 import com.zifang.z.bot.config.BotConfig;
 
+import java.util.List;
+
 /**
  * 把 {@link BotConfig.Provider} 映射成 kernel 的 {@link LlmProvider} 实例。
  *
@@ -24,7 +26,9 @@ public final class LlmRouter {
         if (provider == null) {
             throw new IllegalArgumentException("provider required");
         }
-        String apiKey = provider.getApiKey();
+        // 多 key（逗号分隔）时这里只构造首 key 的实例；轮换由 KeyPoolLlmProvider 负责
+        List<String> keys = provider.getApiKeys();
+        String apiKey = keys.isEmpty() ? provider.getApiKey() : keys.get(0);
         String baseUrl = emptyToNull(provider.getBaseUrl());
         String type = provider.getType() == null ? "openai" : provider.getType().toLowerCase();
         switch (type) {

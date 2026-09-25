@@ -471,7 +471,7 @@ public final class BotConfig {
         private final String baseUrl;
         private final String model;
 
-        Provider(String code, String type, String apiKey, String baseUrl, String model) {
+        public Provider(String code, String type, String apiKey, String baseUrl, String model) {
             this.code = code;
             this.type = type;
             this.apiKey = apiKey;
@@ -492,12 +492,35 @@ public final class BotConfig {
             return apiKey;
         }
 
+        /**
+         * 多 key 凭据池：{@code <code>.api.key} 允许逗号分隔多个 key（Hermes credential pool 语义）。
+         * 单 key 时返回单元素列表。
+         */
+        public List<String> getApiKeys() {
+            List<String> out = new ArrayList<String>();
+            if (apiKey == null) {
+                return out;
+            }
+            for (String s : apiKey.split(",")) {
+                String t = s.trim();
+                if (!t.isEmpty()) {
+                    out.add(t);
+                }
+            }
+            return out;
+        }
+
         public String getBaseUrl() {
             return baseUrl;
         }
 
         public String getModel() {
             return model;
+        }
+
+        /** 换 key 的副本（凭据池按 key 构造单 key provider 实例时用）。 */
+        public Provider withApiKey(String apiKey) {
+            return new Provider(code, type, apiKey, baseUrl, model);
         }
 
         @Override

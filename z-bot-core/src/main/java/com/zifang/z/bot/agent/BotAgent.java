@@ -25,6 +25,7 @@ import com.zifang.z.bot.memory.MemoryStore;
 import com.zifang.z.bot.mcp.McpManager;
 import com.zifang.z.bot.memory.MemoryTools;
 import com.zifang.z.bot.skill.SkillLoader;
+import com.zifang.z.bot.llm.KeyPoolLlmProvider;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
 import com.zifang.z.bot.session.SessionManager;
@@ -1441,12 +1442,16 @@ public class BotAgent {
             return this;
         }
 
-        /** 配置存在时给 provider 套上重试/降级装饰器；config 为 null（纯测试桩）不包。 */
+        /**
+         * 配置存在时给 provider 套装饰器；config 为 null（纯测试桩）不包。
+         * 分层：内层 KeyPool（多 key 轮换，单 key 时原样）→ 外层 Resilient（重试+模型降级）。
+         */
         private static LlmProvider wrapResilient(LlmProvider provider, BotConfig config) {
             if (config == null) {
                 return provider;
             }
-            return new ResilientLlmProvider(provider, config.getRetryMaxAttempts(),
+            LlmProvider pooled = KeyPoolLlmProvider.wrap(provider, config.activeProvider());
+            return new ResilientLlmProvider(pooled, config.getRetryMaxAttempts(),
                     config.getRetryBackoffMs(), config.getFallbackModels());
         }
 

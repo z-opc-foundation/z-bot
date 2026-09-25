@@ -140,6 +140,11 @@
                 <artifactId>z-agent-kernel-mcp</artifactId>
                 <version>${z-agent-kernel.version}</version>
             </dependency>
+            <dependency>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-agent-kernel-credential</artifactId>
+                <version>${z-agent-kernel.version}</version>
+            </dependency>
 
             <!--
                 kernel-llm 内部引 okhttp 4.12.0; z-bot 的 BotCenterClient 也直接用 okhttp,
