@@ -20,6 +20,7 @@ P17（cron 投递闭环）验收③：真进程 E2E。
 前置: mvn -o -pl z-bot-core package -DskipTests
 复算: python3 _doc/acceptance/p17/p17_e2e.py
 """
+import fcntl
 import hashlib
 import json
 import os
@@ -276,6 +277,69 @@ def tail(text, needle, count=1, width=190):
     return " ⏎ ".join(l[-width:] for l in lines[:count]) or "(没有这行)"
 
 
+# ---- E 段用：跨进程锁的"邻居"与写请求 ----
+# Darwin 的 fcntl 不导出 F_TLOCK 这个名字，但 fcntl(2) 的数值语义照旧（2 = 非阻塞攥锁）。
+F_TLOCK = 2
+
+# 邻居探针为什么必须是 JVM 而不是 Python：本机实测（2026-09-26，darwin 25.5 +
+# CPython 3.14 + APFS）—— 别的进程正攥着 0 字节锁文件时，Python 自己的
+# lockf(fd, F_TEST) 和 lockf(fd, F_TLOCK) **一律回 ACQUIRED**（探不到邻居锁，
+# 拿它当"猎物进陷阱"的凭证就是空跑）；同一现场真 JVM 的 tryLock 回 null。
+# 下面这个形状与被测代码 CronScheduler.acquireJobsLock 逐字一致，等于用产品
+# 自己的尺量产品。前提双向取证见同目录 probe_lock_namespace.py。
+LOCK_PROBE_JAVA = """
+import java.nio.channels.*;
+import java.nio.file.*;
+
+public class LockProbe {
+    public static void main(String[] args) throws Exception {
+        FileChannel ch = FileChannel.open(Paths.get(args[0]),
+                StandardOpenOption.READ, StandardOpenOption.WRITE);
+        FileLock lock = ch.tryLock(0L, Long.MAX_VALUE, false);
+        System.out.println(lock == null ? "NULL" : "GRANTED");
+        if (lock != null) {
+            lock.release();
+        }
+        ch.close();
+    }
+}
+"""
+
+
+def java_lock_probe(lock_path, timeout=60):
+    """邻居 JVM 抢一次锁：'NULL' = 有人攥着，'GRANTED' = 抢得到。其余字符串 = 量具自己飞了。"""
+    classes = os.path.join(OUT, "lockprobe")
+    if not os.path.isfile(os.path.join(classes, "LockProbe.class")):
+        os.makedirs(classes, exist_ok=True)
+        src = os.path.join(classes, "LockProbe.java")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(LOCK_PROBE_JAVA)
+        c = subprocess.run(["javac", "-d", classes, src],
+                           capture_output=True, text=True, timeout=240)
+        if c.returncode != 0:
+            return "JAVAC-FAIL:" + (c.stderr or "").strip()[-160:]
+    r = subprocess.run(["java", "-cp", classes, "LockProbe", lock_path],
+                       capture_output=True, text=True, timeout=timeout)
+    out = (r.stdout or "").strip()
+    if out not in ("NULL", "GRANTED"):
+        return "NO-READING:rc=%d %s" % (r.returncode, ((r.stderr or out).strip()[-160:]))
+    return out
+
+
+def cron_add_cmd(port, name):
+    body = json.dumps({"action": "add", "name": name, "prompt": "E 探针",
+                       "schedule": "once 2031-01-01T00:00:00Z"})
+    return ["curl", "-s", "--max-time", "90", "-X", "POST",
+            "-H", "Content-Type: application/json", "-d", body,
+            "http://127.0.0.1:%d/api/cron" % port]
+
+
+def cron_add(port, name, timeout=20):
+    r = subprocess.run(cron_add_cmd(port, name), capture_output=True, text=True,
+                       timeout=timeout)
+    return r.returncode, (r.stdout or r.stderr or "")
+
+
 def main():
     if not os.path.isfile(JAR):
         print("FATAL: 先跑 mvn -o -pl z-bot-core package -DskipTests（缺 %s）" % JAR)
@@ -294,10 +358,22 @@ def main():
     srv, base_url = start_stub()
     print("stub LLM: %s   临时根: %s" % (base_url, root), flush=True)
 
+    # P17_ONLY=E 是给"注入 M8 后看 E 段会不会红"这种反复取证留的快通道：
+    # 整跑一趟 12 分钟，而 M8 只在 E 段显形。部分模式下 X 段卫生与总账一律不作数。
+    only = os.environ.get("P17_ONLY", "").strip().upper()
+    if only and only != "E":
+        print("FATAL: P17_ONLY 目前只支持 E（其余节请整跑，别拆）")
+        return 2
     try:
-        run_cases(root, base_url, home_before, real_cron_listing)
+        if not only:
+            run_cases(root, base_url, home_before, real_cron_listing)
+        section_e(root, base_url)
     finally:
         srv.shutdown()
+    if only:
+        print("\nPARTIAL MODE（P17_ONLY=%s）: 只跑了 %d 条，A–D 与 X 段这一跑不作数"
+              % (only, len(RESULTS)), flush=True)
+        return 0 if all(ok for _n, ok, _d in RESULTS) else 1
 
     # ---- 凭证卫生：所有产物里不许出现真 key ----
     real_key = None
@@ -433,17 +509,32 @@ def run_cases(root, base_url, home_before, real_cron_listing):
     b1.start()
     ok_up = b1.wait_for("cron 投递口", 90)
     check("B0 gateway 起来了", ok_up, "profile=%s" % os.path.basename(profB))
-    deadline = time.time() + 130
-    while time.time() < deadline and "@ local" not in b1.text():
+    # 三条任务在<b>同一个 tick</b> 里按顺序跑。上一版一看见 "@ local" 就 kill，
+    # 于是排在后面的 origin/http 两条根本没轮到 —— B3/B4 红的是量具，不是产品。
+    # 现在等"三条都留下投递结论"再收尾，并且单独核对假 LLM 真被打了 3 次（出口那一面）。
+    hits_at_b_start = len(LLM_HITS)
+    deadline = time.time() + 220
+    while time.time() < deadline:
+        snap = {j["id"]: j for j in read_jobs(cronB)}
+        if all((snap.get(k) or {}).get("lastDelivery")
+               for k in ("cron_local", "cron_origin", "cron_http")):
+            break
         time.sleep(1)
     bt = b1.text()
-    check("B1 deliver=local 真的打印出了结果", "@ local" in bt, tail(bt, "@ local", 1, 240))
-    check("B2 deliver=origin 没有来源时降级 local 而不是报错",
-          "按 local 投递" in bt and "no delivery target" not in bt,
-          tail(bt, "deliver=origin", 1, 240))
+    print("\n----- B-gw 日志原文（cron 相关行） -----", flush=True)
+    for line in bt.split("\n"):
+        if "cron" in line:
+            print(line, flush=True)
     b1.kill()
     jobs_b = {j["id"]: j for j in read_jobs(cronB)}
     http_rec = jobs_b.get("cron_http") or {}
+    check("B1 deliver=local 真的打印出了结果",
+          "B-local (cron_local) @ local" in bt,
+          tail(bt, "B-local (cron_local) @ local", 1, 240))
+    check("B2 deliver=origin 没有来源时降级 local 而不是报错",
+          ("deliver=origin" in bt and "按 local 投递" in bt
+           and "B-origin (cron_origin) @ local" in bt and "no delivery target" not in bt),
+          tail(bt, "deliver=origin", 1, 240))
     check("B3 拉模式 HTTP 控制台被剔出投递目标（报 unknown channel 而不是假装 ok）",
           "unknown channel 'http'" in (http_rec.get("lastDelivery") or ""),
           "jobs.json 里 cron_http.lastDelivery=%r" % http_rec.get("lastDelivery"))
@@ -451,6 +542,9 @@ def run_cases(root, base_url, home_before, real_cron_listing):
           all((jobs_b.get(k) or {}).get("lastResult") for k in ("cron_local", "cron_origin", "cron_http")),
           " ".join("%s=%r" % (k, (jobs_b.get(k) or {}).get("lastResult"))
                    for k in ("cron_local", "cron_origin", "cron_http")))
+    b_hits = len(LLM_HITS) - hits_at_b_start
+    check("B5 B 段真跑了三次（出口计数，与 lastResult 不同的一面）",
+          b_hits == 3, "B 段 stub LLM 被调用 %d 次（期望 3：local/origin 降级/http 报错各一次）" % b_hits)
 
     # ================= C：kill -9 在飞 → 账还在 → 不复活 =================
     print("\n===== C 跑到一半 kill -9：先落账 + at-most-once =====", flush=True)
@@ -517,6 +611,127 @@ def run_cases(root, base_url, home_before, real_cron_listing):
     cron_now = sorted(os.listdir(REAL_CRON)) if os.path.isdir(REAL_CRON) else None
     check("D3 真实 ~/.zbot/cron 没多出东西", cron_now == real_cron_listing,
           "before=%s after=%s" % (real_cron_listing, cron_now))
+
+
+def section_e(root, base_url):
+    """E 段：两个真进程抢同一把 `.jobs.lock`。
+
+    单列成函数是为了能 `P17_ONLY=E` 单跑 —— 变异体 M8 的取证要反复验这一节，
+    不该陪着 A 段那 200 多秒一起等。
+    """
+    # 这一节是变异体 M8（`JOBS_LOCK_TIMEOUT_MILLIS` 30_000 → 0）唯一的现场：进程内单测造不出
+    # "另一个进程正攥着跨进程锁"。前提有两条，都不许靠猜：
+    #   1) python 的 lockf 与 JVM 的 FileChannel.tryLock 是同一套 POSIX 记录锁
+    #      —— 由同目录 probe_lock_namespace.py 单独取证（实测 java 侧 tryLock=NULL）；
+    #   2) 调度 tick 是 60s 一拍，拿它当"撞锁时机"不可靠 ⇒ 改走 HTTP 写路径（POST /api/cron
+    #      → scheduler.add → withStore → 跨进程锁），什么时候抢锁由本脚本说了算。
+    print("\n===== E 邻居攥住 .jobs.lock：等得到，才不算降级 =====", flush=True)
+    if not shutil.which("curl"):
+        check("E0 环境有 curl（E 段的写请求靠它）", False, "没找到 curl ⇒ E 段无法取证")
+        return
+    profE = os.path.join(root, "profileE")
+    cronE = os.path.join(profE, "cron")
+    seed_jobs(cronE, [job("cron_seed_e", "E-seed", "once 2030-01-01T00:00:00Z", "local")])
+    egw = Gateway("E-gw", profE, base_url, free_port(), free_port())
+    egw.start()
+    ok_e = egw.wait_for("cron 投递口", 90)
+    check("E0a gateway 起来了（E 段的写请求有人接）", ok_e,
+          "profile=%s" % os.path.basename(profE))
+    if not ok_e:
+        egw.kill()
+        return
+
+    t0 = time.time()
+    rc, out = cron_add(egw.http_port, "E-free")
+    try:
+        free_id = (json.loads(out).get("job") or {}).get("id", "")
+    except Exception:
+        free_id = ""
+    t_free = time.time() - t0
+    ids_free = [j.get("id") for j in read_jobs(cronE)]
+    check("E1 不攥锁时写请求秒回且真落盘（这一条是后面几例的猎物：证明被抢的确实是这把锁）",
+          # 时限放 20s 而不是 5s：这一条只负责"没邻居时写得动"，判别量在 E2 那 20s 的等待上，
+          # 机器负载高时不该由它假红。
+          rc == 0 and bool(free_id) and free_id in ids_free and t_free < 20,
+          "耗时 %.1fs rc=%s id=%r 盘上=%s" % (t_free, rc, free_id, ids_free))
+
+    e_lock = os.path.join(cronE, ".jobs.lock")
+    lfd = os.open(e_lock, os.O_RDWR | os.O_CREAT, 0o644)
+    held_by_us = True
+    try:
+        fcntl.lockf(lfd, F_TLOCK)
+    except OSError as ex:
+        held_by_us = False
+        check("E1b 本脚本攥住了 .jobs.lock", False,
+              "lockf 失败：%s —— 盘上这把锁已被谁持着？" % ex)
+    if not held_by_us:
+        os.close(lfd)
+        egw.kill()
+        return
+    released = False
+    try:
+        seen = java_lock_probe(e_lock)
+        check("E0b 邻居（真 JVM，tryLock 形状与被测代码逐字一致）确实抢不到这把锁",
+              seen == "NULL", "邻居 JVM tryLock=%s（NULL 才说明本脚本真的挡住了它）" % seen)
+
+        t_hold = time.time()
+        held = subprocess.Popen(cron_add_cmd(egw.http_port, "E-held"),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        time.sleep(20)
+        still_waiting = held.poll() is None
+        names = sorted(j.get("name") for j in read_jobs(cronE))
+        check("E2 攥锁期间写请求 20s 没返回，且盘上没多出这条（它在等，不是绕过锁写下去）",
+              still_waiting and "E-held" not in names,
+              "20s 后仍在跑=%s 盘上=%s" % (still_waiting, names))
+
+        os.close(lfd)          # 关掉描述符即释放 POSIX 记录锁
+        released = True
+        t_release = time.time()
+        try:
+            so, se = held.communicate(timeout=90)
+            hrc = held.returncode
+        except subprocess.TimeoutExpired:
+            held.kill()
+            held.communicate()
+            so, se, hrc = "", "", -1
+        try:
+            held_id = (json.loads(so or "").get("job") or {}).get("id", "")
+        except Exception:
+            held_id = ""
+        ids_after = [j.get("id") for j in read_jobs(cronE)]
+        check("E3 释放后请求落定、任务真写进盘（等待是以拿到锁结束的，不是超时了事）",
+              hrc == 0 and bool(held_id) and held_id in ids_after,
+              "从发起到落定 %.1fs ⇒ rc=%s id=%r 盘上有=%s 输出=%.60s"
+              % (t_release - t_hold, hrc, held_id, held_id in ids_after, (so or se or "").strip()))
+
+        # E3 只说"请求落了地"，不说"是我们放开的锁"。这一条把释放本身钉住：
+        # r4 实跑收尾时 lsof 读到量具自己（Python 进程 fd 6u）还开着的 .jobs.lock，
+        # 而盘上的 gateway 日志里已经有两行"降级" —— 放锁没有尺，那一跑就说不清
+        # 锁到底掉没掉。所以放锁单独有一条。
+        granted = ""
+        for _ in range(16):
+            granted = java_lock_probe(e_lock)
+            if granted == "GRANTED":
+                break
+            time.sleep(0.5)
+        check("E0c 关掉描述符后邻居又抢得到（E3 的「释放」真是放开了锁，E 段没把锁漏在盘上）",
+              granted == "GRANTED", "邻居 JVM tryLock=%s" % granted)
+
+        et = egw.text()
+        print("\n----- E-gw 日志原文（cron 相关行） -----", flush=True)
+        shown = [l for l in et.split("\n")
+                 if "cron" in l or "跨进程锁" in l or "重入计数" in l]
+        print(("\n".join(shown[-14:]) or "(没有这类行)"), flush=True)
+        degraded = [l for l in et.split("\n")
+                    if "跨进程锁超过" in l or "跨进程锁不可用" in l or "重入计数失衡" in l]
+        check("E4 整个对撞期间没有出现过一次「降级为只用进程内锁」",
+              not degraded,
+              "降级行=%s（30s 上限内等到锁，所以不该有）" % (degraded[:1] or "无"))
+    finally:
+        if not released:
+            os.close(lfd)
+        egw.kill()
+
 
 
 if __name__ == "__main__":

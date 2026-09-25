@@ -14,6 +14,18 @@ P17（cron 投递闭环）变异检验：把本期新加的每一条守卫逐条
 点名集为空、预期就是 GREEN-BUT-MUTATED 的两条（M8/M9）：跨进程 flock 的等待上限
 和 gateway 那条装配线，都要**真两个进程 / 真通道**才显形，进程内单测造不出那个现场 ——
 它们的证据在 p17_e2e.py，不在这里。
+  * M8 的那份证据已实测（2026-09-26）：`python3 _doc/acceptance/p17/p17_mutation.py` 的
+    注入串原样打进 `JOBS_LOCK_TIMEOUT_MILLIS`、重打 jar 后单跑 E 段
+    （`P17_ONLY=E python3 _doc/acceptance/p17/p17_e2e.py`）⇒ **E2 FAIL**（邻居正攥着
+    `.jobs.lock`，写请求却当场落盘：`盘上=['E-free','E-held','E-seed']`）+ **E4 FAIL**
+    （日志出现"等 .jobs.lock 的跨进程锁超过 0ms … 降级为只用进程内锁"），其余 5 条仍绿；
+    还原后（md5 与基线逐字节相同）重跑 E 段 7/7 全绿。两跑日志见 logs/。
+    ⇒ M8 在本表里记 GREEN-BUT-MUTATED 是"单测这一层看不见"，不是"没人能杀"。
+  * M9（gateway 的 cron 装配线）已实测（2026-09-26）：同样注入后**整跑** p17_e2e.py
+    ⇒ `PASS=28 / FAIL=4`，红的正是 A3（webhook 一条没收到，官方那一跑是 1 条）、A4（正文 None）、
+    B2（没有"降级 local"那行）、B3（`lastDelivery='ok'` —— 装配摘掉后落回 LocalCronDelivery，
+    "投给拉模式控制台"被记成静默成功）。还原后重跑 32/32 全绿。日志 logs/e2e_full_M9.log。
+    ⇒ M9 在本表里同样记 GREEN-BUT-MUTATED：单测层看不见装配，**但 E2E 层杀得死**。
 
 复算: python3 _doc/acceptance/p17/p17_mutation.py [id 子串...]
 """
@@ -98,14 +110,14 @@ MUTANTS = [
      "    static final long JOBS_LOCK_TIMEOUT_MILLIS = 30_000L;",
      "    static final long JOBS_LOCK_TIMEOUT_MILLIS = 0L;", 1,
      [],
-     "只有真有一个邻居正攥着锁时才显形，进程内单测造不出那个现场 ⇒ 证据在 p17_e2e.py 的双 JVM 段"),
+     "只有真有一个邻居正攥着锁时才显形，进程内单测造不出那个现场 ⇒ 证据在 p17_e2e.py 的 E 段（邻居攥锁对撞，实测 E2/E4 判红）"),
 
     ("M9 gateway 不把通道表接进 cron", "gw",
      "        if (agent.getCronScheduler() != null) {\n"
      "            agent.getCronScheduler().deliverViaChannels(",
      "        if (false) {\n            ((Object) null).equals(", 1,
      [],
-     "红线 2 的装配线：单测里没有 GatewayCommand 这一站 ⇒ 证据在 p17_e2e.py 的 webhook 真投递"),
+     "红线 2 的装配线：单测里没有 GatewayCommand 这一站 ⇒ 证据在 p17_e2e.py 的 webhook 真投递（实测 A3/A4/B2/B3 判红）"),
 
     ("M10 local 档不打印（结果又静默蒸发）", "local",
      "        out.println(\"[cron] \" + job.name + \" (\" + job.id + \") @ local\\n\" + body);\n"
