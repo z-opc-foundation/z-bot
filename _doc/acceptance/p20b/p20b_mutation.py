@@ -503,8 +503,10 @@ def main():
 
     lock = acquire_lock(True)
     if lock == "BUSY":
-        rows = [[m[0], "BROKEN", "0", "0", "未跑：锁被占",
-                 "杠②未跑完：锁被占（flock LOCK_EX|LOCK_NB 当场不可得）", "n/a"]]
+        # 每个变异体各记一行"未跑：锁被占"（第一版这里写成 [[m[0], ...]] 直接 NameError，
+        # 等于把兜底路径弄成崩溃 —— 崩溃不产生台账，记在 EVIDENCE §6）
+        rows = [[x[0], "BROKEN", str(len(x[5])), "0", "未跑：锁被占",
+                 "杠②未跑完：锁被占（flock LOCK_EX|LOCK_NB 当场不可得）", "n/a"] for x in MUTANTS]
         with io.open(LEDGER, "w", encoding="utf-8") as fh:
             fh.write("\t".join(HEADERS) + "\n")
             for r in rows:
