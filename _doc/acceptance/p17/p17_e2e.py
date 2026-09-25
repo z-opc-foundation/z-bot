@@ -554,10 +554,28 @@ def run_cases(root, base_url, home_before, real_cron_listing):
     seed_jobs(cronC, [job("cron_e2eC", "e2e-C",
                           "once " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(dueC)), "local")])
     LLM_DELAY[0] = 30.0
+    with LLM_LOCK:
+        hits_at_c_start = len(LLM_HITS)
     c1 = Gateway("C-gw-before", profC, base_url, free_port(), free_port())
     c1.start()
     claimed = c1.wait_for("已落账认领", 120)
     check("C1 副作用之前认领已落账（日志）", claimed, tail(c1.text(), "已落账认领", 1))
+    # 日志那行打在事务体内，盘上的账要等 withStore 走出事务后的 ATOMIC_MOVE —— 实测差 0.1~8.8ms
+    # （n=10、load 6→22，见 EVIDENCE.md §5）。所以"账已落盘"不能拿日志当触发器去判：曾经看见日志
+    # 就 kill -9，10 轮里 2 轮把账杀在移动之前，量具自己造出假 C2（09-26 合并树上真翻过一次）。
+    # 换成拿**因果**当尺：claimDispatch() 返回之后才会发起 LLM 请求 ⇒ stub 一收到这条请求，
+    # 盘上就必须已经读得到账。这条才是"先落账再跑"那根红线的判读面 —— 谁把写盘挪到跑之后再发，它判红。
+    flew, deadline = False, time.time() + 40
+    while time.time() < deadline and not flew:
+        with LLM_LOCK:
+            flew = len(LLM_HITS) > hits_at_c_start
+        if not flew:
+            time.sleep(0.2)
+    onflight = {j["id"]: j for j in read_jobs(cronC)}.get("cron_e2eC") or {}
+    check("C1b 副作用真开跑（stub 收到这条请求）时，盘上的账已可见（先落账再跑）",
+          flew and onflight.get("dispatches") == 1 and bool(onflight.get("runClaim")),
+          "stub 新增请求=%s dispatches=%r runClaim=%r"
+          % (flew, onflight.get("dispatches"), onflight.get("runClaim")))
     pid = c1.proc.pid if claimed else None
     c1.kill(hard=True)
     LLM_DELAY[0] = 0.0

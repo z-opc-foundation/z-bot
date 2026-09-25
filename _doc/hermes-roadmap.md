@@ -1,6 +1,13 @@
 # z-bot → Java 版 Hermes 全量对标计划 (v2, 2026-09-25)
 
-> 对标对象: **hermes-agent v0.19.0** (`~/.hermes/hermes-agent`, NousResearch, Python)。
+> 对标对象: **hermes-agent**（NousResearch, Python），**唯一权威参照 = 本机 git 检出 `~/.hermes/hermes-agent`**。
+> 本文所有"她的 X 行 / `:872-919`"式引用都以该检出为准。当前基准 **`cbc1054e2`**
+> （`git describe` ⇒ `v2026.6.5-6227-gcbc1054e2`；`pyproject.toml` 自称 `0.19.0`）。
+> 复算基准没漂: `git -C ~/.hermes/hermes-agent rev-parse --short HEAD` ⇒ `cbc1054e2`，
+> `git -C ~/.hermes/hermes-agent status --porcelain | wc -l` ⇒ `0`（**别 pull，一拉全文行号引用就 rot**）。
+> **坑（09-26 踩过）**: 不许拿 `pip download hermes-agent` 的 wheel 当参照 —— PyPI 上那个 `0.19.0` wheel
+> 的 `hermes_state.py` 只有 **7,822 行 / 17 条 CREATE TABLE**，与本检出的 **9,503 行 / 22 条**（§7 的口径）不同一条线；
+> 且 aliyun 镜像更旧（只到 0.15.2，其 `hermes_state.py` 3,314 行 / 30 列）。版本号同名不同物。
 > **体量实测口径** (v1 的"~189 万行"无任何口径支撑, 本轮作废重测):
 > ```
 > cd ~/.hermes/hermes-agent && find . -name '*.py' \
@@ -146,18 +153,40 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 - 补 `deregister(name)` / 代际计数 / `check_fn` TTL 探测 (`registry.py:143 _CHECK_FN_TTL_SECONDS=30.0` + 失败宽限) / 单工具结果上限 + 溢出落文件 / toolset 声明层 (她顶层 `TOOLSETS` **33 个**, 我们按能力面建**清单内**的子集) / 并行安全从注册表移到 dispatch helper (照她的分层);
 - MCP 的 stub 覆盖 hack 换成真 deregister。
 - 验收: reload 后 `getToolNames()` 不再出现旧 server 的工具名 (反向断言, 现在必然是红的); 代际计数使 schema 缓存失效的可测证据。
+- **合并前必须先拆的雷** (09-25 实测): 半成品分支 `w2-p20` (`7043e91`) 带着一条 `d79e321 chore(p20): 临时把 <z-agent-kernel.version> 指向私有 0.2.0-p20` ——
+  根 pom 第 69 行现在是 `0.2.0-p20`, 而 main 钉的是 `0.2.0`。本机 `~/.m2/.../z-agent-kernel/` 两个都在
+  (`0.1.0 / 0.1.1 / 0.2.0 / 0.2.0-p20`), 所以**在这台机器上两支都能编译** —— 这正是危险所在: 换一台只从
+  `../z-agent-kernel` 装了发布版的机器, `w2-p20` 直接依赖不满足。顺带实测一件事:
+  `curl -o /dev/null -w %{http_code} repo1.maven.org/maven2/io/github/yuku123/z-agent-kernel/{0.2.0,0.2.0-p20}/` **两个都是 404**,
+  即整个 kernel 从来没上 Central, z-bot 任何一支都依赖本机 sibling 构建 (不是 P20 引入的, 但 P20 把它变成了分叉的版本线)。
+  ⇒ P20 并入的前置是 kernel 出一个**真发布**的 0.2.1 并让所有仓一起抬 pin (或把 `Toolset` 那层从内核收回 z-bot 侧), 不能把私有快照 `0.2.0-p20` 带进 main。
 
 **P16 网关送达三件套** — 锚点 §2#17 #18 · 边界 `channel/Gateway.java`, `channel/ChannelBus.java`, 新 `channel/TurnLease.java`, `channel/DeliveryLedger.java`, `channel/DeadTargets.java`, `channel/Supervisor.java`
 - **turn lease 按解析后 session_id** (照她的理由: 多对一 `switch` 会让按路由键的锁错位, 两个聊天交织刷同一份 transcript); 超时 fail-open + 身份校验幂等释放;
 - **delivery ledger**: `delivery_obligations` 三态 + `attempting` 崩溃后带"可能重复"前缀重投 + owner 用 pid+进程启动时间 + `sweep_recoverable`;
 - 自愈: 监督重启 (干净退出不重启) + 3 次/60s 熔断跳过自动续跑 + 陈旧锁自愈。
 - 验收: **真进程 kill -9 复现** —— 投递途中杀进程, 重启后消息以带标记形式重投且台账收敛; 双聊天打同一 session_id 不出现 `user;user` 楔死 (这条必须有真跑输出)。
+- **实测状态 (09-25 22:4x, 主编在 `/private/tmp/zbot-wt-p16` @ `235a9a7` 量)**: 杠① `rm -rf z-bot-core/target/surefire-reports && mvn -o test` → **481 条全绿** (48 个测试类; 对得上账: `git grep -c "@Test" d71657d` 求和 = 399 基线 + 本期五支新类 82 = DeadTargets 15 / DeliveryLedger 22 / GatewayDeliveryP16 18 / Supervisor 16 / TurnLease 11; 逐类读数见 `/tmp/p16_accept_r1.log`)。**先前我在心跳里把这条读成"412"，那是没有量具支撑的数**（412 在日志里一次都没出现过），按"每个数必须带着它的测量命令"这条红线改回实测值。杠④ 跑完后 `~/.zbot` 仍 8 项、`config.properties` md5 `2dadaed0` 与 `state.db` md5 `690ddbc0` 均未变 ⇒ **过**。
+  **但杠②③ 全部为零**: 该分支没有任何 `_doc/acceptance/p16/` (无注入脚本、无 LEDGER、无 EVIDENCE), 上面那条"真进程 kill -9"验收**没做过** —— 现在能证的只有进程内单测。四个新类经 `git grep` 核实确有生产消费者 (`ChannelBus`/`Gateway`), 不是红线 2 禁的 0 消费者抽象; 那条"裸并发对照组真能撞出『正在运行中』"的反空跑断言形状是对的 (读源码核实, 不是空断言)。**结论: P16 不并入, 直到杠②③ 补齐**。
 
 **P17 cron 投递闭环** — 锚点 §2#20 · 边界 `cron/*.java` + 一个只读的 `Channel` 投递接口引用
 - `claim_dispatch()` **先认领再跑** (一次性任务 at-most-once) + 心跳保鲜 (认领过期严格等于"进程死了");
 - 结果真投递: `local`(打印) / `origin` / 指定通道; 无 origin 时降级 local 而非报错 (她的 #43014 结论);
 - 锁: `threading`+`flock` 双层的 Java 等价 (`FileLock` 已有, 补重入计数)。
 - 验收: 跨进程双实例同刻不双跑 (两个 JVM + 同一 cron 目录, 给出两边日志); 一次真 60s 级任务的投递实据。
+- **实测状态 (09-26 01:5x—02:0x, 主编在 `w2-p17`@`13b1868` 量完、并入 `main`@`a73dcc6` 后在合并树复量)**: 四杠全绿 ⇒ **已并入 main**。
+  杠① `rm -rf z-bot-core/target/surefire-reports && mvn -o test` 分支 **453** 条 ×3、合并树 **465** 条 ×3 (411 main + 54 本期;
+  合并前 `git merge-tree --write-tree main w2-p17` 预演无冲突并预测 465, 合并后 `git grep -c "@Test"` 求和兑现), 每跑 socket 类错误 0 次;
+  杠② **27 支注入** = 20 RED-OK / 5 PARTIAL / 2 GREEN-BUT-MUTATED / 0 BROKEN、27/27 逐字节还原 —— 那 2 支 (M8 等锁上限、M9 gateway 装配线)
+  进程内单测结构性看不见, 改由真进程 E2E 判红并留了原文与还原后的重绿;
+  杠③ 真 JVM ×7 + 真 `kill -9` + 两个真进程抢同一把 `.jobs.lock` ⇒ **33/33**, 合并树另跑 3 整跑逐跑 33/33;
+  杠④ `~/.zbot` 8 项、`config.properties`/`state.db` 两个 md5 一字未动。全量读数 `_doc/acceptance/p17/EVIDENCE.md`。
+  **两处如实记**: ① "邻居攥锁 ⇒ 等满 30s ⇒ 降级为进程内锁" 这条**正向**跨进程没证 (E 段窗口 20s, 它是"等得到"的证据不是"等不到"的证据);
+  ② 合并树首跑 **30/32** —— 追出来是**量具自己造的假红**: 拿"已落账认领"那行日志当 `kill -9` 的扳机, 而它打在事务体内、
+  账要等 `writeStore()` 的 `ATOMIC_MOVE` 才落盘。独立探针 20 轮量这个窗口 (`~/.cache/zbot-p17/race_probe.py`):
+  看见日志就杀 ⇒ 盘上没账 2/10, 而"日志→落盘"延迟 min 0.1ms / p50 0.2ms / max 8.8ms 且 10/10 读得到
+  ⇒ **产品的"先落账再跑"没被违反, 违反的是"等 A 断言 B"这条量具纪律**。改法不是放宽而是换尺: 新增 C1b 拿因果当扳机
+  (stub 真收到这条请求 ⇒ 盘上必须已读得到账, 谁把写盘挪到跑之后再发它就当场判红), 条数 32→33, 取证过程记 EVIDENCE §5.5。
 
 ### W3 — 上下文/工具面/命令端 (4 代理并行)
 
@@ -323,6 +352,12 @@ _(W1 起逐期追加)_
   | 实测: ① 最终树 `Tests run: 411, Failures: 0, Errors: 0, Skipped: 0` × 3 跑 rc=0、每跑 socket 类错误 `grep -c` = 0（411 = 基线 399 + `ChannelBindTest` 11 + `ProfileIsolationTest` 新增 1；此前 410 那三跑量的是加最后一条测试之前的树）② 8 支注入 = **7 RED-OK / 1 PARTIAL / 0 GREEN-BUT-MUTATED**，`LEDGER.tsv` 由脚本自己写；那 1 支 `PARTIAL` 是 M6（`resolve()` 钉成永远回环）额外红了 `consoleUrlReportsTheActualBindNotAHardcodedLoopback` —— 红得对，是我推期望集时漏的一格，按纪律不洗成 RED-OK ③ **E2E 22/22**，且提交前按最终树重打包重跑过一次（同次命令对 21 个源文件前后 md5 比对 ⇒ `SRC_MD5_STABLE=yes`；变异量具按字节还原过这些文件，mtime 不可信）④ `entries=8`、`2dadaed0→2dadaed0`、`690ddbc0→690ddbc0`。
   | 决定性两条: **E3** 邻居占住 `127.0.0.1:P` 时缺省 `serve` ⇒ `rc=1` + `java.net.BindException: Address already in use`，且**没有**先印"已启动"；**E4** 同一处境下 `--host 0.0.0.0` 照样绑上（lsof 按 pid 过滤读到 `*:P`），而 curl 打到 `127.0.0.1:P` 拿到邻居盖章串 `FOREIGN-NEIGHBOR-OWNED-THIS-PORT` —— E4 就是修前缺省的处境，它是这一项的**必要性**证据。
   | 如实记: "顺带收益：1/9 抖动归零"**已撤回**（修复后共 24 轮全量 0 复现，但同一棵树只 12 轮 ⇒ 按 1/9 先验仍有 24% 的运气概率，打到 20% 以下要 14 轮、压速率上界到 1% 以下要 40 轮 ⇒ 只主张机制封死，不主张速率归零，留作长期观测项见 §6）；`bind.host` 配置项**没做**（`BotConfig` 无消费者 = 红线 2），飞书/钉钉的 `host` 重载目前只被守卫测试消费，接线归 P21；无 TLS/鉴权（`/bot/chat` 无鉴权本身仍在，收口归 P26）；Windows/Linux 未实测。
+
+- 2026-09-26 **P17 cron 投递闭环** ✅ 并入 main（`a73dcc6` = merge `w2-p17`@`13b1868`）: 一次性任务**先落账再跑**（`claimDispatch` 写 `dispatches`/`runClaim` 才发起副作用）+ 认领心跳保鲜（过期严格等于"那个进程死了"）+ at-most-once 额度 + 双层锁（进程内监视器 + 跨进程 `FileChannel.tryLock`，30s 上限内等不到才降级）+ 结果按 job 的 `deliver` 真投（`local` / `origin` 缺失时降级 local 不报错 / 指定通道，拉模式 HTTP 控制台被剔出投递目标）。
+  | 复算: ①`rm -rf z-bot-core/target/surefire-reports && mvn -o test` ×3（分支一遍、合并树一遍）②`python3 _doc/acceptance/p17/p17_mutation.py` ③`mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p17/p17_e2e.py` ④`ls -A ~/.zbot | wc -l` + `md5 -q ~/.zbot/config.properties` + `md5 -q ~/.zbot/state.db`
+  | 实测: ① 分支 `Tests run: 453, Failures: 0, Errors: 0, Skipped: 0` ×3；合并树 `Tests run: 465`（= main 411 + 本期 54，`git grep -c "@Test"` 求和）×3、每跑 socket 类错误 0 次 ② 27 支注入 = **20 RED-OK / 5 PARTIAL / 2 GREEN-BUT-MUTATED / 0 BROKEN**（`awk` 数不出来，按列读：`python3 -c "import csv,collections;…"` 对 `LEDGER.tsv` 的 `verdict` 列求和），`LEDGER.tsv` 脚本自写、`restored` 列 27 行全 `True`（每轮注入后按 md5 与被注入源文件对拍）③ **33/33**（真 JVM ×7、真 `kill -9`、两进程抢一把 `.jobs.lock`：E2「攥锁期间写请求 20s 没返回且盘上没多这条」+ E3「释放后 20.0s 落定」+ E0b/E0c 邻居 JVM `tryLock` 双向取证），合并树另 3 整跑逐跑 33/33 ④ `entries=8`、`2dadaed0→2dadaed0`、`690ddbc0→690ddbc0`。
+  | M8/M9 这两支**单测杀不掉**的（装配线、等锁上限）按纪律如实记 `GREEN-BUT-MUTATED`，另在真进程层给判红原文：M8 ⇒ E2/E4 红、还原重跑回绿；M9 ⇒ A3/A4/B2/B3 红（`lastDelivery='ok'` 就是"投给拉模式控制台却被记成静默成功"那个洞的真身）、还原重打包 32/32 回绿。
+  | 本期被推翻的一条: 合并树首跑 **30/32**（C2/C3 红）差点记成"P11c×P17 的合并缺陷" —— `git diff --stat 13b1868 a73dcc6 -- z-bot-core/src/main/java/com/zifang/z/bot/cron/ _doc/acceptance/p17/` **输出为空**先排除合并，再 20 轮独立探针量出"日志行→账落盘"窗口 0.1–8.8ms（10/10 读得到）⇒ **量具拿日志当 `kill -9` 扳机，自己把账杀在移动之前**（K 模式 2/10 中）。修的是量具：加 C1b，把扳机换成因果（stub 真收到请求 ⇒ 盘上必须有账），条数 32→33、合并树 3 整跑 33/33。全过程 `_doc/acceptance/p17/EVIDENCE.md` §5.5。
 
 ---
 
