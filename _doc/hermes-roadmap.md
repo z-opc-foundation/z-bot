@@ -262,3 +262,52 @@
 **真渲染验收** (起真实 serve + 内置浏览器实测, 非代码断言): 页面骨架/搜索框/管理区渲染无 console 错误; 模型目录真拉到 6 个模型; cron UI 加→行出现→删→count 归 0 回路通过 (残留 jobs.json 已清理回 pre-state); 会话搜索 18→3 条且清空恢复; 技能页渲染正常。
 
 **单测**: 219/219 连续 3 跑绿 (新增 3: HttpChannelTest cron 增删暂停恢复回路 / 校验拒绝 / 无 scheduler 分支; setUp 注入 CronScheduler 使 status tools=2→3)。
+
+### P10d TUI 升级 (JLine 3 + 补全 + 分屏) ✅ 完成 (2026-09-25)
+
+**目标**: 把终端 REPL 从自研 raw 模式升级到 JLine 3 — 方向键历史 (↑↓)、Tab 补全 (含 `/switch <会话id>` 二级补全)、输入高亮 (斜杠命令绿粗体 / 反引号代码青色)、右分栏状态条 (model/step/tokens 常驻 prompt 行右边缘)。行为契约与 `RawTerminalReader` 完全对齐: Ctrl-C 抛 `IOException("interrupted")`、Ctrl-D 空行返 null、非 TTY 自动降级行模式。
+
+**选型**: JLine 3.24.1 (已核 `javap` class 版本 52 = Java 8 字节码, 3.23/3.21 同样, 本仓全线 Java 8 兼容)。
+
+**升级方案 (代码结构)**:
+- 新增 `ui/LineEditor`: 统一门面, `Mode{JLINE, FALLBACK}`
+  - `create(historyFile, extraCompletions)`: TerminalBuilder→LineReaderBuilder 装配 completer/highlighter/HISTORY_FILE; **任何异常或 dumb 终端都降级, 永不抛**
+  - `readLine(prompt, rightPrompt)`: JLINE 走 `LineReader.readLine(4参, 带右分栏)`; `UserInterruptException`→打印 `^C` 后抛 `IOException("interrupted")` (契约对齐), `EndOfFileException`→null; FALLBACK 打印 prompt (右状态贴后面) 后走行模式
+  - `SlashCompleter`(package 级, 可单测): 首词 `/` 开头→前缀匹配命令池 (由调用方供给, 原计划匹配 `RawTerminalReader.SLASH_COMMANDS` 已被推翻); 第 1 词 `/switch` 且 wordIndex≥1→补会话 id (由 supplier 供给, 测试注入)
+  - `InputHighlighter`(package 级, 可单测): 首 token 斜杠命令绿粗体, 成对反引号段青色, 其余原样
+  - **fallback 懒加载**: `RawTerminalReader` 构造会跑 stty 并备份 `~/.zbot/.stty.bak` → 延迟到首次 readLine 才构造, 保证 `create()`/`close()` 在测试里零副作用
+- `RawTerminalReader`: 命令清单改为注入 (见下方实测收口 — 原"`SLASH_COMMANDS` 改 public"的方案被推翻)
+- `TerminalUI`: 抽 `promptText()` (prompt() 改为打印它), 新增 `rightStatus(model, step, tokens)` (右分栏快照, 格式仿 printStatusBar)
+- `TerminalChannel.run()`: `RawTerminalReader` 换 `LineEditor.create(...)`; 每轮 `readLine(promptText(), rightStatus())`; 右状态取 stepCount/tokenEstimate 快照 (仅进入下一轮 readLine 前刷新)
+
+**实测收口 (本批全部完成并提交)**:
+
+- **接手时该批从未编译过** — `mvn -o test` 基线直接 BUILD FAILURE, 4 个编译错全在 `LineEditor`:
+  ① `LineReader.readLine` 4 参签名是 `(prompt, rightPrompt, mask, buffer)` 不是 `(prompt, "", null, rightPrompt)`, 且传裸 null 会与 `MaskingCallback` 重载歧义 → 必须 `(Character) null` 消歧;
+  ② JLine 3.24 的 `Highlighter.setErrorPattern/setErrorIndex` 是 **abstract 而非 default**, 必须实现;
+  ③ `AttributedStyle.Color.GREEN` 不存在 — 3.24 是 `int` 常量, 用 `AttributedStyle.DEFAULT.foreground(AttributedStyle.GREEN).bold()`;
+  ④ 测试里 `Candidate.getDisplayName()` 不存在 → 用 `displ()`。
+  ⇒ 教训: "已完成 (未提交)" 清单里任何一项没跑过编译器就不算数。
+
+- **补全池改注册表派生 (修掉本批自带的双份清单)**: 原方案 `SlashCompleter` 前缀匹配 `RawTerminalReader.SLASH_COMMANDS` (18 条手写), 而 `SlashRegistry` 有 19 条注册 (18 唯一) — 手写清单漏了 `/stop /steer /queue /compress /rollback /checkpoints /cron /background /agents` **9 条**, Tab 补不出来。
+  现: `LineEditor.create(historyFile, commandNames, sessionIds)` 三参; 命令池由调用方 (`TerminalChannel.slashCommandPool()`) 从 `slash.all()` ∪ `RawTerminalReader.LOCAL_COMMANDS` 拼出;
+  `RawTerminalReader.SLASH_COMMANDS` 删除 → 换成 `LOCAL_COMMANDS` (9 条终端私有: /status /theme /feedback /confirm /help /? /exit /quit /q) + 实例 `setSlashCommands()` (降级路径的 Tab 也吃同一份池)。
+- **`/help` 表同样注册表派生**: `TerminalUI.printCommandTable(List<String[]>)` 不再自带 16 行硬编码, 由 `TerminalChannel.commandRows()` = 注册表 18 条 + 终端私有 6 条 = **25 行** (实测启动面板逐行核对); 私有命令说明收在 `LOCAL_DOC` 一处, 别名 (/quit /q /?) 折进 /exit 条目不进清单。
+- **history 落 `<configDir>/history`** (原写死 `user.home/.zbot/history` 违反红线 1); `agent.getConfig()==null` (测试桩) 时传 null 即不持久化。
+- **单测 9 例** (`LineEditorTest`, 计划 6 例): dumb 终端降级不抛 / `create()` 任意入参不抛 / **补全池点名 9 条注册表命令** (`/check`→唯一候选 `/checkpoints`) / 非斜杠首词 0 候选 / `/switch` 二级补会话 id / supplier 返 null 不炸 / 斜杠首词 `styleAt(0)==DEFAULT.foreground(GREEN).bold()` 且参数段默认 / 反引号成对区间青、区间外默认、**未闭合反引号不高亮** / 空 buffer→`AttributedString.EMPTY`。
+  高亮断言走 `AttributedString.styleAt(i)` 与构造出的期望 style 比相等, 不绑 SGR 字符串 (避开 palette 归一化抖动)。
+- **全量 228/228 连续 3 跑绿** (219 基线 + 9 新增), 每轮先 `rm -rf target/surefire-reports` 再取 `MVN_RC`。
+- **真 pty 实测 11/11 通过** (`/tmp/pty_tui.py`, `pty.fork()` 起 `java -jar z-bot-core.jar repl --config-dir /tmp/zbot-pty --sandbox /tmp/zbot-pty/workspace`, 断言跑完打印 PASS/FAIL 逐条):
+  A1 启动面板命令表 · A2 右分栏 `abab6.5s-chat • step=0 • tokens=0` 常驻 prompt 行右缘 · A3 `/checkp`+TAB 补成 `/checkpoints` 并执行 (全文无"未知命令") · A4 ↑ 历史回带后再执行一次 ("暂无 checkpoint" 出现 ≥2 次) · A5 `/help` 含 /rollback /agents /background /compress · A6 斜杠命令绿粗体 (`\x1b[32;1m`) · A7 反引号段青色 (`\x1b[36m`) · A8 `/exit` 退出码 0 · A9 退出后 `stty -a` 无 `-icanon`/`-echo` (终端已恢复) · A10 `<configDir>/history` 落 3 条带时间戳 · A11 全程未误发 chat 请求。
+- **pty 量具坑 (值得单记)**: JLine 进 `readLine` 会发 smkx (`\x1b[?1h\x1b=`) 打开**光标键应用模式**, ↑ 的真实字节是 `\x1bOA` 不是 `\x1b[A`。第一版脚本发 `\x1b[A` → ESC 被吞、`[A` 当字面量入 buffer、回车把它当普通消息**打了一次真实 minimax 请求** (拿回 429 才暴露)。改 `\x1bOA` 后 A4 通过 — 量具错, 不是产品错; 顺手加 A11 守卫防同类泄漏。
+- **隔离实测**: `--config-dir` 跑完 `~/.zbot/` **无** `history` 新文件 (红线 1 达标)；但 `~/.zbot/state.db` mtime 变了 ⇒ 暴露新缺陷: `BotConfig.stateDbPath` 缺省写死 `user.home/.zbot/state.db`, 不吃 configDir → `--config-dir` 多 profile 下会话库仍共享一个文件。**记入 v2 修复清单** (`configDir==null` 时才回落 user.home, 与 memories/skills/cron 同一套口径)。
+- 本批 pre-state (`ls ~/.zbot/` 7 项 + `.stty.bak` 空文件) 实测后未变动, /tmp 临时目录用完即删。
+
+**测试注意事项 (红线继承)**:
+- 单测**不得**触发 `RawTerminalReader` 构造 (stty + 写 `~/.zbot/.stty.bak`) → 只测 package 级 completer/highlighter 与 `create()/close()`; fallback readLine 不进单测, 归 pty 实测。实测确认: `LineEditor.create()` 在无 tty 下走 DumbTerminal→FALLBACK, 不建 fallback 读取器, 零副作用。
+- pty 实测前记录 pre-state (`ls ~/.zbot/`), 用 `--config-dir` 独立目录避免污染真实数据。
+- 断言 ANSI 用 `\u001b[` 存在性 + 分段计数, 不绑死 JLine 具体 SGR 序列 (避免版本抖动假红)。
+
+**P10 剩余子项 (P10d 之后)**:
+- P10e: README.md (7 仓欠账) + `<revision>` 0.2.0→0.3.0
+- P10f: 0.3.0 发 Central (走既有 dry-run→deploy→repo1 同步→pull 集成验证流程) + 全链路回归验收

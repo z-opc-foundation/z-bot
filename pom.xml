@@ -67,6 +67,7 @@
             必须跟 kernel 的发布线走 (0.1.1 起 kernel-tool 才带 ToolArguments).
         -->
         <z-agent-kernel.version>0.2.0</z-agent-kernel.version>
+        <jline.version>3.24.1</jline.version>
         <okhttp.version>4.12.0</okhttp.version>
         <jackson.version>2.13.5</jackson.version>
     </properties>
@@ -144,6 +145,15 @@
                 <groupId>io.github.yuku123</groupId>
                 <artifactId>z-agent-kernel-credential</artifactId>
                 <version>${z-agent-kernel.version}</version>
+            </dependency>
+
+            <!--
+                TUI 行编辑 (历史/Tab 补全/高亮); 3.24.1 class 版本 52 = Java 8 字节码.
+            -->
+            <dependency>
+                <groupId>org.jline</groupId>
+                <artifactId>jline</artifactId>
+                <version>${jline.version}</version>
             </dependency>
 
             <!--

@@ -1,5 +1,7 @@
 package com.zifang.z.bot.ui;
 
+import java.util.List;
+
 /**
  * z-bot 终端 UI 工具集 — 对标 OpenCode / Hermes / Claude Code TUI。
  *
@@ -132,31 +134,18 @@ public final class TerminalUI {
     }
 
     /**
-     * 打印命令列表（用于 /help 输出）。
+     * 打印命令列表（用于启动面板与 /help）。
+     *
+     * <p>行由调用方从 {@code SlashRegistry} + 终端私有命令拼出 — 这里不再维护第二份清单，
+     * 否则注册表加命令而本表漏一行，{@code /help} 就开始撒谎。</p>
+     *
+     * @param rows 每行 {@code {命令名, 说明}}
      */
-    public static void printCommandTable() {
+    public static void printCommandTable(List<String[]> rows) {
         System.out.println(BOLD + PRIMARY + "  ⚡ Slash Commands" + RESET);
         System.out.println();
-        String[][] rows = {
-                {"/new", "🆕  开启新会话（切换会话 id，清空记忆）"},
-                {"/clear", "🧹  仅清空当前会话记忆"},
-                {"/sessions", "🗂  列出本地会话（~/.zbot/sessions）"},
-                {"/switch", "🔀  切换会话：/switch <sessionId>"},
-                {"/status", "📊  显示当前状态（模型 / 工具 / 技能）"},
-                {"/tools", "🔧  列出已注册的工具"},
-                {"/skills", "📦  列出已同步的 Skill（来自 z-agent-center）"},
-                {"/sync", "🔄  手动触发 Skill 同步（拉取 center 的 pending skills）"},
-                {"/memory", "🧠  显示长期记忆摘要（来自 center）"},
-                {"/feedback", "👍👎  对上一次回复评分（1=赞 / -1=踩 / 0=中性）"},
-                {"/usage", "📈  当前会话统计（消息数 / token）"},
-                {"/model", "🤖  显示当前模型"},
-                {"/theme", "🎨  切换主题（cyan / green / amber）"},
-                {"/confirm", "⚠️  确认上次等待中的危险命令"},
-                {"/help", "❓  显示此帮助"},
-                {"/exit", "👋  退出（别名 /quit, /q）"},
-        };
         for (String[] r : rows) {
-            System.out.println("    " + PRIMARY + padRight(r[0], 12) + RESET + "  " + DIM + r[1] + RESET);
+            System.out.println("    " + PRIMARY + padRight(r[0], 14) + RESET + "  " + DIM + r[1] + RESET);
         }
         System.out.println();
         System.out.println(DIM + "  Tip: 输入 / 后按 Tab 补全命令" + RESET);
@@ -182,7 +171,21 @@ public final class TerminalUI {
      * 用户输入提示符。
      */
     public static void prompt() {
-        System.out.print(PRIMARY + "❯ " + RESET);
+        System.out.print(promptText());
+    }
+
+    /**
+     * 提示符文本（含 ANSI 颜色），供 {@code prompt()} 与 JLine 右分栏共用。
+     */
+    public static String promptText() {
+        return PRIMARY + "❯ " + RESET;
+    }
+
+    /**
+     * JLine 右分栏状态（prompt 行右边缘常驻显示, 替代流式状态条）。
+     */
+    public static String rightStatus(String model, int step, int tokens) {
+        return DIM_GRAY + " " + model + " • step=" + step + " • tokens=" + tokens + RESET;
     }
 
     /**

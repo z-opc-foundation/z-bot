@@ -27,15 +27,19 @@ import java.util.List;
  */
 public final class RawTerminalReader implements AutoCloseable {
 
-    private static final List<String> SLASH_COMMANDS = Arrays.asList(
-            "/new", "/clear", "/sessions", "/switch", "/status", "/tools", "/skills",
-            "/sync", "/memory", "/feedback", "/usage", "/model", "/theme",
-            "/confirm", "/help", "/exit", "/quit", "/q"
+    /**
+     * 终端通道私有命令 — 需要本地 UI 状态，不进 {@code SlashRegistry}。
+     * 也是未注入注册表时的缺省 Tab 补全池。
+     */
+    public static final List<String> LOCAL_COMMANDS = Arrays.asList(
+            "/status", "/theme", "/feedback", "/confirm", "/help", "/?", "/exit", "/quit", "/q"
     );
 
     private final InputStream in;
     private final boolean rawMode;
     private final Process sttyProcess;  // 用于 raw mode 转换（Unix）
+    /** Tab 补全池：注册表命令 ∪ {@link #LOCAL_COMMANDS}，由 {@code LineEditor} 注入。 */
+    private List<String> slashCommands = LOCAL_COMMANDS;
     private boolean closed = false;
 
     public RawTerminalReader() {
@@ -45,6 +49,12 @@ public final class RawTerminalReader implements AutoCloseable {
         this.sttyProcess = null;
         if (canRaw) {
             enableRawMode();
+        }
+    }
+
+    public void setSlashCommands(List<String> commands) {
+        if (commands != null && !commands.isEmpty()) {
+            this.slashCommands = commands;
         }
     }
 
@@ -159,7 +169,7 @@ public final class RawTerminalReader implements AutoCloseable {
         }
         // 找所有 prefix-match
         java.util.List<String> matches = new java.util.ArrayList<>();
-        for (String cmd : SLASH_COMMANDS) {
+        for (String cmd : slashCommands) {
             if (cmd.startsWith(cur)) {
                 matches.add(cmd);
             }

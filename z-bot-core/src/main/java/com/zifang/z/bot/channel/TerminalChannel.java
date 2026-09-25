@@ -4,15 +4,21 @@ import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
+import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.session.SessionManager;
 import com.zifang.z.bot.slash.SlashCommand;
 import com.zifang.z.bot.slash.SlashRegistry;
+import com.zifang.z.bot.ui.LineEditor;
 import com.zifang.z.bot.ui.MarkdownRenderer;
 import com.zifang.z.bot.ui.RawTerminalReader;
 import com.zifang.z.bot.ui.TerminalUI;
 
+import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -21,8 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>{@link BotAgent#chat(String, StreamListener)} 在调用线程上同步派发事件，
  * 所以这里不需要响应式流：收到什么就画什么，spinner 在第一个事件到来时停掉。</p>
  *
- * <p>输入走 {@link RawTerminalReader}：Unix TTY 下是 raw 模式（Tab 补全斜杠命令），
- * 管道 / 非 Unix 环境自动降级成行模式。</p>
+ * <p>输入走 {@link LineEditor}：JLine 3 模式带历史（↑↓）、Tab 补全、
+ * 输入高亮与右分栏状态；非 TTY 环境自动降级成行模式。</p>
  */
 public final class TerminalChannel {
 
@@ -45,12 +51,12 @@ public final class TerminalChannel {
     public void run() throws IOException {
         TerminalUI.printWelcome();
         renderStartupPanel();
-        TerminalUI.printCommandTable();
+        TerminalUI.printCommandTable(commandRows());
 
-        try (RawTerminalReader reader = new RawTerminalReader()) {
+        try (LineEditor editor = LineEditor.create(historyFile(), this::slashCommandPool,
+                this::sessionIdsForCompletion)) {
             while (running) {
-                TerminalUI.prompt();
-                String input = reader.readLine();
+                String input = editor.readLine(TerminalUI.promptText(), rightStatus());
                 if (input == null) {
                     break;
                 }
@@ -70,6 +76,59 @@ public final class TerminalChannel {
 
     public void stop() {
         running = false;
+    }
+
+    /** 右分栏状态（每次 readLine 前取一次快照）。 */
+    private String rightStatus() {
+        return TerminalUI.rightStatus(agent.getModel(), stepCount.get(), tokenEstimate.get());
+    }
+
+    /** 命令历史落在 {@code <configDir>/history}；无 config（测试桩）时不落盘。 */
+    private File historyFile() {
+        BotConfig cfg = agent.getConfig();
+        return cfg == null || cfg.getConfigDir() == null ? null : new File(cfg.getConfigDir(), "history");
+    }
+
+    /** Tab 补全池：SlashRegistry 派生 ∪ 终端私有命令 — 不再有第二份硬编码清单。 */
+    private List<String> slashCommandPool() {
+        List<String> names = new ArrayList<>();
+        for (SlashCommand c : slash.all()) {
+            names.add(c.name());
+        }
+        names.addAll(RawTerminalReader.LOCAL_COMMANDS);
+        return names;
+    }
+
+    /** 终端私有命令说明（/help 表用；别名折进主条目）。 */
+    private static final Map<String, String> LOCAL_DOC = new LinkedHashMap<String, String>();
+    static {
+        LOCAL_DOC.put("/status", "显示当前状态（模型 / 工具 / 技能）");
+        LOCAL_DOC.put("/theme", "切换主题（cyan / green / amber）");
+        LOCAL_DOC.put("/feedback", "对上一次回复评分（up / down / <int>）");
+        LOCAL_DOC.put("/confirm", "确认上次等待中的危险命令");
+        LOCAL_DOC.put("/help", "显示此帮助");
+        LOCAL_DOC.put("/exit", "退出（别名 /quit, /q, /?）");
+    }
+
+    /** 启动面板与 /help 的命令表 — 注册表派生，注册即出现在帮助里。 */
+    private List<String[]> commandRows() {
+        List<String[]> rows = new ArrayList<>();
+        for (SlashCommand c : slash.all()) {
+            rows.add(new String[]{c.name(), c.description()});
+        }
+        for (Map.Entry<String, String> e : LOCAL_DOC.entrySet()) {
+            rows.add(new String[]{e.getKey(), e.getValue()});
+        }
+        return rows;
+    }
+
+    /** /switch 的 Tab 补全词：现有会话 id 列表。 */
+    private List<String> sessionIdsForCompletion() {
+        List<String> ids = new ArrayList<>();
+        for (SessionManager.SessionSummary s : agent.listSessions()) {
+            ids.add(s.id);
+        }
+        return ids;
     }
 
     // ===== 对话渲染 =====
@@ -174,7 +233,7 @@ public final class TerminalChannel {
         } else if ("/confirm".equals(name)) {
             cmdConfirm();
         } else if ("/help".equals(name) || "/?".equals(name)) {
-            TerminalUI.printCommandTable();
+            TerminalUI.printCommandTable(commandRows());
         } else if ("/exit".equals(name) || "/quit".equals(name) || "/q".equals(name)) {
             TerminalUI.info("Bye~");
             running = false;
