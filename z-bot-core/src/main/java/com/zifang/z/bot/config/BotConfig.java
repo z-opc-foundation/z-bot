@@ -31,7 +31,47 @@ public final class BotConfig {
         LEGACY_PROVIDERS.put("spark", "https://maas-coding-api.cn-huabei-1.xf-yun.com/v2");
     }
 
-    private static final String DEFAULT_CONFIG_DIR = System.getProperty("user.home") + "/.zbot";
+    /**
+     * 红线 1 的单一解析点：{@code -Dzbot.home} &gt; {@code ZBOT_HOME} &gt; {@code ~/.zbot}。
+     *
+     * <p>{@code ZBOT_HOME} 这个名字在 {@code PairCommand} 的报错文案里已经写了很久，但此前
+     * 全仓没有任何一处真的读它 —— 多 profile 隔离实际只有 {@code --config-dir} 一条路。
+     * 系统属性那条分支同时是单测注入 profile 的口子（进程内改不了环境变量）。</p>
+     */
+    public static File defaultConfigDir() {
+        String home = trim(System.getProperty("zbot.home"));
+        if (home.isEmpty()) {
+            home = trim(System.getenv("ZBOT_HOME"));
+        }
+        return new File(home.isEmpty()
+                ? System.getProperty("user.home") + "/.zbot" : home);
+    }
+
+    /**
+     * 沙箱根的单一解析点：{@code --sandbox} &gt; {@code -Dzbot.sandbox} &gt;
+     * {@code <configDir>/workspace}。此前这条优先级链在 {@code AgentOptions}、
+     * {@code BotAgent.Builder}、{@code Sandbox} 各抄了一份，每份的缺省值都写死 {@code ~/.zbot}。
+     */
+    public static File resolveWorkspaceDir(File configDir, String cliOverride) {
+        String v = trim(cliOverride);
+        if (v.isEmpty()) {
+            v = trim(System.getProperty("zbot.sandbox"));
+        }
+        if (!v.isEmpty()) {
+            return new File(v);
+        }
+        return new File(configDir == null ? defaultConfigDir() : configDir, "workspace");
+    }
+
+    /** 会话 JSON 目录（一次性迁移入口）跟着 profile 走。 */
+    public File sessionsDir() {
+        return new File(configDir == null ? defaultConfigDir() : configDir, "sessions");
+    }
+
+    /** 沙箱根（{@code --sandbox}/{@code -Dzbot.sandbox} 都不给时的缺省档）。 */
+    public File workspaceDir() {
+        return resolveWorkspaceDir(configDir, null);
+    }
 
     private final File configDir;
     private final Map<String, Provider> providers = new LinkedHashMap<String, Provider>();
@@ -78,10 +118,11 @@ public final class BotConfig {
     }
 
     /**
-     * 读 {@value #DEFAULT_CONFIG_DIR}/config.properties；文件不存在时返回仅含环境变量的默认配置。
+     * 读 {@code <profile>/config.properties}（profile 见 {@link #defaultConfigDir()}）；
+     * 文件不存在时返回仅含环境变量的默认配置。
      */
     public static BotConfig load() {
-        return load(new File(DEFAULT_CONFIG_DIR));
+        return load(defaultConfigDir());
     }
 
     public static BotConfig load(File dir) {

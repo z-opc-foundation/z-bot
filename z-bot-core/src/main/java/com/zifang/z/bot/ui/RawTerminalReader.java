@@ -1,5 +1,6 @@
 package com.zifang.z.bot.ui;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
@@ -38,6 +39,8 @@ public final class RawTerminalReader implements AutoCloseable {
     private final InputStream in;
     private final boolean rawMode;
     private final Process sttyProcess;  // 用于 raw mode 转换（Unix）
+    /** {@code stty -g} 的落点：每个 reader 一份临时文件（写 {@code ~/.zbot} 会让两个 profile 的 REPL 互相踩掉对方的终端恢复）。 */
+    private String sttyBackup;
     /** Tab 补全池：注册表命令 ∪ {@link #LOCAL_COMMANDS}，由 {@code LineEditor} 注入。 */
     private List<String> slashCommands = LOCAL_COMMANDS;
     private boolean closed = false;
@@ -230,8 +233,11 @@ public final class RawTerminalReader implements AutoCloseable {
     private void enableRawMode() {
         try {
             // 保存当前设置（"sane"），切换到 raw -echo
+            File bak = File.createTempFile("zbot-stty-", ".bak");
+            sttyBackup = bak.getAbsolutePath();
             Runtime.getRuntime().exec(new String[]{"sh", "-c",
-                    "stty -g 2>/dev/null > ~/.zbot/.stty.bak; stty raw -echo 2>/dev/null"}).waitFor();
+                    "stty -g 2>/dev/null > \"$1\"; stty raw -echo 2>/dev/null", "zbot",
+                    sttyBackup}).waitFor();
         } catch (Exception e) {
             // fallback: ignore — reader will still work in line mode if raw failed
         }
@@ -239,11 +245,17 @@ public final class RawTerminalReader implements AutoCloseable {
 
     private void disableRawMode() {
         try {
-            // 恢复保存的设置
+            // 恢复保存的设置；备份只属于本进程，读完即删
+            if (sttyBackup == null) {
+                return;
+            }
             Runtime.getRuntime().exec(new String[]{"sh", "-c",
-                    "if [ -f ~/.zbot/.stty.bak ]; then stty \"$(cat ~/.zbot/.stty.bak)\" 2>/dev/null; fi"}).waitFor();
+                    "if [ -s \"$1\" ]; then stty \"$(cat \"$1\")\" 2>/dev/null; fi;"
+                            + " rm -f \"$1\"", "zbot", sttyBackup}).waitFor();
         } catch (Exception e) {
             // ignore
+        } finally {
+            sttyBackup = null;
         }
     }
 }

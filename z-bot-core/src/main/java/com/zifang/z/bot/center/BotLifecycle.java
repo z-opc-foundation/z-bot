@@ -7,7 +7,7 @@ package com.zifang.z.bot.center;
  * <ul>
  *   <li><b>bot-heartbeat</b> 每 30s 调一次 center 的 {@code /heartbeat}</li>
  *   <li><b>bot-skill-sync</b> 每 60s 拉一次 pending skills 落盘到
- *       {@code ~/.zbot/skills/<instanceCode>/<code>/SKILL.md}</li>
+ *       {@code <profile>/skills/<instanceCode>/<code>/SKILL.md}</li>
  * </ul>
  *
  * <p>线程都是 daemon，JVM 退出时不阻塞。</p>

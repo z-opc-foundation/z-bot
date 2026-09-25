@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * z-bot 内置工具集（对齐 z-opc 老 z-agent-bot 的 TerminalBot + ZAgent 注册面）。
  *
- * <p>沙箱根目录 = {@code ~/.zbot/workspace}，写/读/exec 都被约束在里面；
+ * <p>沙箱根目录 = {@code <profile>/workspace}（{@code --sandbox} 可覆盖），写/读/exec 都被约束在里面；
  * search 是只读遍历，允许指定任意目录（与老 bot 一致）。</p>
  */
 public final class BuiltinTools {

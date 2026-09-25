@@ -56,7 +56,7 @@ public class SessionsCommand {
 
     private static File configDirOf(SessionsCommand parent) {
         return parent == null || parent.configDir == null
-                ? new File(System.getProperty("user.home"), ".zbot") : parent.configDir;
+                ? com.zifang.z.bot.config.BotConfig.defaultConfigDir() : parent.configDir;
     }
 
     /**
