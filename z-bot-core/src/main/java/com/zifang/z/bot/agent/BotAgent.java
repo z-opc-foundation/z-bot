@@ -15,6 +15,7 @@ import com.zifang.z.agent.kernel.tool.ToolResult;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
+import com.zifang.z.bot.checkpoint.CheckpointManager;
 import com.zifang.z.bot.context.CompressorEngine;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
@@ -29,11 +30,15 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -100,6 +105,14 @@ public class BotAgent {
     /** 上下文压缩引擎（null = 未启用，如纯测试桩）；摘要走主 provider。 */
     private final CompressorEngine compressor;
     private final ContextEngine.Summarizer summarizer;
+    /** 影子 git checkpoint（null = 未启用）；破坏性工具执行前打快照。 */
+    private final CheckpointManager checkpoints;
+    /** 最近一次生效的快照 id，/rollback 不带参数时回滚到它。 */
+    private volatile String lastCheckpointId;
+
+    /** 执行前需要打快照的破坏性工具（写文件 / 任意命令 / Maven 构建都会改沙箱）。 */
+    private static final Set<String> CHECKPOINT_TOOLS = new HashSet<String>(
+            Arrays.asList("write_file", "exec", "mvn_build"));
 
     protected BotAgent(Builder b) {
         this.config = b.config;
@@ -126,6 +139,7 @@ public class BotAgent {
             this.compressor = null;
             this.summarizer = null;
         }
+        this.checkpoints = b.checkpointManager;
 
         if (centerClient != null && centerClient.isEnabled()) {
             this.lifecycle = registerAndStartLifecycle(centerClient, b.appCode);
@@ -370,8 +384,41 @@ public class BotAgent {
         listener.onEvent(new StreamEvent.ToolCallRequest(name, args, argsJson));
         String callId = tc.getId() == null || tc.getId().isEmpty()
                 ? ("call_" + name + "_" + System.currentTimeMillis()) : tc.getId();
+        String ck = snapshotBefore(name);
         ToolResult result = toolkit.execute(name, args);
+        settleCheckpoint(ck, result);
         emitToolResult(new ToolCall(callId, name, argsJson), result, listener);
+    }
+
+    /**
+     * 破坏性工具执行前打影子 git 快照；快照失败只记日志，绝不拦工具执行。
+     *
+     * @return 快照 id，非破坏性工具或失败时返回 null
+     */
+    private String snapshotBefore(String toolName) {
+        if (checkpoints == null || !CHECKPOINT_TOOLS.contains(toolName)) {
+            return null;
+        }
+        try {
+            String id = checkpoints.snapshot(toolName);
+            LOG.info("[BotAgent] checkpoint {} before {}", id, toolName);
+            return id;
+        } catch (Exception e) {
+            LOG.warn("[BotAgent] checkpoint 快照失败（不影响工具执行）: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 工具真执行了才认这个快照；被审批拦下（实际没跑）就丢弃，避免列表噪音。 */
+    private void settleCheckpoint(String ck, ToolResult result) {
+        if (ck == null) {
+            return;
+        }
+        if (result != null && Confirmations.isRequired(result)) {
+            checkpoints.discard(ck);
+            return;
+        }
+        lastCheckpointId = ck;
     }
 
     /** 工具结果回灌记忆 + 回抛事件；需要确认时设置 pendingConfirmation 并抛出暂停信号。 */
@@ -464,7 +511,9 @@ public class BotAgent {
     public String confirmTool(String toolName, String argsJson) {
         Map<String, Object> args = parseArgs(argsJson == null ? "{}" : argsJson);
         args.put(Confirmations.CONFIRMED_ARG, Boolean.TRUE);
+        String ck = snapshotBefore(toolName);
         ToolResult result = toolkit.execute(toolName, args);
+        settleCheckpoint(ck, result);
         if (result == null) {
             return "执行失败：工具 " + toolName + " 无返回";
         }
@@ -649,6 +698,50 @@ public class BotAgent {
         persistSession();
         return "已压缩: " + history.size() + " -> " + out.size() + " 条 (累计 "
                 + compressor.getCompressCount() + " 次)";
+    }
+
+    /**
+     * {@code /checkpoints [prune [n]]} — 列出沙箱快照；{@code prune n} 只保留最近 n 个（默认 20）。
+     */
+    public String checkpointManage(String args) {
+        if (checkpoints == null) {
+            return "未启用 checkpoint（config 模式启动或经 builder 注入后可用）";
+        }
+        try {
+            if (args != null && args.toLowerCase(Locale.ROOT).startsWith("prune")) {
+                String[] parts = args.trim().split("\\s+");
+                int keep = parts.length >= 2 ? Integer.parseInt(parts[1]) : 20;
+                int deleted = checkpoints.prune(keep);
+                return "已修剪 " + deleted + " 个 checkpoint（保留最近 " + keep + " 个）";
+            }
+            List<CheckpointManager.Entry> entries = checkpoints.list();
+            if (entries.isEmpty()) {
+                return "暂无 checkpoint（write_file/exec/mvn_build 执行前会自动打快照）";
+            }
+            StringBuilder sb = new StringBuilder("checkpoints (" + entries.size() + ")\n");
+            for (CheckpointManager.Entry e : entries) {
+                sb.append(e.id.equals(lastCheckpointId) ? "* " : "  ")
+                        .append(e.id).append("  ").append(e.time).append("  ")
+                        .append(e.subject).append('\n');
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            return "checkpoint 操作失败: " + e.getMessage();
+        }
+    }
+
+    /** {@code /rollback [id]} — 把沙箱恢复到指定快照，缺省最近一次。 */
+    public String rollbackCheckpoint(String id) {
+        if (checkpoints == null) {
+            return "未启用 checkpoint（config 模式启动或经 builder 注入后可用）";
+        }
+        try {
+            String target = checkpoints.rollback(id);
+            lastCheckpointId = target;
+            return "沙箱已回滚到 checkpoint " + target;
+        } catch (Exception e) {
+            return "回滚失败: " + e.getMessage();
+        }
     }
 
     public void reset() {
@@ -896,6 +989,8 @@ public class BotAgent {
         private ContextEngine.Summarizer summarizer;
         /** 纯测试桩关闭压缩（省一次摘要 LLM 调用）。 */
         private boolean noCompress;
+        /** 影子 git checkpoint；config 模式缺省自动建在 {@code <configDir>/checkpoints/store}。 */
+        private CheckpointManager checkpointManager;
         private BotCenterClient centerClient;
         private int maxSteps;
         private int maxTokens;
@@ -962,6 +1057,12 @@ public class BotAgent {
 
         public Builder withoutCompressor() {
             this.noCompress = true;
+            return this;
+        }
+
+        /** 覆盖默认 checkpoint 仓库位置（测试注入 TemporaryFolder 用）。 */
+        public Builder checkpointManager(CheckpointManager checkpointManager) {
+            this.checkpointManager = checkpointManager;
             return this;
         }
 
@@ -1034,6 +1135,10 @@ public class BotAgent {
             }
             if (appCode == null && config != null) {
                 appCode = config.getAppCode();
+            }
+            if (checkpointManager == null && config != null && config.getConfigDir() != null) {
+                checkpointManager = new CheckpointManager(
+                        new File(config.getConfigDir(), "checkpoints/store"), sandbox.root());
             }
             if (systemPrompt == null && centerClient != null) {
                 systemPrompt = augmentWithLongTermMemory(null, centerClient);

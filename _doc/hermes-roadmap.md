@@ -98,6 +98,24 @@
 - `/rollback [id]` 恢复; checkpoints 列表/prune
 - 验收: 单测(mock git 或真 git); E2E: 写文件→改坏→rollback 恢复
 
+> ✅ 完成 (09-25)。`checkpoint.CheckpointManager`: 纯 git CLI 影子库 — 仓库在
+> `<configDir>/checkpoints/store/.git`, 每条命令走 `GIT_DIR`+`GIT_WORK_TREE` env 指向沙箱
+> (沙箱内不落 .git); 每个快照挂 `refs/zbot/ckpt/<id12>` 引用, 列表/回滚/修剪全基于引用不依赖分支;
+> 回滚 = `read-tree` + `checkout-index -a -f` + `clean -fd` 精确还原快照时刻(快照后新增文件被清掉,
+> .gitignore 忽略过的文件本就未进快照、保留原样); 快照顺序按 `rev-list HEAD` 线性祖先序 —
+> `--sort=-creatordate` 只有秒级精度, 同秒快照顺序会抖(踩过: 同秒两连拍回滚到错的那次), 祖先序严格稳定。
+> 挂接: `executeToolCall`/`confirmTool` 在 write_file/exec/mvn_build 执行前打快照, 工具被审批拦下
+> (实际没执行)则 `discard` 丢弃避免列表噪音; 快照失败只 warn 不拦工具。
+> `/rollback [id]`(缺省最近) + `/checkpoints`(列表/prune n) 进 SlashRegistry 三端共用;
+> config 模式 Builder 自动建 manager, 测试可 `.checkpointManager(...)` 注入。
+> 两个 git 坑: for-each-ref 的 format 不支持 `%xXX` 转义(按字面输出, 分隔符必须用真实 tab 字符);
+> exec 未合并 stderr 导致 git 报错信息丢失(已修)。
+> 单测 10 个真 git 用例全绿(快照/回滚删新增/缺省最近/修剪/丢弃/非法 id 拒绝/只读工具不打快照/
+> slash 注册), 全模块 102/102; E2E (piped REPL + 本地 OpenAI stub 下发 tool_calls, 真实
+> BotAgent/BuiltinTools/git/store): WRITE1 写入 → WRITE2 写坏 → `/rollback` 恢复 good-version-v1,
+> `/checkpoints` 两条快照且 `*` 标最近, 影子库 2 refs, 沙箱内无 .git。
+> 自定义 provider code 必须写进 config.properties 的 `providers=` 列表, 否则静默回退 openai 官方端点。
+
 ### P5 delegate 子代理 — Hermes #6
 - `delegate_task` 工具: spawn 隔离上下文子 BotAgent(共享 provider/凭据, 独立 budget≤父 1/4, 禁 child-only 工具防递归)
 - 深度限制(max_spawn_depth) + 并发宽度(max_concurrent_children, 线程池)

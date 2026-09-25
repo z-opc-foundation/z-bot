@@ -320,6 +320,38 @@ public final class SlashRegistry {
                 return agent.compressNow(args);
             }
         });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/checkpoints";
+            }
+
+            @Override
+            public String description() {
+                return "沙箱快照列表: /checkpoints, /checkpoints prune [n] 修剪";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return agent.checkpointManage(args);
+            }
+        });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/rollback";
+            }
+
+            @Override
+            public String description() {
+                return "回滚沙箱到快照: /rollback [id]（缺省最近一次）";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return agent.rollbackCheckpoint(args);
+            }
+        });
         return r;
     }
 
