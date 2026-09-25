@@ -356,18 +356,29 @@ def clear_reports():
             os.remove(os.path.join(d, fn))
 
 
+MVN_MARKERS = ("classworlds", "surefirebooter", "maven.conf", "plexus")
+
+
 def foreign_mvn_running():
-    """跑前 ps：有别人的 mvn/surefire 就等（等待期间一个源文件都不碰）。"""
-    pr = sh(["ps", "-eo", "pid,command"])
+    """跑前 ps：有别人的 mvn/surefire 就等（等待期间一个源文件都不碰）。
+
+    只认 maven 真身留下的命令行标记（plexus classworlds 启动器 / surefirebooter）。
+    踩过的坑：拿 `grep mvn` 当判据会把**任何命令文本里提到过 mvn 的 shell**
+    （包括本棒自己的监控 shell、以及本脚本自己）当成邻居 ⇒ 越等越死。
+    """
+    pr = sh(["ps", "-axww", "-o", "pid=,command="])
     me = os.getpid()
     hits = []
-    for line in pr.stdout.decode("utf-8", "replace").splitlines()[1:]:
-        if "mvn" not in line and "surefire" not in line:
+    for line in pr.stdout.decode("utf-8", "replace").splitlines():
+        if not any(m in line for m in MVN_MARKERS):
             continue
-        pid = int(line.split()[0])
-        if pid == me or ZBOT in line:
+        try:
+            pid = int(line.split()[0])
+        except (IndexError, ValueError):
             continue
-        hits.append(line.strip()[:160])
+        if pid == me or ZBOT in line or "p20b_mutation.py" in line:
+            continue
+        hits.append(line.strip()[:200])
     return hits
 
 

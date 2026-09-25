@@ -32,6 +32,8 @@ LOGS = os.path.join(HERE, "logs")
 DRIVER = os.path.join(HERE, "P20bToolDriver.java")
 SERVER = os.path.join(HERE, "mcp_stub_server.py")
 STUB_KEY = "stub-key-not-real"
+# 真 key 125 字符、stub 19 字符：这条尺判的是"像真 key 那么长的东西有没有进产物"
+LONG_KEY_RE = re.compile(r"api\.key[=\" :]+[A-Za-z0-9_\-]{60,}")
 HOME_REAL = os.path.expanduser("~/.zbot")
 RESULTS = []
 
@@ -188,14 +190,22 @@ def judge_mcp(kv, logtext):
     check("M3 kill 命令真退出且传输层确认进程没了",
           kv.get("SEG1_KILL_RC") == "0" and is_true(kv.get("SEG1_DEAD_CONFIRMED")),
           "rc=%s wait=%sms" % (kv.get("SEG1_KILL_RC"), kv.get("SEG1_DEAD_WAIT_MS")))
-    check("M4 首探发生且 TTL 窗内吃缓存（真时间）",
-          i(kv.get("SEG1_PROBE_CALLS_AT_ANCHOR")) == 1
-          and len(samples) >= 1 and samples[0][2] == 1 and samples[0][0] < 30_000,
-          "anchor=%s samples=%s" % (kv.get("SEG1_PROBE_CALLS_AT_ANCHOR"), samples[:2]))
+    n_alpha = i(kv.get("SEG1_ALPHA_TOOL_COUNT"))
+    anchor_n = i(kv.get("SEG1_PROBE_CALLS_AT_ANCHOR"))
+    second_n = i(kv.get("SEG1_PROBE_CALLS_AFTER_SECOND_READ"))
+    check("M4 首探的出处可指：取一次 schema ⇒ 该桥每个槽位探一次（alpha 发了 %s 个工具就是 %s 次），"
+          "TTL 窗内再取一次一条都不许多（真时间）" % (n_alpha, n_alpha),
+          n_alpha == 2 and anchor_n == n_alpha and second_n == anchor_n
+          and len(samples) >= 1 and samples[0][2] == anchor_n and samples[0][0] < 30_000,
+          "alpha_tools=%s anchor=%s second_read=%s samples=%s"
+          % (n_alpha, anchor_n, second_n, samples[:2]))
     mid = [s for s in samples if 30_000 <= s[0] < 60_000]
-    check("M5 越过 TTL 后重探、但宽限窗内不摘工具（抖动不写缓存）",
-          bool(mid) and all(s[1] for s in mid) and max(s[2] for s in mid) >= 2,
-          "30-60s 样本=%s" % (mid[:3],))
+    check("M5 越过 TTL 后重探、但宽限窗内不摘工具（30–60s 窗必须真有样本；重探是步进的、不是每轮都探）",
+          bool(mid) and all(s[1] for s in mid)
+          and max(s[2] for s in mid) > anchor_n
+          and max(s[2] for s in mid) <= anchor_n * 3,
+          "30-60s 样本=%d 条 probes=%s exposed=%s"
+          % (len(mid), sorted(set(s[2] for s in mid)), set(s[1] for s in mid)))
     hidden = i(kv.get("SEG1_FIRST_HIDDEN_MS"))
     check("M6 持续失败过了 60s 宽限窗必须把工具从外发清单摘掉（真时间读数）",
           60_000 <= hidden <= 90_000, "first_hidden=%dms" % hidden)
@@ -228,30 +238,66 @@ def judge_mcp(kv, logtext):
           "%s / %s" % (kv.get("SEG2_NAMES_AFTER_STOP"), kv.get("SEG2_EXPOSED_AFTER_STOP")))
 
 
+def scan_roots(roots):
+    """返回 (抓到长 key 的文件, stub key 出现次数, 含 api.key= 行的文件数)。"""
+    hits, stub, key_lines = [], 0, 0
+    for root in roots:
+        for sub, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for fn in files:
+                p = os.path.join(sub, fn)
+                try:
+                    data = io.open(p, encoding="utf-8", errors="replace").read()
+                except OSError:
+                    continue
+                if LONG_KEY_RE.search(data):
+                    hits.append(os.path.relpath(p, ZBOT))
+                if re.search(r"api\.key\s*=", data):
+                    key_lines += 1
+                stub += data.count(STUB_KEY)
+    return hits, stub, key_lines
+
+
+def stub_key_line(root_dir):
+    """临时 profile 的 config.properties 里那一行 key 的值是不是 stub（只比长度与前缀，不外泄内容）。"""
+    p = os.path.join(root_dir, "config.properties")
+    if not os.path.exists(p):
+        return False, 0
+    data = io.open(p, encoding="utf-8").read()
+    m = re.search(r"minimax\.api\.key=(\S+)", data)
+    return bool(m) and m.group(1) == STUB_KEY, len(m.group(1)) if m else 0
+
+
 def key_leak_scan():
-    """产物里不许出现"像真 key"的长串（真 key 125 字符，stub 只有 19）；同一条反向钉住 stub 真进了产物。"""
-    hits = []
-    stub_seen = 0
-    for root, dirs, files in os.walk(HERE):
-        dirs[:] = [d for d in dirs if d != "__pycache__"]
-        for fn in files:
-            p = os.path.join(root, fn)
-            try:
-                data = io.open(p, encoding="utf-8", errors="replace").read()
-            except OSError:
-                continue
-            if re.search(r"api\.key[=\" :]+[A-Za-z0-9_\-]{60,}", data):
-                hits.append(os.path.relpath(p, ZBOT))
-            stub_seen += data.count(STUB_KEY)
-    for root, dirs, files in os.walk(HOME):
-        for fn in files:
-            data = io.open(os.path.join(root, fn), encoding="utf-8", errors="replace").read()
-            if re.search(r"api\.key[=\" :]+[A-Za-z0-9_\-]{60,}", data):
-                hits.append(os.path.join("TMPHOME", fn))
-            stub_seen += data.count(STUB_KEY)
-    check("K1 产物里没有任何长 api.key（真 key 125 字符）泄漏", not hits, ",".join(hits[:3]))
-    check("K2 同一条反向钉：stub key 真进了产物（临时配置 + 驱动读数）",
-          stub_seen >= 3, "stub 出现 %d 次" % stub_seen)
+    """产物里不许出现"像真 key"的长串（真 key 125 字符，stub 只有 19）。
+
+    三条一起才算数，少一条就是自欺：
+      K0 尺的自证：125 字符的<b>合成诱饵</b>必须被同一条正则抓到（抓不到 ⇒ K1 的零命中没有意义）；
+      K1 零命中：本轮所有产物 + 临时 profile 里没有任何 60+ 字符的 api.key；
+      K2 活的猎物：stub key 真进了被测进程读的那个 config.properties（值逐字比、只报长度）。
+    """
+    decoy = tempfile.mkdtemp(prefix="zbot-p20b-decoy-")
+    try:
+        with io.open(os.path.join(decoy, "config.properties"), "w", encoding="utf-8") as fh:
+            fh.write("minimax.api.key=%s\n" % ("SYNTHETICDECOYKEY" * 9)[:125])
+        caught, _s, lines = scan_roots([decoy])
+        check("K0 尺的自证：125 字符合成诱饵被同一条正则抓到", len(caught) == 1 and lines == 1,
+              "抓到 %d 个文件" % len(caught))
+    finally:
+        shutil.rmtree(decoy, ignore_errors=True)
+    hits_art, stub_art, lines_art = scan_roots([HERE])
+    hits_home, stub_home, lines_home = ([], 0, 0)
+    if HOME and os.path.isdir(HOME):
+        hits_home, stub_home, lines_home = scan_roots([HOME])
+    check("K1 产物/临时 profile 里没有任何 60+ 字符 api.key（真 key 125 字符）泄漏",
+          not hits_art and not hits_home, ",".join((hits_art + hits_home)[:3]))
+    pinned, key_len = stub_key_line(HOME) if HOME else (False, 0)
+    check("K2 同一条反向钉住活的猎物：stub key 就是 config.properties 里 minimax.api.key 的值"
+          "（该文件确实在扫描面里，长度只报不印）",
+          pinned and key_len == len(STUB_KEY) and stub_home >= 1 and lines_home >= 1
+          and stub_art >= 1,
+          "临时 profile 命中 %d 次/%d 个 key 行，长度=%d，产物侧 %d 次/%d 个 key 行"
+          % (stub_home, lines_home, key_len, stub_art, lines_art))
 
 
 def main():

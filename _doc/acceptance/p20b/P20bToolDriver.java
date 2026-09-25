@@ -110,9 +110,24 @@ public final class P20bToolDriver {
         p("SEG1_NAMES_AFTER_START", tk1.getToolNames());
         p("SEG1_TOOLSET_OF_T1", tk1.toolsetOf("mcp-alpha-t1"));
         p("SEG1_TOOLSETS_IN_USE", tk1.toolsetsInUse());
+        // 首探读数的出处必须钉得下来：注册之后到这里为止只有 getExposedToolNames() 这一处
+        // 会碰可用性（getToolNames / toolsetOf / toolsetsInUse 都只读描述符）。内核把
+        // TTL 缓存挂在<b>每个 ToolDescriptor</b> 上，而 McpBridge 是一个 server 一个
+        // ConnectionProbe 计数器 ⇒ "取一次 schema 探了几次" = 该 server 发了几个工具。
+        int alphaTools = 0;
+        for (String n : tk1.getToolNames()) {
+            if (n.startsWith("mcp-alpha-")) {
+                alphaTools++;
+            }
+        }
+        p("SEG1_ALPHA_TOOL_COUNT", alphaTools);
         p("SEG1_EXPOSED", tk1.getExposedToolNames());
         long anchor = System.currentTimeMillis();
         p("SEG1_PROBE_CALLS_AT_ANCHOR", a.probeInvocations());
+        // "TTL 窗内吃缓存"的正证：同一代际、同一不可用名单下再取一次 schema，
+        // 探针计数一跳都不许多（外发清单也要一模一样）
+        p("SEG1_EXPOSED_AGAIN", tk1.getExposedToolNames());
+        p("SEG1_PROBE_CALLS_AFTER_SECOND_READ", a.probeInvocations());
         p("SEG1_TK_IDENTITY", System.identityHashCode(tk1));
 
         // 掐死 alpha 的 server 进程（真 kill + 等 kill 命令退出 + 等传输层真的看到进程没了）
@@ -142,9 +157,10 @@ public final class P20bToolDriver {
         while (System.currentTimeMillis() < deadline) {
             long el = System.currentTimeMillis() - anchor;
             boolean exposed = tk1.getExposedToolNames().contains("mcp-alpha-t1");
-            if (samples < 4 || !exposed) {
-                p("SEG1_SAMPLE", el + "|" + exposed + "|probes=" + a.probeInvocations());
-            }
+            // 观察面：整个 80s 窗<b>每轮都打印</b>。上一棒是 `if (samples < 4 || !exposed)`，
+            // 1.5s 一轮 ⇒ 打出来的 4 条全落在 0–6s，30–60s 那扇窗里一条样本都没有，
+            // 于是 M5 的"30–60s 样本"天然为空 —— 那是量具空跑，不是产品没行为。
+            p("SEG1_SAMPLE", el + "|" + exposed + "|probes=" + a.probeInvocations());
             samples++;
             if (!exposed && !hiddenSeen) {
                 hiddenSeen = true;
