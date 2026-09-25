@@ -417,7 +417,10 @@ public final class DeliveryLedger {
                             "INSERT OR REPLACE INTO " + TABLE + " (obligation_id, session_key, platform,"
                                     + " chat_id, content, state, attempts, created_at, updated_at,"
                                     + " owner_pid, owner_started_at, last_error)"
-                                    + " VALUES (?,?,?,?,?,?,?,0,?,?,?,?,NULL)");
+                                    // 12 列：attempts 恒 0（新建）、last_error 恒 NULL，其余 10 个是参数。
+                                    // 占位符个数必须 = 10 —— 多一个就是 SQLite 报「13 values for 12 columns」，
+                                    // 而本类是 best-effort（异常只记 WARN 不外抛），写不进去会静默成常态。
+                                    + " VALUES (?,?,?,?,?,?,0,?,?,?,?,NULL)");
                     try {
                         ps.setString(1, obligationId);
                         ps.setString(2, str(sessionKey));

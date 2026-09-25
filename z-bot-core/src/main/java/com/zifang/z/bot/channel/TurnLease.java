@@ -105,6 +105,7 @@ public final class TurnLease {
 
         final ReentrantLock lock = new ReentrantLock(true);
         volatile Token holder;
+        volatile Thread ownerThread;
         volatile long acquiredAtMillis;
         volatile long lastUsedMillis = System.currentTimeMillis();
 
@@ -115,6 +116,12 @@ public final class TurnLease {
          */
         boolean isIdle() {
             return holder == null && !lock.isLocked() && !lock.hasQueuedThreads();
+        }
+
+        /** 诊断：真正持锁的线程名（跨线程误释放的告警要指名它是谁）。 */
+        String ownerThreadName() {
+            Thread t = ownerThread;
+            return t == null ? "?" : t.getName();
         }
     }
 
@@ -195,6 +202,7 @@ public final class TurnLease {
                 return token;
             }
             lease.holder = token;
+            lease.ownerThread = Thread.currentThread();
             lease.acquiredAtMillis = System.currentTimeMillis();
             lease.lastUsedMillis = lease.acquiredAtMillis;
             return token;
@@ -252,7 +260,6 @@ public final class TurnLease {
             if (token == null || token.degraded || token.released) {
                 return false;
             }
-            token.released = true;
             SessionLease lease;
             synchronized (this) {
                 lease = leases.get(token.sessionId());
@@ -265,12 +272,24 @@ public final class TurnLease {
                         token.sessionId(), token.ownerKey(), token.generation());
                 return false;
             }
+            // 与 asyncio 版的实质差异：{@code ReentrantLock} 的 owner 是线程，跨线程 release 会把
+            // holder 清掉却解不开锁 ⇒ 那个 session 从此永久楔死（正是本类要修的症状）。
+            // 故这里除了 token 身份，还要求线程身份；不满足就当空操作，绝不留下半把锁。
+            if (!lease.lock.isHeldByCurrentThread()) {
+                LOG.error("[turn-lease] session {} 释放被拒：token (key {} gen {}) 身份对得上但"
+                                + "当前线程不是持锁线程 —— Java 锁按线程持有，跨线程释放会留下永久的锁。"
+                                + "真持锁线程 {} 仍持有该轮",
+                        token.sessionId(), token.ownerKey(), token.generation(),
+                        lease.ownerThreadName());
+                return false;
+            }
+            // 校验全过才盖章：半途标 released 会让真正的持锁线程再也放不掉这把锁
+            token.released = true;
             lease.holder = null;
+            lease.ownerThread = null;
             lease.acquiredAtMillis = 0L;
             lease.lastUsedMillis = System.currentTimeMillis();
-            if (lease.lock.isHeldByCurrentThread()) {
-                lease.lock.unlock();
-            }
+            lease.lock.unlock();
             return true;
         }
 

@@ -107,6 +107,7 @@ public final class Supervisor {
     }
 
     private final File restartLoopFile;
+    private final File instanceLockFile;
     private final List<Handle> handles = Collections.synchronizedList(new ArrayList<Handle>());
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final long backoffUnitMillis;
@@ -123,6 +124,8 @@ public final class Supervisor {
     public Supervisor(File configDir, long backoffUnitMillis, long healthyMillis) {
         this.restartLoopFile = configDir == null ? null
                 : new File(configDir, "gateway" + File.separator + "restart_loop.json");
+        this.instanceLockFile = configDir == null ? null
+                : new File(configDir, "gateway" + File.separator + "gateway.lock");
         this.backoffUnitMillis = Math.max(1L, backoffUnitMillis);
         this.healthyMillis = Math.max(1L, healthyMillis);
     }
@@ -130,6 +133,11 @@ public final class Supervisor {
     /** 熔断状态文件（{@code null} = 纯内存模式，不落盘）。 */
     public File restartLoopStateFile() {
         return restartLoopFile;
+    }
+
+    /** 网关实例锁文件（{@code null} = 无 profile，不落盘）。 */
+    public File instanceLockFile() {
+        return instanceLockFile;
     }
 
     public List<Handle> handles() {
@@ -378,6 +386,178 @@ public final class Supervisor {
                     // 读都读完了，关不掉不影响
                 }
             }
+        }
+    }
+
+    // ===== 陈旧实例锁自愈 =====
+
+    /**
+     * 一次网关实例占用的锁。身份 = <b>pid + 进程启动时刻</b>（与
+     * {@link DeliveryLedger.OsProcessLiveness} 同一套判据），所以「pid 被回收给别的进程」
+     * 不会让新网关误信旧锁还有效。
+     */
+    public static final class InstanceLock {
+
+        private final File file;
+        private final long pid;
+        private final Long startedAt;
+        private final boolean onDisk;
+        private final String note;
+        private final AtomicBoolean released = new AtomicBoolean(false);
+
+        InstanceLock(File file, long pid, Long startedAt, boolean onDisk, String note) {
+            this.file = file;
+            this.pid = pid;
+            this.startedAt = startedAt;
+            this.onDisk = onDisk;
+            this.note = note;
+        }
+
+        /** 锁是否真落到了盘上（{@code false} = 目录不可写，纯内存记账，仍然算拿到锁）。 */
+        public boolean isPersisted() {
+            return onDisk;
+        }
+
+        public boolean isReleased() {
+            return released.get();
+        }
+
+        public long pid() {
+            return pid;
+        }
+
+        /** 供 {@code z-bot status} 与人读诊断的一行摘要。 */
+        public String diagnostic() {
+            return "pid=" + pid + " started_at=" + startedAt + " persisted=" + onDisk
+                    + (note == null ? "" : " note=" + note);
+        }
+
+        /** 干净收尾时删掉自己的锁（幂等；只删内容仍是本实例的那份，绝不误删别人的新锁）。 */
+        public boolean release() {
+            if (file == null || !released.compareAndSet(false, true)) {
+                return false;
+            }
+            try {
+                String raw = Supervisor.readSmall(file);
+                if (raw != null && raw.contains("\"pid\":" + pid)) {
+                    return file.delete();
+                }
+                return false;
+            } catch (RuntimeException e) {
+                return false;
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "InstanceLock(" + diagnostic() + ")";
+        }
+    }
+
+    /**
+     * 抢网关实例锁，带<b>陈旧锁自愈</b>：
+     * <ul>
+     *   <li>锁文件不存在 / 内容读不出 / pid 已死 / 启动时刻对不上（pid 被复用）⇒ 判陈旧，抢过来；</li>
+     *   <li>锁文件归属一个真活着的进程 ⇒ 返回 {@code null}，调用方不该再起一个网关
+     *       （两个网关同时 {@code sweepRecoverable} 会把重投预算烧双份，且互相踩 transcript）。</li>
+     * </ul>
+     *
+     * <p>无 profile（{@code instanceLockFile == null}）时返回一个不落盘的锁 —— 单进程内测试场景
+     * 不该被文件锁挡住，但也不该往真实 {@code ~/.zbot} 写东西（红线 1）。</p>
+     */
+    public InstanceLock tryAcquireInstanceLock() {
+        return tryAcquireInstanceLock(new DeliveryLedger.OsProcessLiveness());
+    }
+
+    /** 存活判定可注入（单测要造「pid 在但启动时刻不同」这种真机器上造不出来的现场）。 */
+    public synchronized InstanceLock tryAcquireInstanceLock(DeliveryLedger.ProcessLiveness probe) {
+        long pid = DeliveryLedger.ownPid();
+        Long startedAt = DeliveryLedger.ownStartedAt();
+        if (instanceLockFile == null) {
+            return new InstanceLock(null, pid, startedAt, false, "no-profile: 锁不落盘");
+        }
+        DeliveryLedger.ProcessLiveness p = probe == null ? new DeliveryLedger.OsProcessLiveness() : probe;
+        String note = null;
+        String existing = readSmall(instanceLockFile);
+        if (existing != null) {
+            Long ownerPid = parsePid(existing);
+            Long ownerStarted = parseStartedAt(existing);
+            if (ownerPid != null && ownerPid.longValue() != pid && p.alive(ownerPid.longValue(), ownerStarted)) {
+                LOG.error("[supervisor] 网关锁被活着的实例持有（pid {} started_at {}）—— 拒绝再起一个实例；"
+                        + "锁文件 {}", ownerPid, ownerStarted, instanceLockFile);
+                return null;
+            }
+            note = "steal-stale";
+            LOG.warn("[supervisor] 发现陈旧网关锁（pid {} started_at {}，归属进程已死）—— 自愈接管",
+                    ownerPid, ownerStarted);
+        } else if (instanceLockFile.isFile()) {
+            note = "unreadable-lock-file"; // 文件在但读不出：按陈旧处理
+        }
+        try {
+            File dir = instanceLockFile.getParentFile();
+            if (dir != null && !dir.exists() && !dir.mkdirs()) {
+                return new InstanceLock(instanceLockFile, pid, startedAt, false, "mkdirs-failed");
+            }
+            String body = "{\"pid\":" + pid + ",\"started_at\":"
+                    + (startedAt == null ? "null" : startedAt.toString()) + "}";
+            File tmp = new File(instanceLockFile.getAbsolutePath() + ".tmp");
+            OutputStream os = new java.io.FileOutputStream(tmp);
+            try {
+                os.write(body.getBytes("UTF-8"));
+            } finally {
+                os.close();
+            }
+            try {
+                java.nio.file.Files.move(tmp.toPath(), instanceLockFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                java.nio.file.Files.move(tmp.toPath(), instanceLockFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            LOG.warn("[supervisor] 网关锁落盘失败（{}）—— 仍视为拿到锁（内存记账），不影响本次启动", e.getMessage());
+            return new InstanceLock(instanceLockFile, pid, startedAt, false, "write-failed");
+        }
+        return new InstanceLock(instanceLockFile, pid, startedAt, true, note);
+    }
+
+    /** 手写解析（不引 JSON 库依赖，锁文件是我们自己的一行格式）。 */
+    static Long parsePid(String raw) {
+        return parseLongField(raw, "pid");
+    }
+
+    static Long parseStartedAt(String raw) {
+        return parseLongField(raw, "started_at");
+    }
+
+    private static Long parseLongField(String raw, String field) {
+        if (raw == null) {
+            return null;
+        }
+        String marker = "\"" + field + "\":";
+        int at = raw.indexOf(marker);
+        if (at < 0) {
+            return null;
+        }
+        int i = at + marker.length();
+        while (i < raw.length() && (raw.charAt(i) == ' ' || raw.charAt(i) == '\t')) {
+            i++;
+        }
+        if (i + 4 <= raw.length() && raw.startsWith("null", i)) {
+            return null;
+        }
+        int start = i;
+        while (i < raw.length() && Character.isDigit(raw.charAt(i))) {
+            i++;
+        }
+        if (i == start) {
+            return null;
+        }
+        try {
+            return Long.valueOf(raw.substring(start, i));
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 }
