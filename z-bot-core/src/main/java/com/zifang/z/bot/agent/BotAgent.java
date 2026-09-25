@@ -18,6 +18,9 @@ import com.zifang.z.bot.center.BotLifecycle;
 import com.zifang.z.bot.checkpoint.CheckpointManager;
 import com.zifang.z.bot.context.CompressorEngine;
 import com.zifang.z.bot.delegate.DelegateManager;
+import com.zifang.z.bot.memory.MemoryStore;
+import com.zifang.z.bot.memory.MemoryTools;
+import com.zifang.z.bot.skill.SkillLoader;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
 import com.zifang.z.bot.session.SessionManager;
@@ -112,6 +115,10 @@ public class BotAgent {
     private volatile String lastCheckpointId;
     /** delegate_task 子代理管理器（null = 未启用委托）。 */
     private final DelegateManager delegation;
+    /** 本地长期记忆三层（null = 未启用，如纯测试桩）。 */
+    private final MemoryStore memoryStore;
+    /** 本地技能根目录（<configDir>/skills 或 center 下发目录），可空。 */
+    private final File skillsRoot;
 
     /** 执行前需要打快照的破坏性工具（写文件 / 任意命令 / Maven 构建都会改沙箱）。 */
     private static final Set<String> CHECKPOINT_TOOLS = new HashSet<String>(
@@ -128,7 +135,8 @@ public class BotAgent {
         this.maxSteps = b.maxSteps;
         this.maxTokens = b.maxTokens;
         this.temperature = b.temperature;
-        this.memory = new ConversationMemory(buildSystemPrompt(b.systemPrompt, b.toolkit));
+        this.memory = new ConversationMemory(appendSkillGuidance(withPersonalityAndMemory(
+                buildSystemPrompt(b.systemPrompt, b.toolkit), b.memoryStore), b.skillsRoot));
         this.context = AgentContext.root(b.budgetOverride != null
                 ? b.budgetOverride : new IterationBudget(b.maxSteps, b.tokenBudget));
         this.provider = b.provider != null ? Builder.wrapResilient(b.provider, b.config)
@@ -145,6 +153,8 @@ public class BotAgent {
         }
         this.checkpoints = b.checkpointManager;
         this.delegation = b.delegation;
+        this.memoryStore = b.memoryStore;
+        this.skillsRoot = b.skillsRoot;
         if (delegation != null) {
             delegation.attach(this);
         }
@@ -606,20 +616,53 @@ public class BotAgent {
         }
     }
 
+    /** {@code /skills [view <name>]} — 列出/查看已安装技能（center 下发 + 本地 <configDir>/skills）。 */
+    public String skillsManage(String args) {
+        List<SkillLoader.Skill> local = skillsRoot == null
+                ? Collections.<SkillLoader.Skill>emptyList() : SkillLoader.scan(skillsRoot);
+        String a = args == null ? "" : args.trim();
+        if (a.toLowerCase().startsWith("view")) {
+            String name = a.length() > 4 ? a.substring(4).trim() : "";
+            for (SkillLoader.Skill s : local) {
+                if (s.name.equalsIgnoreCase(name)) {
+                    return "[" + s.name + "] v" + (s.version.isEmpty() ? "?" : s.version)
+                            + "  " + (s.slash.isEmpty() ? "" : "(slash: " + s.slash + ")")
+                            + "\n" + s.description + "\n\n" + s.body;
+                }
+            }
+            return "未找到技能: " + name + "（/skills 查看列表）";
+        }
+        List<String> codes = listInstalledSkills();
+        StringBuilder sb = new StringBuilder();
+        for (String c : codes) {
+            boolean isLocal = local.stream().anyMatch(s -> s.name.equals(c));
+            sb.append("- ").append(c).append(isLocal ? " (local)" : "").append('\n');
+        }
+        String out = sb.toString().trim();
+        return out.isEmpty() ? "本地无已安装的 Skill（接入 center 后运行 /sync 拉取，"
+                + "或把 <skill>/SKILL.md 放进 <configDir>/skills/）" : "已安装 Skill:\n" + out;
+    }
+
     /** 本地已安装 skill：扫 {@code ~/.zbot/skills/<instanceCode>/} 一级子目录。 */
     public List<String> listInstalledSkills() {
-        if (centerClient == null || centerClient.getInstanceCode() == null) {
-            return Collections.emptyList();
-        }
-        File root = centerClient.skillsRoot();
-        File[] children = root == null ? null : root.listFiles();
-        if (children == null) {
-            return Collections.emptyList();
-        }
         List<String> codes = new ArrayList<String>();
-        for (File c : children) {
-            if (c.isDirectory()) {
-                codes.add(c.getName());
+        if (centerClient != null && centerClient.getInstanceCode() != null) {
+            File root = centerClient.skillsRoot();
+            File[] children = root == null ? null : root.listFiles();
+            if (children != null) {
+                for (File c : children) {
+                    if (c.isDirectory()) {
+                        codes.add(c.getName());
+                    }
+                }
+            }
+        }
+        // 本地 <configDir>/skills 下的技能并入（同名去重，center 下发的优先）
+        if (skillsRoot != null) {
+            for (SkillLoader.Skill s : SkillLoader.scan(skillsRoot)) {
+                if (!codes.contains(s.name)) {
+                    codes.add(s.name);
+                }
             }
         }
         Collections.sort(codes);
@@ -736,6 +779,34 @@ public class BotAgent {
         } catch (Exception e) {
             return "checkpoint 操作失败: " + e.getMessage();
         }
+    }
+
+    /** {@code /memory [user|pending|forget [user]]} — 查看记忆三层 / 审批状态 / 清空。 */
+    public String memoryManage(String args) {
+        if (memoryStore == null) {
+            return "未启用本地记忆";
+        }
+        String a = args == null ? "" : args.trim();
+        boolean user = a.toLowerCase().contains("user");
+        if (a.toLowerCase().startsWith("pending")) {
+            ToolCall p = pendingConfirmation;
+            return p == null ? "没有待审批的操作"
+                    : "待审批: " + p.getName() + " " + p.getArgumentsJson() + "（/confirm 放行）";
+        }
+        if (a.toLowerCase().startsWith("forget")) {
+            try {
+                if (user) {
+                    memoryStore.clearUser();
+                } else {
+                    memoryStore.clearMemory();
+                }
+                return "已清空 " + (user ? "USER" : "MEMORY") + ".md";
+            } catch (Exception e) {
+                return "清空失败: " + e.getMessage();
+            }
+        }
+        String content = user ? memoryStore.readUser() : memoryStore.readMemory();
+        return (user ? "USER.md:\n" : "MEMORY.md:\n") + (content.isEmpty() ? "（空）" : content);
     }
 
     /** {@code /rollback [id]} — 把沙箱恢复到指定快照，缺省最近一次。 */
@@ -866,6 +937,56 @@ public class BotAgent {
         sb.append("3. 工具成功就继续，失败就换方案\n");
         sb.append("4. 持续工作直到整个任务完成，不要中途停下\n");
         sb.append("5. 任务全部完成时，直接输出面向用户的最终答案\n");
+        return sb.toString();
+    }
+
+    /** 已安装技能的指引注入（最多 3 个、正文各截 600 字符），让模型能直接按技能干活。 */
+    private static String appendSkillGuidance(String prompt, File skillsRoot) {
+        List<SkillLoader.Skill> skills = SkillLoader.scan(skillsRoot);
+        if (skills.isEmpty()) {
+            return prompt;
+        }
+        StringBuilder sb = new StringBuilder(prompt).append("\n可用技能指引：\n");
+        int n = 0;
+        for (SkillLoader.Skill s : skills) {
+            if (n++ >= 3) {
+                break;
+            }
+            sb.append("[").append(s.name).append("] ")
+                    .append(s.description.isEmpty() ? "(无描述)" : s.description).append('\n');
+            String body = s.body;
+            if (body.length() > 600) {
+                body = body.substring(0, 600) + "…";
+            }
+            if (!body.isEmpty()) {
+                sb.append(body).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** SOUL 人格注入头部 + 记忆三层注入尾部（store 为 null 时原样返回）。 */
+    private static String withPersonalityAndMemory(String base, MemoryStore store) {
+        if (store == null) {
+            return base;
+        }
+        StringBuilder sb = new StringBuilder();
+        String soul = store.readSoul();
+        if (!soul.isEmpty()) {
+            sb.append(soul).append("\n\n");
+        }
+        sb.append(base);
+        String user = store.readUser();
+        String mem = store.readMemory();
+        if (!user.isEmpty() || !mem.isEmpty()) {
+            sb.append("\n长期记忆（历史积累，供参考）：\n");
+            if (!user.isEmpty()) {
+                sb.append("[用户画像]\n").append(user).append('\n');
+            }
+            if (!mem.isEmpty()) {
+                sb.append("[记忆]\n").append(mem).append('\n');
+            }
+        }
         return sb.toString();
     }
 
@@ -1036,6 +1157,10 @@ public class BotAgent {
         private IterationBudget budgetOverride;
         /** 子代理禁接入 center，避免重复注册生命周期。 */
         private boolean noCenter;
+        /** 本地记忆三层；config 模式缺省建在 {@code <configDir>/memories}。 */
+        private MemoryStore memoryStore;
+        /** 本地技能根目录；config 模式缺省 {@code <configDir>/skills}。 */
+        private File skillsRoot;
         private BotCenterClient centerClient;
         private int maxSteps;
         private int maxTokens;
@@ -1129,6 +1254,18 @@ public class BotAgent {
             return this;
         }
 
+        /** 本地技能根目录；测试注入用。 */
+    public Builder skillsRoot(File skillsRoot) {
+        this.skillsRoot = skillsRoot;
+        return this;
+    }
+
+    /** 覆盖默认记忆目录（测试注入 TemporaryFolder 用）。 */
+        public Builder memoryStore(MemoryStore memoryStore) {
+            this.memoryStore = memoryStore;
+            return this;
+        }
+
         public BotCenterClient centerClient() {
             return centerClient;
         }
@@ -1212,6 +1349,20 @@ public class BotAgent {
                         : new File(sandbox.root().getParentFile(), "delegate-children");
                 delegation = new DelegateManager(config, raw, sandbox, childSessions, d, maxDepth);
                 toolkit.register(delegation.delegateTool());
+            }
+            if (memoryStore == null && config != null && config.getConfigDir() != null) {
+                memoryStore = new MemoryStore(new File(config.getConfigDir(), "memories"));
+            }
+            if (memoryStore != null) {
+                try {
+                    memoryStore.ensureSoul();
+                } catch (Exception e) {
+                    LOG.warn("[BotAgent] SOUL.md 生成失败: {}", e.getMessage());
+                }
+                toolkit.register(MemoryTools.memoryTool(memoryStore));
+            }
+            if (skillsRoot == null && config != null && config.getConfigDir() != null) {
+                skillsRoot = new File(config.getConfigDir(), "skills");
             }
             if (systemPrompt == null && centerClient != null) {
                 systemPrompt = augmentWithLongTermMemory(null, centerClient);

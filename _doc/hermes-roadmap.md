@@ -148,6 +148,21 @@
 - `SOUL.md` 人格文件(默认生成, 可编辑), 注入 system prompt 头部
 - 验收: 单测(frontmatter 解析/注入/审批流); E2E: 安装一个 skill 并让 LLM 调用其指引
 
+> ✅ 完成 (09-25)。`memory.MemoryStore`: MEMORY.md/USER.md/SOUL.md 三层在 `<configDir>/memories/`,
+> 写入走 `<file>.lock` 文件锁 + tmp/ATOMIC_MOVE 原子替换; SOUL.md 缺省生成(可手编, ensure 不覆盖)。
+> `memory` 工具(注册于 config 模式): read/append 直执行, **rewrite/forget 复用 P1 的
+> Confirmations 审批流** — 首调返回 needsConfirmation, agent 循环挂 WAIT_CONFIRM:memory|,
+> `/confirm`(或 confirmTool 带章重放)才落盘; `/memory [user|pending|forget [user]]` 查看/审批状态/清空。
+> 注入: system prompt = SOUL 头部 + 基础提示 + [用户画像]/[记忆] 尾部 + 技能指引块(≤3 个, 正文截 600)。
+> `skill.SkillLoader`: frontmatter(name/description/version/metadata[.slash]) + 正文,
+> 扫描 `<configDir>/skills/<name>/` 与 `<category>/<name>/` 两种形态(center 下发兼容);
+> `/skills` 列表(center+本地合并)、`/skills view <name>` 全文; 技能指引直接注入 system prompt
+> 让模型开箱即用; **frontmatter 的 slash 字段已解析, 注册成斜杠命令挪到 P8 通道层一并做**。
+> 顺手修了 P2 遗留 flaky: session id = `session_+毫秒` 在两进程同毫秒 /new 时撞 id 互吞 JSON
+> (orphan 收养测试因此 ~1/3 概率假红) — id 加实例级 UUID 短段后 3 连跑 116/116 全绿。
+> E2E (piped REPL): 本地装 deployskill → `/skills` 列表带 (local) 标记 → `/skills view` 出全文
+> (frontmatter slash: /deploy 解析正确), SOUL.md 落盘。单测 7 个(store 4 + agent 3 注入/append/审批) + SkillLoader 3。
+
 ### P7 cron 调度 — Hermes #14
 - `~/.zbot/cron/jobs.json` + scheduler 线程(60s tick, 文件锁防多进程); 投递到 channel(cli 打印/HTTP SSE/webhook)
 - `cronjob` 工具(agent 自建定时任务) + `/cron list/add/remove/pause`

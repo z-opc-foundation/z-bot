@@ -132,8 +132,8 @@ public class BotAgentTest {
         newAgent(10, config("agent.tool.choice=required")).chat("hi", StreamListener.NOOP);
 
         ChatCompletionsRequest sent = llm.requests.get(0);
-        // echo/probe/risky + config 模式默认注册的 delegate_task
-        assertEquals(4, sent.getTools().size());
+        // echo/probe/risky + config 模式默认注册的 delegate_task + memory
+        assertEquals(5, sent.getTools().size());
         assertEquals("required", sent.getProviderParams().get("tool_choice"));
         assertEquals("test-model", sent.getModel());
         assertEquals(0.7d, sent.getTemperature(), 0.001d);

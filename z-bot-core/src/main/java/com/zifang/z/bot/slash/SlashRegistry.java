@@ -152,16 +152,12 @@ public final class SlashRegistry {
 
             @Override
             public String description() {
-                return "列出已同步 Skill";
+                return "已安装 Skill: /skills 列表, /skills view <name> 查看内容";
             }
 
             @Override
             public String execute(BotAgent agent, String args) {
-                List<String> codes = agent.listInstalledSkills();
-                if (codes.isEmpty()) {
-                    return "本地无已同步的 Skill（接入 center 后运行 /sync 拉取）";
-                }
-                return "已同步 Skill (" + codes.size() + "): " + join(codes);
+                return agent.skillsManage(args);
             }
         });
         r.register(new SlashCommand() {
@@ -318,6 +314,22 @@ public final class SlashRegistry {
             @Override
             public String execute(BotAgent agent, String args) {
                 return agent.compressNow(args);
+            }
+        });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/memory";
+            }
+
+            @Override
+            public String description() {
+                return "本地记忆: /memory 查看, /memory user, /memory pending, /memory forget [user]";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return agent.memoryManage(args);
             }
         });
         r.register(new SlashCommand() {
