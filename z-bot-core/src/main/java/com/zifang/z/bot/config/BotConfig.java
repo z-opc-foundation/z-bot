@@ -148,8 +148,11 @@ public final class BotConfig {
         this.fallbackModels = splitList(props.getProperty("llm.fallback.models"));
         String stateDb = trim(props.getProperty("agent.state.db"));
         if (stateDb.isEmpty()) {
-            stateDb = System.getProperty("zbot.state.db",
-                    System.getProperty("user.home") + "/.zbot/state.db");
+            stateDb = System.getProperty("zbot.state.db", "");
+        }
+        if (stateDb.isEmpty()) {
+            // 缺省跟着 configDir 走 — 写死 ~/.zbot 会让 --config-dir 多 profile 共享同一个会话库
+            stateDb = new File(configDir, "state.db").getAbsolutePath();
         }
         this.stateDbPath = stateDb;
         String delegateDepth = trim(props.getProperty("agent.delegate.max.depth"));

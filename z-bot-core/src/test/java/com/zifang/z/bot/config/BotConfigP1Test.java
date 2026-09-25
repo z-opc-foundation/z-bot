@@ -50,4 +50,39 @@ public class BotConfigP1Test {
         assertTrue(cfg.getFallbackModels().isEmpty());
         assertEquals(400_000L, cfg.getTokenBudget());
     }
+
+    /**
+     * 红线 1：会话库必须跟着 configDir 走。
+     *
+     * <p>曾经缺省写死 {@code ~/.zbot/state.db} — {@code --config-dir} 起第二个 profile 时
+     * memories/skills/cron 都隔离了，唯独 state.db 仍与默认 profile 共享同一个文件。</p>
+     */
+    @Test
+    public void stateDbDefaultsInsideConfigDir() throws Exception {
+        String saved = System.getProperty("zbot.state.db");
+        System.clearProperty("zbot.state.db");
+        try {
+            File dir = tmp.newFolder("profile-a");
+            assertEquals(new File(dir, "state.db").getAbsolutePath(),
+                    BotConfig.load(dir).getStateDbPath());
+
+            File explicit = tmp.newFolder("profile-b");
+            File custom = new File(explicit, "custom.db");
+            try (FileWriter w = new FileWriter(new File(explicit, "config.properties"))) {
+                w.write("agent.state.db=" + custom.getAbsolutePath() + "\n");
+            }
+            assertEquals(custom.getAbsolutePath(), BotConfig.load(explicit).getStateDbPath());
+
+            File viaSys = tmp.newFolder("profile-c");
+            System.setProperty("zbot.state.db", new File(viaSys, "sys.db").getAbsolutePath());
+            assertEquals(new File(viaSys, "sys.db").getAbsolutePath(),
+                    BotConfig.load(viaSys).getStateDbPath());
+        } finally {
+            if (saved == null) {
+                System.clearProperty("zbot.state.db");
+            } else {
+                System.setProperty("zbot.state.db", saved);
+            }
+        }
+    }
 }

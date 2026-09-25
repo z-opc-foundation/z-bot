@@ -1,5 +1,6 @@
 package com.zifang.z.bot.cli;
 
+import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.store.StateStore;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -16,7 +17,8 @@ import java.util.concurrent.Callable;
 /**
  * {@code z-bot sessions …} — state.db 会话库管理：list / search / export / stats / prune。
  *
- * <p>默认操作 {@code ~/.zbot/state.db}，{@code --db} 可指向别的库文件（测试 / 多实例）。</p>
+ * <p>缺省操作 {@code <configDir>/state.db}（{@code --config-dir} 决定 profile），
+ * {@code --db} 可直接指向别的库文件（测试 / 多实例）。</p>
  */
 @Command(name = "sessions", description = "state.db 会话库管理（list/search/export/stats/prune）",
         subcommands = {
@@ -28,15 +30,21 @@ import java.util.concurrent.Callable;
 public class SessionsCommand {
 
     @Option(names = {"--db"}, paramLabel = "FILE",
-            description = "state.db 路径（默认 ~/.zbot/state.db，或 -Dzbot.state.db）")
+            description = "state.db 路径（覆盖 --config-dir 推导）")
     String db;
 
+    @Option(names = {"--config-dir"}, paramLabel = "DIR",
+            description = "配置目录（默认 ~/.zbot）；state.db 缺省落在这个目录下")
+    File configDir;
+
+    /** 解析优先级：--db &gt; 配置里的 agent.state.db &gt; -Dzbot.state.db &gt; &lt;configDir&gt;/state.db。 */
     static File dbFileOf(SessionsCommand parent) {
-        String path = parent == null || parent.db == null || parent.db.trim().isEmpty()
-                ? System.getProperty("zbot.state.db",
-                System.getProperty("user.home") + "/.zbot/state.db")
-                : parent.db.trim();
-        return new File(path);
+        if (parent != null && parent.db != null && !parent.db.trim().isEmpty()) {
+            return new File(parent.db.trim());
+        }
+        File dir = parent == null || parent.configDir == null
+                ? new File(System.getProperty("user.home"), ".zbot") : parent.configDir;
+        return new File(BotConfig.load(dir).getStateDbPath());
     }
 
     @Command(name = "list", description = "列出全部会话")
