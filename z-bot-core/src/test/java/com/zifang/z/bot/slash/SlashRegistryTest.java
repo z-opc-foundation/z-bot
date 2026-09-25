@@ -69,10 +69,40 @@ public class SlashRegistryTest {
     @Test
     public void builtinCommandsAreRegistered() {
         for (String name : new String[]{"/new", "/clear", "/sessions", "/switch", "/tools", "/skills",
-                "/sync", "/memory", "/model", "/usage", "/stop", "/steer", "/queue"}) {
+                "/sync", "/memory", "/model", "/usage", "/stop", "/steer", "/queue",
+                "/compress", "/cron", "/checkpoints", "/rollback", "/background", "/agents"}) {
             assertNotNull("缺少内置命令 " + name, registry.find(name));
         }
         assertEquals("/new", registry.find("/NEW").name());
+    }
+
+    /** 重复注册必须炸：/memory 曾注册两次，前一条（center 召回）静默失效无人报警。 */
+    @Test(expected = IllegalStateException.class)
+    public void duplicateRegistrationIsRejected() {
+        registry.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/memory";
+            }
+
+            @Override
+            public String description() {
+                return "又一个 /memory";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return "";
+            }
+        });
+    }
+
+    /** 合并后的 /memory 仍是本地记忆入口（center 召回挂在无参数分支上）。 */
+    @Test
+    public void memoryCommandStillResolvesToLocalView() {
+        String out = registry.find("/memory").execute(agent, "user");
+        assertNotNull(out);
+        assertTrue(out, !out.contains("又一个"));
     }
 
     @Test

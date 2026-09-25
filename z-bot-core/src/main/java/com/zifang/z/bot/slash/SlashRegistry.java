@@ -21,8 +21,18 @@ public final class SlashRegistry {
 
     private final Map<String, SlashCommand> commands = new LinkedHashMap<String, SlashCommand>();
 
+    /**
+     * 注册命令；同名重复直接拒绝。
+     *
+     * <p>这里曾经是 {@code put} 覆盖，于是 {@code /memory} 被注册两次（center 召回 + 本地记忆）
+     * 时前一条静默失效且无人报错 — 命令表看不出问题，行为却少了一半。</p>
+     */
     public SlashRegistry register(SlashCommand command) {
-        commands.put(command.name().toLowerCase(), command);
+        String key = command.name().toLowerCase();
+        if (commands.containsKey(key)) {
+            throw new IllegalStateException("斜杠命令重复注册: " + command.name());
+        }
+        commands.put(key, command);
         return this;
     }
 
@@ -184,28 +194,6 @@ public final class SlashRegistry {
         r.register(new SlashCommand() {
             @Override
             public String name() {
-                return "/memory";
-            }
-
-            @Override
-            public String description() {
-                return "查看 center 长期记忆";
-            }
-
-            @Override
-            public String execute(BotAgent agent, String args) {
-                BotCenterClient c = agent.getCenterClient();
-                if (c == null || !c.isEnabled()) {
-                    return "Bot 未接入 z-agent-center — 长期记忆由 center 侧维护";
-                }
-                String recalled = c.recallMemory();
-                return recalled == null || recalled.isEmpty()
-                        ? "center 暂无长期记忆（首轮 chat 后会自动积累）" : recalled;
-            }
-        });
-        r.register(new SlashCommand() {
-            @Override
-            public String name() {
                 return "/model";
             }
 
@@ -329,7 +317,19 @@ public final class SlashRegistry {
 
             @Override
             public String execute(BotAgent agent, String args) {
-                return agent.memoryManage(args);
+                String local = agent.memoryManage(args);
+                if (!args.isEmpty()) {
+                    return local;
+                }
+                // 无参数时顺带召回 center 侧长期记忆（历史上它是另一条 /memory，被重复注册静默吞掉）
+                BotCenterClient c = agent.getCenterClient();
+                if (c == null || !c.isEnabled()) {
+                    return local;
+                }
+                String recalled = c.recallMemory();
+                return recalled == null || recalled.isEmpty()
+                        ? local + "\n\ncenter 暂无长期记忆（首轮 chat 后会自动积累）"
+                        : local + "\n\n[center 长期记忆]\n" + recalled;
             }
         });
         r.register(new SlashCommand() {
