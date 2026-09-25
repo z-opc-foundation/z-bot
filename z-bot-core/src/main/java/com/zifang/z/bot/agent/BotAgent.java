@@ -751,7 +751,7 @@ public class BotAgent {
                 + "或把 <skill>/SKILL.md 放进 <configDir>/skills/）" : "已安装 Skill:\n" + out;
     }
 
-    /** 本地已安装 skill：扫 {@code ~/.zbot/skills/<instanceCode>/} 一级子目录。 */
+    /** 本地已安装 skill：扫 {@code <profile>/skills/<instanceCode>/} 一级子目录。 */
     public List<String> listInstalledSkills() {
         List<String> codes = new ArrayList<String>();
         if (centerClient != null && centerClient.getInstanceCode() != null) {
@@ -1589,8 +1589,10 @@ public class BotAgent {
                 toolkit = new Toolkit();
             }
             if (sandbox == null) {
-                sandbox = new Sandbox(System.getProperty("zbot.sandbox",
-                        System.getProperty("user.home") + "/.zbot/workspace"));
+                // 红线 1：沙箱根跟着 profile 走（--sandbox 已在 AgentOptions 里套好，这里只兜
+                // builder 没被 CLI 装配的路径，并保留 -Dzbot.sandbox 覆盖）
+                sandbox = new Sandbox(BotConfig.resolveWorkspaceDir(
+                        config == null ? null : config.getConfigDir(), null).getAbsolutePath());
             }
             if (approvalService == null) {
                 approvalService = newApprovalService(config);
@@ -1606,7 +1608,7 @@ public class BotAgent {
                         && !config.getStateDbPath().trim().isEmpty()) {
                     // state.db 是唯一事实来源；会话 JSON 目录仍作一次性迁移入口
                     sessionManager = new SessionManager(
-                            new java.io.File(System.getProperty("user.home") + "/.zbot/sessions"),
+                            config.sessionsDir(),
                             new StateStore(new java.io.File(config.getStateDbPath().trim()),
                                     // P15：PRAGMA/重试窗口/BEGIN IMMEDIATE/坏库自愈/自动清理
                                     // 全部由 profile 的 config.properties 决定（CLI 侧读同一份）
@@ -1617,7 +1619,7 @@ public class BotAgent {
             }
             if (centerClient == null && !noCenter && config != null && config.getCenterUrl() != null
                     && !config.getCenterUrl().isEmpty()) {
-                centerClient = new BotCenterClient(config.getCenterUrl());
+                centerClient = new BotCenterClient(config.getCenterUrl(), config.getConfigDir());
             }
             if (appCode == null && config != null) {
                 appCode = config.getAppCode();

@@ -28,7 +28,7 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 | 8 | P9 "stdio + HTTP 两种 transport" | 只有 stdio — 工厂类自己的注释写着"HTTP+SSE 留到后续版本"; 且"反注册"是假的: `Toolkit` 没有 unregister API, `McpBridge.unregisterAll()` 用**同名 stub 覆盖**收尾, reload 后工具名仍占表 | `mcp/McpClientFactory.java:17,29`, `mcp/McpBridge.java:62-66` |
 | 9 | 头部 "hermes ~189 万行" | 见文首口径 (可复算的 find 命令), 713,095 (源码) / 1,536,919 (含测试) | 同上 |
 | 10 | v1 §0 锚点表 15 个 hermes 文件路径 | 13 个真存在, **2 个路径错**: `toolsets.py` 在顶层 (不在 `tools/`), `interrupt.py` 在 `tools/` (不在 `agent/`) | `find . -name '*toolset*' -o -name '*interrupt*'` |
-| 11 | P10b "WebhookChannelTest 401 = 环境级临时端口复用, 未复现不修" | **该归因已被自己的量具推翻**: 12 轮全量 (每轮 36 个绑定端口) 里重复端口 **0 次**、失败 **0 次**。今天同型故障再现于 `FeishuChannelTest` ⇒ 真因未定位, 旧结论作废 | `/tmp/zbot_flake/summary.txt`, 脚本 `/tmp/zbot_flake_loop.sh` |
+| 11 | P10b "WebhookChannelTest 401 = 环境级临时端口复用, 未复现不修" | **该归因已被自己的量具推翻**: 12 轮全量 (每轮 36 个绑定端口) 里重复端口 **0 次**、失败 **0 次**。今天同型故障再现于 `FeishuChannelTest` ⇒ 旧结论作废。**09-25 已定位真因**: 通道绑通配地址, 与邻居进程的 `127.0.0.1:P` 特定绑定在 macOS 上共存, 客户端被路由到邻居那儿 —— 详见 §6 首条 (含 `curl`/`lsof`/`BindProbe` 三份实测), 修法 P11c | `/tmp/zbot_flake/summary.txt`, 脚本 `/tmp/zbot_flake_loop.sh`, `/tmp/BindProbe.java` |
 | 12 | (本轮新发现·安全) 模型可自带 `__confirmed__:true` 跳过审批 | 已修: `parseArgs` 无条件剥除该标记, 附 3 条回归 | commit `cd32730` |
 | 13 | (本轮新发现·红线 1) `state.db` 缺省写死 `~/.zbot` | 已修: 缺省跟随 `configDir`, `z-bot sessions` 同步支持 `--config-dir` | commit `a91de90` |
 
@@ -130,6 +130,10 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 
 ### W2 — 主循环节律 + 注册表 + 送达 (4 代理并行)
 
+**P11c 通道监听收口 (插队, 先于 P12)** — 锚点 §6"`*.channel` HTTP 抖动真因" · 边界 `channel/HttpChannel.java`, `channel/WebhookChannel.java`, `channel/FeishuChannel.java`, `channel/DingTalkChannel.java` 的 `start()` + 对应测试
+缺省一律绑**回环** (`InetAddress.getLoopbackAddress()`), 要暴露到 LAN 必须显式给 `--host`/配置项; 撞车从"哑巴成功"变成 `BindException`。附带收益: 全量套件里那条 1/9 抖动归零, 且不再把无鉴权的 `/bot/chat`、`/api/*` 摆到局域网。
+验收: ①四道杠; ②变异 = 把任一通道改回通配绑定, 要有**具名测试**红; ③真进程 E2E = 邻居先占 `127.0.0.1:P` 时 `z-bot serve --port P` 必须报错退出, 而不是"启动成功但没人应答"。
+
 **P12 主循环节律包: 中断/steer/预算/prompt cache** — 锚点 §2#3 #4 #5 · 边界 `agent/BotAgent.java`, kernel-agent
 - 中断: 线程作用域的中断集合 (按执行线程定向, 防并发会话串台) + **工具侧检查点** (exec 读输出循环、文件读写、mvn_build、delegate 子循环各插 1 处以上), 目标从 0 处到 ≥6 处;
 - steer: 采用她的语义 —— 单槽、追加到最后一条 tool 结果、硬中断丢弃 pending; 把 kernel `SteerQueue` 变成真实消费者或删掉它 (红线 2: 不许留 0 消费者抽象);
@@ -223,8 +227,13 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 
 ## 6. 未决与已知抖动
 
-- **HTTP 测试偶发抖动 (未定位, 不修不封)**: 现象 = `*.channel` 用例里 POST 拿到 `SocketException: Unexpected end of file from server`; 本会话 15 轮全量出现 1 次 (round2/234 错 1), 另 P10b 有 1 次同型。已排除: ① keep-alive 陈旧套接字 + 端口复用 — 三个合成探针 (`/tmp/KeepAliveProbe*.java`, 含"显式重绑同端口 + 池化 GET + 无间隙换服务") 共 450 次碰撞 0 命中; ② 真实全量里根本没有端口复用 — 12 轮 × 36 端口, `uniq -d` 恒为 0。
-  ⇒ **撤销** §1#11 那条"环境级临时端口复用"的旧结论。量具 `/tmp/zbot_flake_loop.sh` 保留, 后续每轮全量自动留日志 (`/tmp/zbot_flake/`) 与失败轮 surefire 报告, 再现即取真栈。
+- **`*.channel` HTTP 抖动 —— 真因已定位 (09-25 21:3x)**: 四个通道清一色用 `new InetSocketAddress(port)` **绑通配地址** (`HttpChannel.java:69`, `WebhookChannel.java:77`, `FeishuChannel.java:88`, `DingTalkChannel.java:72`)。macOS 上"别人的进程显式监听 `127.0.0.1:P`" 与"我们带 SO_REUSEADDR 的通配绑定"**可以共存**, 而客户端连 `127.0.0.1:P` 被路由到**更具体的那个 listener** ⇒ 我们的服务器一个字节都没收到, `getPort()` 却报"我占了 P"。命中与否取决于 OS 当时发到哪个号, 所以成簇出现、隔天不复现。
+  | 复算: `java /tmp/BindProbe.java` (邻居 specific listener + 我们 wildcard 同端口 + 客户端探测)
+  | 实测: `[wildcard] bind 成功 -> 共存成立` / `客户端连 127.0.0.1:51804 拿到 -> code=200 ct=text/x-foreign body=FOREIGN` / `[loopback] bind 失败(预期 EADDRINUSE)` ⇒ 绑回环能让撞车**变红**而不是变哑。
+  | 本轮那次 (`mvn -o test` run=2, `toolsEndpointReflectsToolkit expected:<200> but was:<400>`): run 日志里有 `[HTTP] z-bot 已启动: http://127.0.0.1:56510`, 而 `lsof -nP -iTCP -sTCP:LISTEN` 显示 `Qoder PID 10598` 正持有 `127.0.0.1:56510`; `curl -i http://127.0.0.1:56510/bot/tools` → `HTTP/1.1 400 Bad Request` + `Sec-Websocket-Version: 13` + body `Bad Request`(12 B)。`dispatch()` 对 `/bot/tools` 只有 200/500 两条出口, 这个 400 不可能出自我们。`ps -o lstart -p 10598` = `Sep 24 22:55:44`, 比那次绑定早 22.5 小时。当前 `49152-65535` 区间内有 **10 个**邻居 listener (`lsof -nP -iTCP -sTCP:LISTEN | awk '$9 ~ /^127\.0\.0\.1:/'`), 每轮全量约 36 次绑定 ⇒ 千分之几到百分之几的量级, 与观测到的 1/9、1/15 吻合。
+  | 同一条因由解释 §1#11 的 `WebhookChannelTest 401` (WebhookChannel 全仓无鉴权代码, 401 本就不可能出自它) 与本期记过的 `SocketException: Unexpected end of file from server` (非 HTTP 的邻居 listener)。
+  | **旧量具查错了方向** (三次): `uniq -d` 只比对我们自己绑过的端口, 从没跟 `lsof` 里邻居的端口对账 ⇒ "0 重复端口"是真的, 但推不出"没有端口冲突"。`/tmp/KeepAliveProbe*.java` 的 450 次碰撞同样只在"我们自己的服务互换"这一维里试。
+  ⇒ 修法排 **P11c** (默认绑回环 + 显式 opt-in 才通配), 顺带关掉"`z-bot serve` 缺省把无鉴权 `/bot/chat`、`/api/*` 暴露到局域网"这个真实暴露面。旧结论"未定位, 不修不封"**作废**。
 - **共享工作区纪律**: 本机同时有别的会话在建 `z-lc` 等项目 (17:10 有外部 mvn 失败日志为证) ⇒ 本仓所有提交只准 `git commit -- <pathspec>`, 禁 `git add -A`, 禁裸 `git stash`。
 - **今天一次意外真实 API 调用**: pty 量具缺陷 (JLine 应用光标模式下 ↑ 是 `\x1bOA`) 导致 `[A` 被当普通消息发往 minimax (返回 429)。已加 A11 守卫。含活凭据的临时目录 `/tmp/zbot-pty` 已删除, `~/.zbot/` 回到 8 项 pre-state。
 
@@ -280,9 +289,13 @@ _(W1 起逐期追加)_
 - 2026-09-25 P11 验收① 抓出的**既有**测试竞态 ✅ 提交 `4723add`（不是本期代码引入）: `PairingServiceTest` fixture 共用 200ms TTL，而懒清理按 `expiresAt > now` 判定 ⇒ `issue` 落盘慢过 200ms 就被自己删码。
   | 复算: `mvn -o test -pl z-bot-core -Dtest=PairingServiceTest` 循环单跑 5–10 次（**别只看全量跑**，冷 JVM 才暴露）
   | 实测: 修前单跑连续 6/6 红（`Tests run: 7, Failures: 1`，`caseInsensitiveCodeConsumption` 耗时 1.4–3.4s），全量 3 跑里红 1 跑（`multipleIssuedCodesAccumulate expected:<2> but was:<0>`）；修后单跑 `Tests run: 7, Failures: 0` × 5。
-- 2026-09-25 **待办 · 红线 1 泄漏（P11 发现，另片修）**: 沙箱根三处硬编码 `~/.zbot/workspace`，`--config-dir X` 不改变它 ⇒ 多 profile 共享同一个写/执行根（与已修的 `a91de90` state.db 同一类）。
-  | 复算: `grep -n 'user.home.*\.zbot' z-bot-core/src/main/java/com/zifang/z/bot/{agent/BotAgent.java,cli/AgentOptions.java,tool/Sandbox.java}`
-  | 实测: `BotAgent.java:1593`、`BotAgent.java:1609`（**P15 复测新逮到一处**: 会话 JSON 目录 `~/.zbot/sessions` 同样无视 `--config-dir`）、`AgentOptions.java:100`、`Sandbox.java:16`；尚未修，修法（默认跟随 `configDir/workspace`、`configDir/sessions`，`--sandbox`/`-Dzbot.sandbox` 仍可覆盖）与验收清单待开工时补。
+- 2026-09-25 **红线 1 泄漏收口（P11 发现 → P11b 修完）** ✅ 见 `_doc/acceptance/p11b/EVIDENCE.md`。原记账"三处硬编码"**是低估**：开工前实测 **10 处** —— `git grep -n 'user\.home' e92cccc -- 'z-bot-core/src/main/*'` = 8 处/7 文件（`BotAgent`×2、`BotCenterClient`、`AgentOptions`、`SessionsCommand`、`BotConfig`、`SessionManager`、`Sandbox`），加上 `RawTerminalReader.java:234/244` 两处 shell 里写死的 `~/.zbot/.stty.bak`（⇒ 两个 profile 的 REPL 互相踩对方的终端恢复）。同期发现 **`ZBOT_HOME` 从来没被读过**：`git grep -n 'ZBOT_HOME' e92cccc -- 'z-bot-core/src/main/*'` 只有 1 处命中，且是 `PairCommand.java:33` 的报错文案自己许愿。
+  | 修法: 三段各抄一遍的优先级链收成 `BotConfig.defaultConfigDir()`（`-Dzbot.home` > `ZBOT_HOME` > `~/.zbot`）+ `resolveWorkspaceDir(configDir, cliOverride)`（`--sandbox` > `-Dzbot.sandbox` > `<profile>/workspace`）；sessions/state.db/skills/instance.json/stty 备份全改由 profile 派生；`BotCenterClient` 那条猜 `~/.zbot` 的单参构造器删掉（红线 2）。
+- 2026-09-25 **P11b 四道杠**（新增 `ProfileIsolationTest` 8 条 + `_doc/acceptance/p11b/` 三件量具）
+  | 复算: ①`rm -rf z-bot-core/target/surefire-reports && mvn -o test` ×3 ②`python3 _doc/acceptance/p11b/p11b_mutation.py` ③`mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p11b/p11b_e2e.py` ④`ls -a ~/.zbot | wc -l` + `md5 -q ~/.zbot/{config.properties,state.db}`
+  | 实测: ① `Tests run: 399, Failures: 0, Errors: 0, Skipped: 0` × 3 跑 rc=0（基线 391 ⇒ +8；同树合计 11 连绿）② 13 支注入 = **11 RED-OK / 0 PARTIAL / 2 GREEN-BUT-MUTATED / 0 BROKEN**，收尾 `final md5 ok: True`；那 2 支是设计上进程内证不了的（M1 要真 env、M12 要真 pty），证据在③ ③ **E2E 23/23**，含 `E3c 两者都不给才落 <profile>/workspace`、`E4c A=有 probe B=共 0 个会话`（真 sqlite3 塞行验互不相见）、`E5b stty -g 前后同值`、`E5c 守望线程抓到=True`/`E5d 0 残留`、`E6 0 处` ④ `entries=8`、`2dadaed0→2dadaed0`、`690ddbc0→690ddbc0`。
+  | 未打满处如实记: M2 `2/3`、M3 `1/2` —— 差额那两条都显式传值、走不到缺省链，杀不死"缺省被写死"；判定仍按具名红算，不改期望集凑数。
+  | 杠①第二跑曾红一次（`HttpChannelTest.toolsEndpointReflectsToolkit 200→400`）：追出是 §6 那条老抖动的**真因**（通道绑通配地址，客户端被路由到邻居进程），与本期无关 —— 同树 8 跑 0 红 + `e92cccc` 基线 8 跑 0 红 + 通道四类单跑 18 跑 0 红。全文见 §6 首条，修法排 **P11c**。
 - 2026-09-25 **P15 state.db 收口** ✅ 提交 `d64ad44`: 10 个 `agent.state.*` 配置键接进 `BotConfig.stateStoreOptions()`（两个建库点 `BotAgent.Builder` / `SessionsCommand.openStore` 都走它，11 处 `new StateStore` 收成一处）+ E2E 抓到的"在飞"漏洞修掉。
   | 复算: `rm -rf z-bot-core/target/surefire-reports && mvn -o test` 连续 3 跑
   | 实测: `Tests run: 391, Failures: 0, Errors: 0, Skipped: 0` × 3 跑、`RC=0` × 3（修 CLI 默认档前是 390 × 3 全绿，那 3 跑也是同一条命令跑的，不覆盖本次改动）。§2 矩阵 #7 的实测列同期改为 3,152 行 / 8 实表 / sessions 15 列 / 3 步阶梯 / 10 键接线。

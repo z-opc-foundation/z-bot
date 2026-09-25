@@ -42,7 +42,7 @@ public class AgentOptions {
     Integer maxSteps;
 
     @Option(names = {"--sandbox"}, paramLabel = "DIR",
-            description = "文件 / 命令沙箱根目录（默认 ~/.zbot/workspace）")
+            description = "文件 / 命令沙箱根目录（默认 <配置目录>/workspace）")
     String sandbox;
 
     @Option(names = {"--session"}, paramLabel = "ID", description = "启动时切到指定会话")
@@ -84,7 +84,7 @@ public class AgentOptions {
         BotConfig config = loadConfig();
         warnIfUnusable(config);
         BotAgent.Builder builder = BotAgent.builder(config);
-        builder.sandbox(new Sandbox(sandboxDir().getAbsolutePath()));
+        builder.sandbox(new Sandbox(sandboxDir(config).getAbsolutePath()));
         BotAgent agent = builder.build();
         if (newSession) {
             agent.newSession();
@@ -94,11 +94,10 @@ public class AgentOptions {
         return agent;
     }
 
-    /** {@code --sandbox} 优先，其次 {@code -Dzbot.sandbox}，最后 {@code ~/.zbot/workspace}。 */
-    public File sandboxDir() {
-        String defaultDir = System.getProperty("zbot.sandbox",
-                System.getProperty("user.home") + "/.zbot/workspace");
-        return new File(sandbox == null || sandbox.trim().isEmpty() ? defaultDir : sandbox.trim());
+    /** {@code --sandbox} 优先，其次 {@code -Dzbot.sandbox}，最后 {@code <configDir>/workspace}。 */
+    public File sandboxDir(BotConfig config) {
+        File fromCli = config == null ? configDir : config.getConfigDir();
+        return BotConfig.resolveWorkspaceDir(fromCli, sandbox);
     }
 
     /** 只在真正缺 key 时提醒，避免本地占位 key 场景误报。 */
