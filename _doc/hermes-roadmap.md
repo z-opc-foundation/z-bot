@@ -60,7 +60,7 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 | 11 | 工具注册表 | `tools/registry.py` 810 行: `deregister()`/generation 计数/`check_fn` TTL 30s+失败宽限 60s/别名/插件覆盖策略/单工具结果上限; `toolsets.py` 顶层 `TOOLSETS` dict **33 个静态 toolset** (插件运行期另加, `get_toolset_names()` 合并之); 递归解析带环检测 (`resolve_toolset:689`); 并行安全**不在**注册表而在 `agent/tool_dispatch_helpers.py` | `tool/Toolkit.java` **无 unregister**, 无探测, 无代际; MCP 侧被迫用 stub 覆盖 (见 §1#8) | **缺** |
 | 12 | 工具面 | `tools/` 114 个 py 文件 / **98,428 行** (`find tools -name '*.py' -print0 \| xargs -0 wc -l \| grep total`), 静态注册 **72 个工具** (`grep -oE 'name="[a-z_0-9]+"' tools/*.py \| sort -u \| wc -l`; `registry.register()` 调用点 85 处含别名) | 主干 **14 个** (BuiltinTools 11 + memory/cronjob/delegate_task) | 浅 (广度按 v2 选择性补) |
 | 13 | 执行后端 | `tools/environments/` 6 后端: local 1,534 / docker 1,460 / base 1,125 / ssh 375 (+modal/daytona/singularity 不做), `TERMINAL_ENV` 选择 | `Sandbox` 只有路径牢笼 | **缺** |
-| 14 | 审批 | `tools/approval.py` 3,951 行: **12 条 `HARDLINE_PATTERNS` (:417) + 70 条 `DANGEROUS_PATTERNS` (:606)** (AST 复算: `python3 -c "import ast;…"` 数列长; 注意她自己的注释 :458 写的是 "12 + 47", **注释已过期, 以列表实长为准**) + deny globs + `manual\|smart\|off` + 每会话 FIFO + 允许清单入 config + 反混淆 (`:1152 _shell_tokens_with_spans` → `:1747 _deobfuscate_shell_word_for_detection`, 与 threat_patterns.py 284 行合起来的规模 **UNKNOWN**, v1 报的"~1,500 行"无法复算已作废); smart 模型明示防 "`rm -rf / # Respond APPROVE`" 注入 | `ExecGuard`: 6 条 FORBIDDEN 字面子串 + 12 条正则 + off/dangerous/all; 白名单**前缀匹配** (`c.startsWith(w)`) ⇒ `git status` 白名单可放行 `git statusX`/管道拼接; `rm -fr /` 不在 FORBIDDEN (仅 DANGEROUS) ⇒ **off 模式下直通** | **缺** (有洞) |
+| 14 | 审批 | `tools/approval.py` 3,951 行: **12 条 `HARDLINE_PATTERNS` (:417) + 70 条 `DANGEROUS_PATTERNS` (:606)** (AST 复算: `python3 -c "import ast;…"` 数列长; 注意她自己的注释 :458 写的是 "12 + 47", **注释已过期, 以列表实长为准**) + deny globs + `manual\|smart\|off` + 每会话 FIFO + 允许清单入 config + 反混淆 (`:1152 _shell_tokens_with_spans` → `:1747 _deobfuscate_shell_word_for_detection`, 与 threat_patterns.py 284 行合起来的规模 **UNKNOWN**, v1 报的"~1,500 行"无法复算已作废); smart 模型明示防 "`rm -rf / # Respond APPROVE`" 注入 | `ExecGuard` 1,242 行 (P11 重做后, `wc -l` 实测): **硬线在任何模式都拦**（含 `--yolo`/`off`）= 结构化 analyze（token 级 rm/chmod 目标解析 + 设备/文件系统/fork 炸弹命名正则）; **危险表 42 条**（复算 `grep -c "new Rule(" ExecGuard.java`）vs 她 70 条; 白名单改 **token 边界** 匹配（`git status` 不再放行 `git statusX`）, 复合命令/引号内分隔符不豁免; 反混淆覆盖 `$()`/反引号/`$$`/管道展开/注释剥离 ⇒ **读不懂必走人审**; 每会话 FIFO + 新待批取代旧的 + **审批绑命令**（放行不可挪用到另一条命令）+ 只有 ALWAYS 落盘。**仍无**: smart 模型明示档、deny globs | 浅 (P11 前为 **缺·有洞**: 6 字面 + 12 正则、`startsWith` 前缀匹配、`rm -fr /` off 模式直通 — 见 §8 `ebf44e5`) |
 | 15 | checkpoint | `tools/checkpoint_manager.py` 1,675 行: 共享 bare store, `refs/hermes/<sha256(path)[:16]>` (:76/:204), 每轮 + 每个写工具前, 整树或**单文件**回滚, 回滚前再快照("撤销撤销"), `_MAX_FILES = 50_000` (:148) + 修剪 | 影子库 + 引用 + 整树回滚; 每轮节拍/单文件粒度/撤销撤销 无 | 浅 |
 | 16 | 委托 | `tools/delegate_tool.py` 3,655 行: `DELEGATE_BLOCKED_TOOLS` **5 工具** (delegate_task/clarify/memory/send_message/cronjob, AST 实测), 宽度默认 3 (floor 1 无上限, `_get_max_concurrent_children` → `DaemonThreadPoolExecutor(max_workers=max_children)` :2651), `MAX_DEPTH=1` (:125), 子代理审批自动 deny, `DEFAULT_MAX_SUMMARY_CHARS=24000` (:590)+溢出落文件, async **SQLite 持久 + `_MAX_DELIVERY_ATTEMPTS=8` (`tools/async_delegation.py:84`) + `LIVE_RETENTION_DAYS=7` (`tools/delegation_live_log.py:44`)** | 子预算 1/4 + 深度剥工具 + `async_delegations` 表有; **宽度未强制**(§1#5)、无摘要溢出、无投递重试 | 浅 |
 | 17 | 网关送达 | `gateway/turn_lease.py` 302 行 (按**解析后 session_id** 上锁, 因 `switch_session` 多对一会让两把锁错位→`user;user` 死楔) + `delivery_ledger.py` 341 行 (`delivery_obligations` 三态, at-least-once + `RECOVERED_MARKER` 明示可能重复, owner=pid+进程启动时间, `sweep_recoverable`) + `dead_targets.py` | `ChannelBus` 每会话 fork + 200 条 ring buffer, **三件套全无** | **缺** |
@@ -267,6 +267,22 @@ grep -rn "delegateMaxChildren" z-bot-core/src/main/java  # §1#5
 - 2026-09-25 v2 初稿自检: 8 个二手数字复测走形 (见 §1 自省块) | 复算: §7 逐条 | 实测: toolsets 33、tools/ 98,428、adapter 29、SKILL.md 184、中断 4/40、run_conversation 5,299、mcp_serve 10 工具、反混淆规模 UNKNOWN。
 
 _(W1 起逐期追加)_
+
+- 2026-09-25 **P11 审批与安全闸门重做** ✅ 提交 `ebf44e5`（已推送）: 审批绑命令 + 待批取代 + 硬线在任何模式都拦 + `mvn_build`/`curl_test` 裸拼接路径补闸门 + 删 0 消费者注入口。
+  | 复算: `rm -rf z-bot-core/target/surefire-reports && mvn -o test -pl z-bot-core` 连续 3 跑
+  | 实测: `Tests run: 325, Failures: 0, Errors: 0, Skipped: 0` × 3 跑、`RC=0` × 3。§2 矩阵 #14 verdict 随本次提交由 **缺→浅**（成文时的 `缺 7 / 浅 14 / 齐 1` 是当日快照，不追改）。
+- 2026-09-25 P11 变异检验（"守卫有没有测试"这件事本身要有证据）
+  | 复算: `python3 _doc/acceptance/p11/p11_mutation.py && python3 _doc/acceptance/p11/p11_mutation2.py && python3 _doc/acceptance/p11/p11_mutation3.py`（量具已随代码入库，脚本自带锚点唯一性 + 变异后逐字节 md5 还原自检）
+  | 实测: 15 次注入 = 11 `RED-OK` / 3 `PARTIAL` / 1 `GREEN-BUT-MUTATED`。三条 `PARTIAL`（M8 队列退 LIFO、M11 读不懂的形状放行、M12 注释不剥离）**都判了红**，只是红的不是我在期望集里点名的那条而是同选择器内的姊妹测试 ⇒ 记为"期望集点错"而非"缺覆盖"；唯一 `GREEN-BUT-MUTATED`（M10）是我自己造的**等价变异**（往 SESSION 走不到的 `else if` 加分支），改写为 M10b 后 `RED-OK`。三脚本收尾均 `final md5 ok: True`，跑完 `git status --porcelain` 只剩量具目录本身。
+- 2026-09-25 P11 真实 E2E（真 pty+repl、真 HTTP serve、真杀进程重启；不许用读代码代替）
+  | 复算: `mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p11/p11_e2e2.py`
+  | 实测: `== E2E round2 15/15 通过 ==`；`stub 收到 LLM 请求 6 次`（key 全程 `stub-key-not-real`，真 key 未进任何临时目录）；`~/.zbot 项数=8`（跑前跑后同数 ⇒ 红线 1 无泄漏）。E2E 也是唯一抓到"放行可挪用到另一条命令"这个洞的量具（325 条单测当时全绿）。
+- 2026-09-25 P11 验收① 抓出的**既有**测试竞态 ✅ 提交 `4723add`（不是本期代码引入）: `PairingServiceTest` fixture 共用 200ms TTL，而懒清理按 `expiresAt > now` 判定 ⇒ `issue` 落盘慢过 200ms 就被自己删码。
+  | 复算: `mvn -o test -pl z-bot-core -Dtest=PairingServiceTest` 循环单跑 5–10 次（**别只看全量跑**，冷 JVM 才暴露）
+  | 实测: 修前单跑连续 6/6 红（`Tests run: 7, Failures: 1`，`caseInsensitiveCodeConsumption` 耗时 1.4–3.4s），全量 3 跑里红 1 跑（`multipleIssuedCodesAccumulate expected:<2> but was:<0>`）；修后单跑 `Tests run: 7, Failures: 0` × 5。
+- 2026-09-25 **待办 · 红线 1 泄漏（P11 发现，另片修）**: 沙箱根三处硬编码 `~/.zbot/workspace`，`--config-dir X` 不改变它 ⇒ 多 profile 共享同一个写/执行根（与已修的 `a91de90` state.db 同一类）。
+  | 复算: `grep -rn "zbot/workspace" z-bot-core/src/main/java` ⇒ `agent/BotAgent.java:1593`、`cli/AgentOptions.java:100`、`tool/Sandbox.java:16`
+  | 实测: 尚未修；修法（默认跟随 `configDir/workspace`，`--sandbox`/`-Dzbot.sandbox` 仍可覆盖）与验收清单待开工时补。
 
 ---
 
