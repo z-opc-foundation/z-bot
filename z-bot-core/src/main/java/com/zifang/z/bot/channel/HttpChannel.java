@@ -9,11 +9,13 @@ import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
+import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.session.SessionManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -53,6 +55,8 @@ public final class HttpChannel {
     private HttpServer server;
     private ExecutorService workers;
     private final CountDownLatch termination = new CountDownLatch(1);
+    /** 模型目录缓存（懒建；文件在 configDir/models-cache.json）。 */
+    private volatile com.zifang.z.bot.llm.ModelCatalogCache modelCatalog;
 
     public HttpChannel(BotAgent agent, int port) {
         this.agent = agent;
@@ -78,6 +82,10 @@ public final class HttpChannel {
         }
         if (workers != null) {
             workers.shutdownNow();
+        }
+        com.zifang.z.bot.llm.ModelCatalogCache mc = modelCatalog;
+        if (mc != null) {
+            mc.shutdown();
         }
         agent.shutdown();
         termination.countDown();
@@ -145,6 +153,8 @@ public final class HttpChannel {
                 }
             } else if ("/api/sessions".equals(path)) {
                 sessions(ex, method);
+            } else if ("/api/models".equals(path)) {
+                json(ex, 200, modelsResult(ex));
             } else if ("/api/session/switch".equals(path)) {
                 sessionSwitch(ex, readBody(ex));
             } else if ("/api/session/delete".equals(path)) {
@@ -417,6 +427,70 @@ public final class HttpChannel {
         resp.put("count", codes.size());
         resp.put("skillCodes", codes);
         return resp;
+    }
+
+    /**
+     * {@code GET /api/models} — 模型目录（ModelCatalogCache 分桶缓存）。
+     * {@code ?refresh=1} 触发异步重拉，立即返回当前缓存。
+     */
+    private Map<String, Object> modelsResult(HttpExchange ex) {
+        BotConfig cfg = agent.getConfig();
+        String code = agent.getProviderCode();
+        if (cfg != null && cfg.getActiveProviderCode() != null) {
+            code = cfg.getActiveProviderCode();
+        }
+        com.zifang.z.bot.llm.ModelCatalogCache cache = modelCatalog();
+        java.util.function.Supplier<List<com.zifang.z.agent.kernel.llm.Model>> supplier =
+                () -> agent.getProvider().listModels();
+
+        String query = ex.getRequestURI().getQuery();
+        boolean refresh = query != null && query.contains("refresh=1");
+        List<com.zifang.z.agent.kernel.llm.Model> models = refresh
+                ? cache.refreshAsync(code, supplier)
+                : cache.catalog(code, supplier);
+
+        List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
+        for (com.zifang.z.agent.kernel.llm.Model m : models) {
+            Map<String, Object> row = new LinkedHashMap<String, Object>();
+            row.put("id", m.getId());
+            row.put("displayName", m.getDisplayName());
+            row.put("provider", m.getProvider());
+            row.put("contextWindow", m.getContextWindow());
+            row.put("maxOutputTokens", m.getMaxOutputTokens());
+            List<String> caps = new ArrayList<String>();
+            for (com.zifang.z.agent.kernel.llm.Model.Capability c : m.getCapabilities()) {
+                caps.add(c.name());
+            }
+            row.put("capabilities", caps);
+            out.add(row);
+        }
+
+        Map<String, Object> resp = new LinkedHashMap<String, Object>();
+        resp.put("provider", code);
+        resp.put("model", agent.getModel());
+        resp.put("count", out.size());
+        resp.put("models", out);
+        resp.put("fetchedAt", cache.fetchedAt(code));
+        resp.put("stale", cache.isStale(code));
+        resp.put("refreshing", refresh);
+        return resp;
+    }
+
+    private com.zifang.z.bot.llm.ModelCatalogCache modelCatalog() {
+        com.zifang.z.bot.llm.ModelCatalogCache c = modelCatalog;
+        if (c != null) {
+            return c;
+        }
+        synchronized (this) {
+            if (modelCatalog == null) {
+                BotConfig cfg = agent.getConfig();
+                File dir = cfg == null ? null : cfg.getConfigDir();
+                File f = dir == null ? new File(System.getProperty("java.io.tmpdir"), "zbot-models-cache.json")
+                        : new File(dir, "models-cache.json");
+                modelCatalog = new com.zifang.z.bot.llm.ModelCatalogCache(f);
+            }
+            return modelCatalog;
+        }
     }
 
     private Map<String, Object> agentRegisterResult(String body) {

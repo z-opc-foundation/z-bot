@@ -1012,6 +1012,11 @@ public class BotAgent {
         return providerCode;
     }
 
+    /** 当前生效的 LlmProvider（含 Resilient/KeyPool 装饰层），供 HTTP 层取 listModels 等。 */
+    public LlmProvider getProvider() {
+        return provider;
+    }
+
     public BotConfig getConfig() {
         return config;
     }

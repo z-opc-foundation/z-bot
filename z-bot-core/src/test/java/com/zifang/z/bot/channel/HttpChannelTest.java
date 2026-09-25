@@ -19,6 +19,7 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -109,6 +110,35 @@ public class HttpChannelTest {
         assertTrue(r.body, r.body.contains("\"name\":\"echo\""));
         assertTrue(r.body, r.body.contains("\"name\":\"risky\""));
         assertTrue(r.body, r.body.contains("\"description\":\"回显文本\""));
+    }
+
+    @Test
+    public void modelsEndpointServesCatalogFromCache() throws Exception {
+        // 盘缓存落在 /tmp，TTL 内会跳过 supplier——先清掉保证本测从零拉取
+        File disk = new File(System.getProperty("java.io.tmpdir"), "zbot-models-cache.json");
+        disk.delete();
+
+        Response r = call("GET", "/api/models", null);
+        assertEquals(200, r.code);
+        assertTrue(r.body, r.body.contains("\"provider\":\"scripted\""));
+        assertTrue(r.body, r.body.contains("\"id\":\"scripted-model-a\""));
+        assertTrue(r.body, r.body.contains("\"id\":\"scripted-model-b\""));
+        assertTrue(r.body, r.body.contains("\"capabilities\""));
+        assertTrue(r.body, r.body.contains("\"contextWindow\""));
+        assertTrue(r.body, r.body.contains("\"stale\":false"));
+        assertTrue(r.body, r.body.contains("\"fetchedAt\":") && !r.body.contains("\"fetchedAt\":0"));
+
+        // 第二次请求命中 TTL 缓存，内容一致
+        Response r2 = call("GET", "/api/models", null);
+        assertEquals(200, r2.code);
+        assertTrue(r2.body, r2.body.contains("\"id\":\"scripted-model-a\""));
+
+        // ?refresh=1 触发异步重拉，立即返回且标记 refreshing
+        Response r3 = call("GET", "/api/models?refresh=1", null);
+        assertEquals(200, r3.code);
+        assertTrue(r3.body, r3.body.contains("\"refreshing\":true"));
+
+        disk.delete();
     }
 
     @Test
@@ -486,7 +516,13 @@ public class HttpChannelTest {
 
         @Override
         public List<Model> listModels() {
-            return Collections.emptyList();
+            return Arrays.asList(
+                    new Model("scripted-model-a", "脚本模型A", "scripted",
+                            Arrays.asList(Model.Capability.CHAT, Model.Capability.TOOLS),
+                            8192L, 2048L),
+                    new Model("scripted-model-b", "脚本模型B", "scripted",
+                            Collections.singletonList(Model.Capability.CHAT),
+                            32768L, 4096L));
         }
 
         @Override

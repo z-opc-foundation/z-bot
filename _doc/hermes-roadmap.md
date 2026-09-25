@@ -232,3 +232,20 @@
 - pom: 引入 `z-agent-kernel-mcp` 依赖 (dependencyManagement + z-bot-core 显式声明)
 
 **单测**: 190/190 连续 3 跑绿 (新增 9: McpManagerTest)。`FakeMcpServer` (内存 `McpTransport`) 覆盖: 启动注册/工具执行/server 错误透传/单 server 失败不连累其他/reload 重注册/命名格式/properties 解析/空 servers。
+
+### P10a 多 key 凭据池 ✅ 完成 (2026-09-25)
+**实现**:
+- `llm.KeyPoolLlmProvider`: 内层 key 轮换装饰器, 分层 Resilient(外, 模型降级+瞬时重试) → KeyPool(内, key 轮换) → 单 key kernel provider; key 作用域失败 (401/403/402/quota/429) → `CredentialPool.reportFailure` 冷却换下一个 (429 优先 Retry-After 否则 60s, 鉴权类 10min); 非 key 作用域 (5xx/超时/400) 直接上抛交 Resilient; 成功 → reportSuccess; 流式不轮换 (半途换 key 会拼出两段回复) 只记冷却
+- `BotConfig.Provider`: `getApiKeys()` 逗号分隔多 key + `withApiKey()`; 构造器改 public
+- `LlmRouter.create` 多 key 只取首 key 构造; `BotAgent.wrapResilient` 内层先套 KeyPool 再套 Resilient
+- pom: 引入 `z-agent-kernel-credential` (dependencyManagement + z-bot-core)
+
+**单测**: 205/205 连续 3 跑绿 (新增 15: KeyPoolLlmProviderTest)。
+
+### P10b 模型目录缓存 + /api/models ✅ 完成 (2026-09-25)
+**实现**:
+- `llm.ModelCatalogCache`: per-provider TTL 桶缓存 (默认 5min) + supplier 重拉; 拉取失败降级用旧缓存顶着 (宁可目录旧也不空/不炸); JSON 落盘 tmp+ATOMIC_MOVE, 构造时载入容忍损坏文件; 未知 Capability 跳过; `catalog / refreshAsync / invalidate / isStale / fetchedAt / shutdown`
+- `HttpChannel` 新路由 `GET /api/models`: provider/model/count/models(id/displayName/provider/contextWindow/maxOutputTokens/capabilities)/fetchedAt/stale/refreshing; `?refresh=1` 异步重拉立即返回当前缓存; cache 文件 `<configDir>/models-cache.json`; `stop()` 时 shutdown cache 线程
+
+**单测**: 216/216 连续 4 跑绿 (新增 11: ModelCatalogCacheTest 10 + HttpChannelTest 模型端点 1)。
+已知抖动: 全量首跑出现过 1 次 WebhookChannelTest 401 (全仓唯一 401 源是 Feishu token 校验, WebhookChannel 无鉴权逻辑), 单类 10/10 + 后续 4 轮全量均绿, 判定为环境级临时端口复用, 未复现不修。
