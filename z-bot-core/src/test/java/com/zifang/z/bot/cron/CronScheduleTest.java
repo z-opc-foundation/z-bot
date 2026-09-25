@@ -126,4 +126,46 @@ public class CronScheduleTest {
     public void localTimeHelperSanity() {
         assertEquals(LocalTime.of(9, 30), LocalTime.of(9, 30));
     }
+
+    // ===== once（P17 的一次性任务：at-most-once 的判定入口） =====
+
+    @Test
+    public void parseOnceWithOffsetAndWithZ() {
+        CronSchedule s = CronSchedule.parse("once 2026-09-26T09:00:00+08:00");
+        assertEquals(CronSchedule.Kind.ONCE, s.kind);
+        assertEquals(java.time.Instant.parse("2026-09-26T01:00:00Z"), s.onceAt);
+        assertEquals(java.time.Instant.parse("2026-09-26T01:00:00Z"),
+                CronSchedule.parse("ONCE 2026-09-26T01:00:00Z").onceAt);
+    }
+
+    @Test
+    public void parseOnceWithoutZoneUsesLocalZone() {
+        CronSchedule s = CronSchedule.parse("once 2026-09-26T09:00:00");
+        assertEquals(java.time.LocalDateTime.parse("2026-09-26T09:00:00")
+                        .atZone(ZoneId.systemDefault()).toInstant(),
+                s.onceAt);
+    }
+
+    @Test
+    public void onceIsDueOnlyAtAndAfterTheInstant() {
+        CronSchedule s = CronSchedule.parse("once 2026-09-26T09:00:00Z");
+        ZonedDateTime before = ZonedDateTime.of(2026, 9, 26, 8, 59, 0, 0, ZoneId.of("UTC"));
+        ZonedDateTime after = ZonedDateTime.of(2026, 9, 26, 9, 0, 0, 0, ZoneId.of("UTC"));
+        assertFalse("没到点不许触发", s.due(before.minusHours(1), before));
+        assertTrue("到点即触发", s.due(before, after));
+        // 到点之后恒为 due —— 真正的"至多一次"由 claimDispatch 的落账记账收口，
+        // 不靠调度表达式在第二个 tick 上失忆（那样只是把重跑换成撞运气）。
+        assertTrue(s.due(after, after.plusHours(5)));
+    }
+
+    @Test
+    public void onceRoundTripsThroughToStringAndRejectsGarbageInstant() {
+        assertTrue(CronSchedule.parse("once 2026-09-26T09:00:00Z").toString().startsWith("once "));
+        try {
+            CronSchedule.parse("once 明天上午");
+            org.junit.Assert.assertFalse("坏时刻必须当场拒", true);
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("明天上午"));
+        }
+    }
 }
