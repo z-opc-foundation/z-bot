@@ -8,11 +8,14 @@ import com.zifang.z.bot.channel.OutboundMessage;
 import com.zifang.z.bot.channel.PairingService;
 import com.zifang.z.bot.channel.WebhookChannel;
 import com.zifang.z.bot.config.BotConfig;
+import com.zifang.z.bot.cron.ChannelCronDelivery;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Option;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Callable;
 
 /**
@@ -56,9 +59,34 @@ public class GatewayCommand implements Callable<Integer> {
         }
 
         Runtime.getRuntime().addShutdownHook(new Thread(gw::stop, "z-bot-gateway-shutdown"));
+
+        // cron 的通道投递口（P17 红线 2：投递接口不能只有单测消费者）。
+        // 通道表按"当时活着的那些"现取（gw.channels() 是活视图），但**剔掉拉模式的 HTTP 控制台**：
+        // HttpChannelAdapter.send() 是刻意的空转（浏览器自己来拉），留着它等于允许
+        // 记一条"投递成功"而没有任何人收到 —— 比报 unknown channel 坏得多。
+        if (agent.getCronScheduler() != null) {
+            agent.getCronScheduler().deliverViaChannels(
+                    ChannelCronDelivery.forChannels(new java.util.function.Supplier<List<Channel>>() {
+                        @Override
+                        public List<Channel> get() {
+                            List<Channel> pushable = new ArrayList<Channel>();
+                            for (Channel c : gw.channels()) {
+                                if (!(c instanceof HttpChannelAdapter)) {
+                                    pushable.add(c);
+                                }
+                            }
+                            return pushable;
+                        }
+                    }));
+        }
+
         gw.start();
         System.out.println("  gateway 已启动");
         System.out.println("  通道: " + gw.channels().stream().map(Channel::name).reduce((a, b) -> a + ", " + b).orElse("(无)"));
+        if (agent.getCronScheduler() != null) {
+            System.out.println("  cron 投递口: 已接通道表（到点任务的结果按 job 的 deliver 路由投，"
+                    + "拉模式的 HTTP 控制台不作为投递目标）");
+        }
         if (pairingService != null) {
             System.out.println("  配对码 TTL " + (pairingService.getTtlMs() / 60000) + " 分钟（z-bot pair <code> 绑定）");
         }

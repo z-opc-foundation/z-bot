@@ -123,18 +123,42 @@ public final class CronScheduler {
     private final List<CronJob> jobs = new CopyOnWriteArrayList<CronJob>();
     private final AtomicBoolean started = new AtomicBoolean(false);
 
-    // —— jobs.json 关键区：进程内监视器 + 跨进程 flock + 线程局部重入计数 ——
-    private final java.util.concurrent.locks.ReentrantLock jobsMonitor =
-            new java.util.concurrent.locks.ReentrantLock(true);
+    // ===== jobs.json 关键区：进程内监视器 + 跨进程 flock + 线程局部重入计数 =====
+    //
+    // 监视器按<b>锁文件的绝对路径</b>放在 JVM 级的表里，而不是挂在实例上 —— 对齐 hermes 的
+    // {@code threading.RLock}（那是<b>进程</b>粒度的，不是对象粒度的）。要是每个实例各拿一把
+    // 监视器，同一个 JVM 里两个指同一 cron 目录的实例就会同时对同一个 {@code .jobs.lock}
+    // tryLock，而 Java 的 FileLock 是<b>整进程</b>互斥的（{@code FileChannel.tryLock} 的
+    // javadoc：同一 Java 虚拟机里重复锁定直接抛 OverlappingFileLockException，哪怕不同通道），
+    // 于是第二把锁不是"等跨进程的那位"，而是当场炸成降级 —— 全量跑里真出现过这一行。
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>
+            JOBS_MONITORS = new java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>();
+
+    /** 本实例进关键区要先拿的进程内监视器（同目录的实例共用一把）。 */
+    private final java.util.concurrent.locks.ReentrantLock jobsMonitor;
     private final ThreadLocal<Integer> jobsDepth = new ThreadLocal<Integer>();
     private FileChannel jobsLockChannel;
     private FileLock jobsLockHandle;
-    private int flockAcquisitions;
+    private final java.util.concurrent.atomic.AtomicInteger flockAcquisitions =
+            new java.util.concurrent.atomic.AtomicInteger();
+    /** 降级次数：这次进关键区时没能拿到跨进程 flock，只用上了进程内锁。 */
+    private final java.util.concurrent.atomic.AtomicInteger jobsLockDegraded =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     private volatile CronDelivery delivery = new LocalCronDelivery();
     private volatile long runClaimTtlMillis = DEFAULT_RUN_CLAIM_TTL_MILLIS;
     private volatile long heartbeatMillis = DEFAULT_HEARTBEAT_MILLIS;
     private final String ownerId = computeOwnerId();
+
+    private static final java.util.function.Supplier<Instant> INSTANT_NOW =
+            new java.util.function.Supplier<Instant>() {
+                @Override
+                public Instant get() {
+                    return Instant.now();
+                }
+            };
+    /** 认领/心跳判定用的时刻源，见 {@link #clock}。 */
+    private volatile java.util.function.Supplier<Instant> clock = INSTANT_NOW;
 
     private volatile ZonedDateTime lastTick;
     private Thread worker;
@@ -143,12 +167,25 @@ public final class CronScheduler {
         this.dir = dir;
         this.jobsFile = new File(dir, "jobs.json");
         this.jobsLockFile = new File(dir, JOBS_LOCK_FILE);
+        this.jobsMonitor = monitorFor(jobsLockFile.getAbsolutePath());
         this.tickSeconds = Math.max(1, tickSeconds);
         this.runner = runner;
         if (!dir.isDirectory() && !dir.mkdirs()) {
             throw new IllegalStateException("cron 目录不可创建: " + dir);
         }
         load();
+    }
+
+    /** 同一把锁文件 ↔ 同一个进程内监视器（表里只留一份，同目录的实例共用）。 */
+    private static java.util.concurrent.locks.ReentrantLock monitorFor(String key) {
+        java.util.concurrent.locks.ReentrantLock existing = JOBS_MONITORS.get(key);
+        if (existing != null) {
+            return existing;
+        }
+        java.util.concurrent.locks.ReentrantLock fresh =
+                new java.util.concurrent.locks.ReentrantLock(true);
+        java.util.concurrent.locks.ReentrantLock raced = JOBS_MONITORS.putIfAbsent(key, fresh);
+        return raced == null ? fresh : raced;
     }
 
     // ===== 任务管理 =====
@@ -261,6 +298,24 @@ public final class CronScheduler {
         return runClaimTtlMillis;
     }
 
+    /**
+     * 换掉"现在几点"（缺省 {@link Instant#now()}）。
+     *
+     * <p>存在的理由只有一个但很硬：认领过期是一条<b>时间</b>语义（"age &lt; ttl 才算活着"），
+     * 用真墙钟测它就得 sleep 到 ttl 量级 —— 本仓 {@code PairingServiceTest} 就是靠 200ms TTL
+     * 撞真实墙钟翻过车的。给了这个口，{@code CronClaimTest} 能把时钟一格一格拨，
+     * 而产品路径一行都不变（装配方从不注入）。</p>
+     */
+    public CronScheduler clock(java.util.function.Supplier<Instant> clock) {
+        this.clock = clock == null ? INSTANT_NOW : clock;
+        return this;
+    }
+
+    /** 当前用于认领/心跳判定的时刻（注入的假时钟或 {@link Instant#now()}）。 */
+    public Instant now() {
+        return clock.get();
+    }
+
     /** 心跳保鲜节拍（毫秒），默认 {@value #DEFAULT_HEARTBEAT_MILLIS}。 */
     public CronScheduler heartbeatMillis(long millis) {
         this.heartbeatMillis = Math.max(1L, millis);
@@ -345,7 +400,7 @@ public final class CronScheduler {
      *         或别的进程正拿着还新鲜的认领
      */
     public boolean claimDispatch(final String jobId) {
-        final Instant now = Instant.now();
+        final Instant now = clock.get();
         Boolean proceed = withStore(new LockedCall<Boolean>() {
             @Override
             public Boolean call(StoreTxn tx) {
@@ -397,7 +452,7 @@ public final class CronScheduler {
      * @return true = 续上了；false = 任务没了 / 没认领 / 主人不是它
      */
     public boolean heartbeatRunClaim(final String jobId, final String expectedOwner) {
-        final Instant now = Instant.now();
+        final Instant now = clock.get();
         Boolean beat = withStore(new LockedCall<Boolean>() {
             @Override
             public Boolean call(StoreTxn tx) {
@@ -438,15 +493,19 @@ public final class CronScheduler {
                 stopClaimHeartbeat(heartbeat);
             }
             CronJob snapshot = findJob(jobId);
-            String deliveryError = deliverResult(snapshot == null ? job : snapshot, reply);
-            finishRun(jobId, reply, deliveryError);
+            String deliveryConclusion = deliverResult(snapshot == null ? job : snapshot, reply);
+            finishRun(jobId, reply, deliveryConclusion);
         } catch (IOException e) {
             LOG.warn("[cron] {} 执行失败: {}", jobId, e.getMessage());
         }
     }
 
-    /** 跑完了：清认领、写台账，一次性任务摘除（认领账留在被摘前的最后一次落盘里）。 */
-    void finishRun(final String jobId, final String result, final String deliveryError) {
+    /**
+     * 跑完了：清认领、写台账，一次性任务摘除（认领账留在被摘前的最后一次落盘里）。
+     *
+     * @param conclusion {@link #deliverResult} 给出的<b>投递结论</b>，进 {@link CronJob#lastDelivery}
+     */
+    void finishRun(final String jobId, final String result, final String conclusion) {
         withStore(new LockedCall<Void>() {
             @Override
             public Void call(StoreTxn tx) {
@@ -456,7 +515,7 @@ public final class CronScheduler {
                     return null;
                 }
                 job.markRun(result);
-                job.lastDelivery = deliveryError == null ? "ok" : deliveryError;
+                job.lastDelivery = conclusion == null ? "ok" : conclusion;
                 job.runClaim = null;   // 她的 mark_job_run 同样在这儿清 run_claim（jobs.py:1542）
                 boolean drop = job.isOneShot();
                 if (drop) {
@@ -471,18 +530,24 @@ public final class CronScheduler {
         });
     }
 
-    /** 投递一次结果：异常不外溢，只落成能进 jobs.json 的原因。 */
+    /**
+     * 投递一次结果，返回要写进 {@link CronJob#lastDelivery} 的<b>结论</b>（永不为 null）。
+     *
+     * <p>异常不外溢、也不静默吞：投递口的 {@code null} 约定是"成功"，而"没东西可投"是另一件事，
+     * 两者都写成 ok 就等于台账在说谎（空输出的任务其实一条消息都没发出去）。</p>
+     */
     private String deliverResult(CronJob job, String text) {
         if (text == null || text.trim().isEmpty()) {
             LOG.warn("[cron] {} 没有任何输出，跳过投递（lastResult 仍记录本次）", job.id);
-            return null;
+            return "skipped: 没有可投递的输出";
         }
         try {
             String err = delivery.deliver(job, text);
             if (err != null) {
                 LOG.warn("[cron] {} 投递失败: {}", job.id, err);
+                return err;
             }
-            return err;
+            return "ok";
         } catch (Exception e) {
             LOG.warn("[cron] {} 投递口抛异常: {}", job.id, e.toString());
             return "delivery threw: " + e.getMessage();
@@ -535,7 +600,12 @@ public final class CronScheduler {
 
     /** 真去向 OS 抢 flock 的次数：重入必须不增加它（否则同 JVM 二次 tryLock 直接抛）。 */
     int flockAcquisitions() {
-        return flockAcquisitions;
+        return flockAcquisitions.get();
+    }
+
+    /** 拿不到跨进程锁、只用进程内锁就干了一次的次数（超上限/被抢/异常三类都记这里）。 */
+    public int jobsLockDegradedCount() {
+        return jobsLockDegraded.get();
     }
 
     /** 在 jobs.json 关键区里跑一段（可重入；嵌套复用同一把跨进程锁）。 */
@@ -594,7 +664,7 @@ public final class CronScheduler {
                 } catch (OverlappingFileLockException e) {
                     // 本 JVM 的另一个线程已经持着这段 —— 只有"重入计数算错了"才可能走到这里。
                     // 等下去也没意义（同进程的锁不会因为我们多等就松开），当场报出来 + 降级。
-                    jobsLockDegraded++;
+                    jobsLockDegraded.incrementAndGet();
                     LOG.error("[cron] 重入计数失衡：同一 JVM 已有线程持着 {} 的锁，"
                             + "本次只用进程内锁（这说明 withJobsLock 的嵌套判定被改坏了）",
                             jobsLockFile.getName());
@@ -607,7 +677,7 @@ public final class CronScheduler {
                     break;
                 }
                 if (System.currentTimeMillis() >= deadline) {
-                    jobsLockDegraded++;
+                    jobsLockDegraded.incrementAndGet();
                     LOG.error("[cron] 等 {} 的跨进程锁超过 {}ms，另一个进程卡住了；"
                             + "本次降级为只用进程内锁，好过整个调度器僵死（hermes #60703 同型）",
                             jobsLockFile.getName(), Long.valueOf(JOBS_LOCK_TIMEOUT_MILLIS));
@@ -620,7 +690,7 @@ public final class CronScheduler {
                     Thread.sleep(JOBS_LOCK_POLL_MILLIS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    jobsLockDegraded++;
+                    jobsLockDegraded.incrementAndGet();
                     closeQuietly(ch);
                     ch = null;
                     lock = null;
@@ -628,7 +698,7 @@ public final class CronScheduler {
                 }
             }
         } catch (IOException | RuntimeException e) {
-            jobsLockDegraded++;
+            jobsLockDegraded.incrementAndGet();
             LOG.warn("[cron] 跨进程锁不可用（{}）；只用进程内锁继续", e.toString());
             closeQuietly(ch);
             ch = null;
@@ -637,7 +707,7 @@ public final class CronScheduler {
         jobsLockChannel = ch;
         jobsLockHandle = lock;
         if (lock != null) {
-            flockAcquisitions++;
+            flockAcquisitions.incrementAndGet();
         }
         jobsDepth.set(Integer.valueOf(1));
     }

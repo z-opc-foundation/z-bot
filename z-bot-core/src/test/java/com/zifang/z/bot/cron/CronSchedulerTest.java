@@ -130,8 +130,11 @@ public class CronSchedulerTest {
         });
         CronJob j = s.add("t", "echo", "every 5s");
         s.execute(j);
-        assertTrue(j.lastResult.startsWith("执行失败"));
-        assertTrue(j.lastResult.contains("kaboom"));
+        // 关键区是"读盘→改→写盘→同步内存"，跑完后内存里那份是刚落盘的新对象；
+        // add() 当场的返回值只用来传 id，不回写（跨进程看到的才是事实）。
+        CronJob after = s.findJob(j.id);
+        assertTrue(after.lastResult.startsWith("执行失败"));
+        assertTrue(after.lastResult.contains("kaboom"));
     }
 
     @Test
@@ -169,8 +172,8 @@ public class CronSchedulerTest {
         File lockFile = new File(cronDir, j.id + ".run.lock");
         assertFalse("执行前锁文件不存在", lockFile.exists());
         s.execute(j);
-        // 执行后锁文件可能还在（try-with-resources 会关掉）—— 关键是不抛、lastResult 写回
-        assertEquals("ok-1", j.lastResult);
+        // 执行后锁文件可能还在（try-with-resources 会关掉）—— 关键是不抛、lastResult 落得进盘
+        assertEquals("ok-1", s.findJob(j.id).lastResult);
         assertEquals(1, ran.get());
     }
 

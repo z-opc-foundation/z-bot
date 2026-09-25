@@ -39,6 +39,53 @@ public final class ChannelCronDelivery implements CronDelivery {
         List<String> names();
     }
 
+    /**
+     * 把"活着的通道清单"包成 {@link Channels}（装配方用的就是这一个口）。
+     *
+     * <p>拿的是 {@link Supplier} 而不是 {@code List} 快照：gateway 是"先起进程、后按需 register"
+     * 的，cron 到点那一刻要看到的是<b>当时</b>接上的通道，不是装配那一刻的。名单里放什么是
+     * 装配方的判断（只该放能被动收信的通道 —— 投给一个 {@code send} 空转的通道，等于
+     * 记一条"投递成功"而没人收到，这比报错更坏）。</p>
+     *
+     * <p>查名按 {@link String#equalsIgnoreCase}：路由串在 {@link #deliver} 里被统一转小写，
+     * 通道名却是实现方随手写的（{@code WebhookChannel.name() == "webhook"}），
+     * 大小写不该决定一条消息投不投得出去。</p>
+     */
+    public static Channels forChannels(final java.util.function.Supplier<List<Channel>> live) {
+        if (live == null) {
+            throw new IllegalArgumentException("live 通道表不能为空");
+        }
+        return new Channels() {
+            @Override
+            public Channel find(String name) {
+                if (name == null) {
+                    return null;
+                }
+                for (Channel c : safe(live.get())) {
+                    if (c != null && name.equalsIgnoreCase(c.name())) {
+                        return c;
+                    }
+                }
+                return null;
+            }
+
+            @Override
+            public List<String> names() {
+                List<String> out = new ArrayList<String>();
+                for (Channel c : safe(live.get())) {
+                    if (c != null && c.name() != null && !out.contains(c.name())) {
+                        out.add(c.name());
+                    }
+                }
+                return out;
+            }
+        };
+    }
+
+    private static List<Channel> safe(List<Channel> live) {
+        return live == null ? new ArrayList<Channel>() : live;
+    }
+
     private final Channels channels;
     private final CronDelivery local;
     private final boolean wrap;
@@ -270,7 +317,10 @@ public final class ChannelCronDelivery implements CronDelivery {
      */
     public static String validateRoute(String route) {
         String v = normalize(route);
-        for (String raw : v.split(",")) {
+        // split(",", -1)：默认的 split 会丢掉**尾部**空段，写成 "local,," 时下面那句
+        // "有空段" 的判定就成了永远走不到的死分支（建任务时放过，到点解析也放过，
+        // 但用户要的是一份能被照着写的路由语法，不是一个说法和实现不一致的语法）。
+        for (String raw : v.split(",", -1)) {
             String part = raw.trim();
             if (part.isEmpty()) {
                 return "deliver 路由有空段: " + route;
