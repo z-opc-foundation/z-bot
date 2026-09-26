@@ -77,6 +77,13 @@ models-cache.json    # 模型目录缓存
 守卫是 `InboundBodyLimitTest`（含"还有谁自己调了 `getRequestBody()`"那支接线守卫），变异检验见
 `_doc/acceptance/p30b/LEDGER.tsv`。
 
+飞书这一面的入站形状**只有** `POST /feishu/event`：GET / PUT / DELETE 一律 405，旧的
+`GET …?echostr=` 门外回显已在 D-P30-1 裁定后拆掉 —— 查询参数原样回显是**企微**的回调校验形状
+（`lark_oapi` 1.5.3 全包与 hermes 的飞书适配器里都是 0 命中，她的 wecom 适配器 6 命中且解密后才回显），
+挂在飞书面上等于在验签/token 门**之前**开一条回显口。现在这一面唯一的"把请求内容吐回去"的口是
+`url_verification` 的 `challenge`，它排在 verification-token 门之后；v1 平铺事件的容错只认代码里
+已经读过的那几个键，无出处的 `event.content` 不开读取点（`_doc/acceptance/p30c/EVIDENCE.md`）。
+
 ## 命令面只有一份源
 
 斜杠命令的注册表是唯一单源，TUI / HTTP / web 控制台 / ACP 四个端都从它派生
@@ -111,20 +118,20 @@ mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.
    量具如 `_doc/acceptance/p28/p28_e2e.py`；
 4. **杠④** 测试与 E2E 一个字都不许动 `~/.zbot/`（一律 `--config-dir` 指临时根）。
 
-最近一次目标树读数（`90f361f`，09-27 06:5x 复测杠①；README/roadmap/EVIDENCE 是随后落的文档笔，
-被测量的 6 个生产文件 + 新测试类逐字节未变，md5 对账见 `_doc/acceptance/p30b/EVIDENCE.md` §0）：
-**1194 个测试 ×3 全绿**，测试文件 111 个（同一数字三把尺对着读：surefire 合计 1194 == 跑后 111 份
-`*/target/surefire-reports/*.xml` 求和 1194 == 文本 `@Test` 1197 − 注释里的 3 处字样），
-socket 命中 0，杠④ 三点不变；杠② 五族
+最近一次目标树读数（实现 `6f26621`；杠①×3 跑在**含本期文档笔的最终树**上，逐字读数与起始时刻见
+`_doc/acceptance/p30c/EVIDENCE.md` §1，被测量的生产文件与测试类逐字节未变，md5 对账见同一份 §0）：
+**1195 个测试 ×3 全绿**，测试文件 111 个（同一数字三把尺对着读：surefire 合计 1195 == 跑后 111 份
+`*/target/surefire-reports/*.xml` 求和 1195 == 文本 `@Test` 1198 − 注释里的 3 处字样），
+socket 命中 0，杠④ 三点不变；杠② 六族
 P19 8/8 KILLED、P27 21 支 `10 RED-OK / 10 PARTIAL / 1 SURVIVED`、P28 14 支 `13 RED-OK / 1 SURVIVED`
-（两族的 SURVIVED 分别是判为等价的 M13 与故意注入的阳性对照 M5）、P30 15 支与 P30b 7 支全 RED-OK
+（两族的 SURVIVED 分别是判为等价的 M13 与故意注入的阳性对照 M5）、P30 15 支、P30b 7 支、P30c 5 支全 RED-OK
 （**每族的读数都是它自己收口那一跑的**，不是同一遍扫出来的；跨族汇总别照着这一行做减法）。
 
 ## 明确没做的（别当成已完成）
 
 - **`0.2.0` / `0.3.0` 都没发 Central**，repo1 上只有 `z-bot-core:0.1.0`；P29（抬号 + 发布 + 外部工程真 pull 验证）未开工。
 - 入站的**真凭据握手**仍然零验证：飞书 `{"encrypt": …}` 解密、飞书 **SHA-256** 事件验签、钉钉入站 `sign`+1 小时窗口校验三条 P30 都已实现并具名钉住（`_doc/hermes-roadmap.md` §8.14），但进出站的全部证据仍是"对 127.0.0.1 假端点发出的字节"——本机没有飞书/钉钉凭据。
-- 入站 body 上限 64 KiB（四面共用、门在分配之前）已闭合（`_doc/hermes-roadmap.md` §8.15）；还没动的是：`GET /feishu/event?echostr=` 是验签门外的回显、v1 平铺事件的 `event.content` 没有读取点——这两条在等一份权威出处才动，记账见 `_doc/acceptance/p30/EVIDENCE.md` §6。
+- 入站 body 上限 64 KiB（四面共用、门在分配之前）已闭合（`_doc/hermes-roadmap.md` §8.15）；`GET /feishu/event?echostr=` 那条验签门外的回显也已拆掉（§8.16，D-P30-1），v1 平铺容错同时划了边界：无出处的 `event.content` 不是读取点，由一支边界用例钉住（D-P30-2）。仍欠的是**上限本身不是配置项**（改尺寸要重编）与真凭据握手零验证（上一条）。
 - `POST /api/skill/push` 的语义（推 vs 拉）尚未裁定（D-P28-2）；`POST /api/agent/register` 该返 200 还是 501 未定。
 - 真 tty 下的人机体验（渲染、光标键、中文宽字符）没有自动化验收，只有 pty 探针取证，记 NO-RUN。
 - `z-bot-desktop-packager` 只有 jpackage 配置，本机没打过 .dmg/.exe/.deb。
