@@ -93,11 +93,14 @@ MUTANTS = [
      ["newSessionAndSwitchRestoreHistory",
       "volatileContentReachesTheModelThroughTheUserMessageNotTheSystemPrompt",
       "soulStaysInSystemPromptAndMemoryGoesToUserMessage",
+      "midRunMemoryWriteIsVisibleNextTurnWithoutTouchingThePrompt",
       "thirdRequestInOneSessionStacksContradictoryClockBlocks"],
-     "反方向：user 消息里没有上下文头了。BotAgentTest 那条（剥头之后逐字相等）必须因为请求里"
+     "反方向：user 消息里没有上下文头了。第一条断言（剥头之后逐字相等）必须因为请求里"
      "找不到分隔符而红 —— 它同时证明 assertEquals 换的是「按协议剥头再逐字相等」，不是 contains；"
      "P12e 新增的 thirdRequestInOneSessionStacksContradictoryClockBlocks 是它的阳性对照"
-     "（第 1 轮就要看到时钟块），摘掉注入 ⇒ 两支一起红"),
+     "（第 1 轮就要看到时钟块），摘掉注入 ⇒ 两支一起红。"
+     "midRun… 这一支是 P12e 第一遍跑（LEDGER_run1）补进来的：它当时以 extra 出现（PARTIAL 的成因），"
+     "红的理由正是「中途写的记忆下一轮到不了模型」= 本变异要抓的那件事 ⇒ 归入点名集，不是把判据调松"),
 
     ("M2 自动压缩不退款", "mvn", "bot",
      "long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, compressed));",

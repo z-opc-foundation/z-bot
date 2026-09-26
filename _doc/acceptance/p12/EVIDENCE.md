@@ -1180,10 +1180,14 @@ BotAgent.java:1326: return VOLATILE_CONTEXT_HEADER + "\n" + body.toString().trim
 ```
 
 再按派单口径 `| grep -v agent/BotAgent.java` ⇒ **exit=1（0 命中）**。
-为排除「不叫这个名字的剥头法」，另跑了一遍广谱（`-- 'z-bot-core/src/main/java'`）：
-` VOLATILE_CONTEXT_FOOTER ` 只在 `BotAgent.java:90` 定义、`:1326` 使用一处；`replace(` / `substring(0,` /
-`indexOf("---")` 在 `channel/HttpChannel.java`、`session/SessionManager.java` 里无一命中上下文块 ⇒
-**没有任何显示面/落盘面剥这个头**，(B) 成立。渲染面细节交给 §11.1.3 的实测，不靠这段 grep 定案。
+为排除「不叫这个名字的剥头法」，把主代码里所有字符串手术逐条看完（`git grep -n "replace(\|substring(\|indexOf("`）：
+`channel/HttpChannel.java` 5 处 = `:302` 拆 `WAIT_CONFIRM:` 载荷、`:361` SSE 换行转义、`:670-672` query 参数解析；
+`session/SessionManager.java` 4 处 = `:40` UUID 截段、`:219/:297` 文件名去 `.json`、`:263` 标题截 30 字。
+**没有一处以运行时上下文的抬头为输入** ⇒ **没有任何显示面/落盘面剥这个头**，(B) 成立。
+顺带量出一处不对称（记在 §11.9 第 7 条）：`git grep -n VOLATILE_CONTEXT_FOOTER -- z-bot-core/src` 显示
+这个"分隔符协议常量"在**产品码里零读取**（只有 `BotAgent.java:94` 的声明 + 两支测试在读），
+组块那行 `BotAgent.java:1341` 用的是字面量 `"\n---\n"` —— 谁要是照常量去剥头，会剥了个空。
+渲染面结论不靠这段 grep 定案，交给 §11.1.3 / §11.1.4 打真 HTTP 的实测。
 
 ### 11.0.3 (C) 「没测试数过第二轮的时钟块数」：成立，且我给出全量口径
 
@@ -1371,6 +1375,10 @@ run2 rc=1 | Tests run: 640, Failures: 1, Errors: 0, Skipped: 0 | socket_hits=0
 run3 rc=1 | Tests run: 640, Failures: 1, Errors: 0, Skipped: 0 | socket_hits=0
 ```
 
+**在最终交付字节上又重跑了一遍三串行**（`~/.cache/zbot-p12e/bar1_final.summary`，杠② 两遍之后）：
+`640 / Failures 1 / Errors 0 / Skipped 0` ×3、`socket_hits=0` ×3 —— 与上表逐字相同
+（期间只动过 `_doc/acceptance/p12/*`，没动 `.java`；`git status --short` 里 `src/**/*.java` 干净）。
+
 - 条数对账：`git grep -c '@Test' HEAD -- 'z-bot-core/src/test' | awk -F: '{s+=$NF} END{print s}'` = **640**
   = surefire 的 640（637 条 P12d 基线 + 本棒新增 3 条 `VolatileContextPersistenceTest`）；测试类 62 个
   （`grep -c "in com.zifang" bar1_run1.log`）。
@@ -1417,9 +1425,27 @@ M1b 的旧锚点是源码头一行 `memory.add(Msg.user(withVolatileContext(merg
 "memory.add 那一行"搬到"请求侧注入"** —— 这条不变量的守门点从此在 `buildRequest`，不在 `memory.add`。
 第一遍那个 PARTIAL 不是产品坏了，是尺子的锚点跟着产品码搬了家，我把它如实记成"重锚 + 补名"两笔账。
 
-### 11.5.2 第二遍（M1b 补名之后整张重跑）
+### 11.5.2 第二遍（M1b 补名之后整张 19 支重跑，`~/.cache/zbot-p12e/bar2_mutation_run2.log`）
 
-（跑完补：期望 `RED-OK 15 / PARTIAL 1 / GREEN-BUT-MUTATED 3 / BROKEN 0`；PARTIAL 只剩 M16。）
+```
+awk -F'\t' 'NR>1{c[$2]+=1} END{for(k in c) print k,c[k]}' _doc/acceptance/p12/LEDGER.tsv
+  RED-OK 15 / PARTIAL 1 / GREEN-BUT-MUTATED 3      （rows=19；BROKEN 0；NO-RUN 0）
+awk -F'\t' 'NR>1{r[$10]++} END{for(k in r) print "restored="k, r[k]}' _doc/acceptance/p12/LEDGER.tsv
+  restored=ok 19                                   SRC_MD5_STABLE=yes
+```
+
+**M1b 收成 RED-OK 了**，且是 5/5 点名全红、0 个 extra：
+
+```
+M1b … RED-OK 点名=5/5 rc=1 还原=True vs_git=ok/ok
+红在: midRunMemoryWriteIsVisibleNextTurnWithoutTouchingThePrompt,
+      newSessionAndSwitchRestoreHistory, soulStaysInSystemPromptAndMemoryGoesToUserMessage,
+      thirdRequestInOneSessionStacksContradictoryClockBlocks,
+      volatileContentReachesTheModelThroughTheUserMessageNotTheSystemPrompt
+```
+
+⇒ 台账上唯一剩下的 PARTIAL 是 **M16（中断检查点退化成空操作，点名 5/6）**，与任务一无关，p12d 已记账；
+GBM 仍是 M8 / M9 / M17 那三支（检查点族）。两遍之间的差值只有 M1b 一行，其余 18 支 verdict 逐支同号。
 
 ## 11.6 杠③：真进程 E2E 三整跑 + K2 双向探针
 
@@ -1460,11 +1486,14 @@ K3 那一支本棒三跑都读到 `命中=[]；未纳入扫描的 harness 读数
 | 时点 | `ls -A ~/.zbot \| wc -l` | `md5 -q ~/.zbot/config.properties\|cut -c1-8` | `md5 -q ~/.zbot/state.db\|cut -c1-8` |
 |---|---|---|---|
 | T1 任务一取证 + 杠① 三跑之后 | 8 | 2dadaed0 | 690ddbc0 |
-| T2 杠② 变异在飞时 | 见 §11.5 补记 | | |
-| T3 收尾 | 见下 | | |
+| T2 杠② 变异在飞时（14:09:47，`p12_mutation.py --with-e2e` 第二遍跑到 M17 那一支） | 8 | 2dadaed0 | 690ddbc0 |
+| T3 收尾（杠① 终字节三跑 + 杠② 两遍之后） | （收尾同一次运行里补） | | |
 
-本棒所有实验（`VolatileContextPersistenceTest` 用 `TemporaryFolder`、E2E/mutation 自己带
-`--config-dir` 临时根）都不指向 `~/.zbot`；真 key 的值本棒一次都没读过（只量过 md5 前缀与条目数）。
+E2E 自己那三条红线（同一次跑里量）也全绿：`H1 项数未变 / H2 config md5 未变 / H3 state.db md5 未变`
+×3 跑（`bar3_run{1,2,3}.log`），`K1` 反向钉住 stub key 真进产物、`K2` 只见 `stub-key-not-real`、
+`K3` 命中 `[]`。本棒所有实验（`VolatileContextPersistenceTest` 用 `TemporaryFolder`、
+E2E/mutation 自己带 `--config-dir` 临时根）都不指向 `~/.zbot`；真 key 的值本棒一次都没读过、
+也没进过任何日志或产物（只量过 md5 前缀与条目数）。
 
 ## 11.8 §交接：`GatewayDeliveryP16Test` 补丁文本（本棒不落刀，主编落刀）
 
@@ -1563,3 +1592,23 @@ git worktree remove --force /private/tmp/zbot-p12e-p16check          # 已回收
 所以这个绿不是把判据放宽换来的）。**该文件在禁改域，交付树里我没有落这一刀。**
 
 ## 11.9 §未做（一条不许美化）
+
+1. **P16 那一句我没落刀**（`channel/*` 是禁改域、`p18a` 在飞）⇒ 交付树杠① 仍是 **640 / 1 红**，
+   不是 637/0。补丁文本 + 临时 worktree 的实测读数在 §11.8，刀在主编手里。
+2. **修复只保证"从现在起不再新增"，不追认历史**：改动之前落盘的那些 transcript（包括真 `~/.zbot/sessions/*.json`）
+   里带抬头的 user 行**没有被清洗**，`switchSession()` 会原样读回 ⇒ 那种老会话再跑一轮时，请求里
+   仍然带着旧的几块时钟（它们在 `content` 里，不归注入点管）。本棒**既没做迁移、也没为这件事写断言**
+   （写了必红）。要治有两条路：`loadMessages` 侧一次性剥头（又回到"渲染面剥"那条被派单劝退的路），
+   或者接受历史随会话自然淘汰。**这一条是"未覆盖"，不是"没问题"。**
+3. **grace / steer 控制行的形状没钉**：注入点是"最后一行 user"⇒ 收尾轮（`maybeAnnounceGrace`）和
+   steer 退路轮（`injectSteer` 走到 `memory.add(Msg.user(...))` 那一支）里，块挂在**控制行**上而不是原话行上。
+   只数"一次请求一块时钟"是够的（我的断言量的就是这个），但"块必须挂在原话那一行"没测。
+   钉它需要 identity 追踪 + 压缩后回落，比现在这版多一个状态机，我没做。
+4. **M16 仍 PARTIAL、M8/M9/M17 仍 GREEN-BUT-MUTATED**：中断/检查点族本棒一字未碰，没有把它们往前推
+   （p12d §2.2/§2.3 已记账，账还在）。
+5. **M1 点名 2/3**（第三支 `soulStaysInSystemPromptAndMemoryGoesToUserMessage` 在 M1 下没红）：
+   它与任务一同一族（记忆/SOUL 各归各位），本可以顺手补一层断言把 3/3 打满，**没补**。
+6. **没走"拆独立 message"那条备选路**：把上下文块拆成单独一条 user 消息，能让 `chan.sent` 的最后一行
+   回到纯 `A_i`、P16 一字不改就绿 —— 但代价是改 P12d 那条「块与原话同一条 user、原话在最后」的守门断言、
+   每轮 user 行翻倍、且不同 provider 对连续同 role 消息的处理不一致。本棒判断"改一句过期断言"比
+   "改一次请求契约"小，选了前者；这个取舍写在 §11.4，等主编复核。
