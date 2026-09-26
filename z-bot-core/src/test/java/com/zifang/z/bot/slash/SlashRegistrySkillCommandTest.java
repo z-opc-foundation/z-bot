@@ -130,6 +130,35 @@ public class SlashRegistrySkillCommandTest {
         assertTrue(r.skillCommandSkips().get(0).contains("platforms"));
     }
 
+    /**
+     * G-1（p23b 记的覆盖缺口）：{@code environments} 那扇相关性门在<b>命令表这一侧</b>的具名单测。
+     * 从前它只有 {@link SkillFrontmatterTest}（解析侧）与 E2E scenario_e（真进程侧）两层，
+     * 命令表侧漏了就只靠 E2E 兜。
+     */
+    @Test
+    public void environmentHiddenSkillStaysOutOfTableAndIsAccounted() throws Exception {
+        String prev = System.getProperty("zbot.skills.environments");
+        System.setProperty("zbot.skills.environments", "docker");
+        try {
+            install("kanbanonly", "/kanbanonly", "environments: [kanban]");
+            install("dockerite", "/dockerite", "environments: [docker, kanban]");
+            SlashRegistry r = SlashRegistry.withBuiltinCommands();
+            assertNull("环境不匹配的技能不能进命令表", r.find("/kanbanonly"));
+            assertEquals("命令表里只该有不匹配之外的那条",
+                    java.util.Collections.singletonList("/dockerite"), r.skillCommandKeys());
+            assertEquals(1, r.skillCommandSkips().size());
+            String skip = r.skillCommandSkips().get(0);
+            assertTrue("跳过理由要点名 environments: " + skip, skip.contains("environments=[kanban]"));
+            assertTrue("要点名是谁没进: " + skip, skip.contains("kanbanonly"));
+        } finally {
+            if (prev == null) {
+                System.clearProperty("zbot.skills.environments");
+            } else {
+                System.setProperty("zbot.skills.environments", prev);
+            }
+        }
+    }
+
     @Test
     public void refreshPicksUpNewlyInstalledSkillWithoutSecondTable() throws Exception {
         install("before", null, null);

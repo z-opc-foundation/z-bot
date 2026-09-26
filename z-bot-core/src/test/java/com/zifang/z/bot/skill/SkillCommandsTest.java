@@ -27,9 +27,17 @@ public class SkillCommandsTest {
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
-    /** 她的核心命令集里有的东西，测试里手动当保留名。 */
+    /**
+     * 她的核心命令集里有的东西，测试里手动当保留名。
+     *
+     * <p>P23c/D-1：{@code reserved} 的契约是<b>命令全名（含前导斜杠）</b>——这里从前写的是裸 slug
+     * （{@code "skills"}），于是本类只测得出"谓词命中就跳过"，测不出生产两侧口径是否一致
+     * （真的那条链 {@code BotAgent.skillCommandPlan} 喂的是带斜杠的键 ⇒ 恒不命中）。
+     * 集合形状跟着契约改成带斜杠，接线层的洞由
+     * {@code SkillCommandPlanProductionWiringTest} 走真链去抓。</p>
+     */
     private static final Set<String> RESERVED =
-            new HashSet<String>(Arrays.asList("help", "skills", "sync", "new", "stop", "model"));
+            new HashSet<String>(Arrays.asList("/help", "/skills", "/sync", "/new", "/stop", "/model"));
 
     /** 任何真实平台都不会等于它 —— 用来稳定地造出"被平台门藏掉"的技能。 */
     private static final String NO_SUCH_PLATFORM = "definitely-not-a-real-platform";

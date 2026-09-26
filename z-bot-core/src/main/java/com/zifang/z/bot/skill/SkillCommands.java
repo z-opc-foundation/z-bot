@@ -122,7 +122,7 @@ public final class SkillCommands {
      * 把一批技能编译成命令计划。
      *
      * @param skills   待编译的技能（应当已经是 eligible 的那批；隐藏技能由调用方记账）
-     * @param reserved 已存在的命令名（含核心命令与其别名）；命中即跳过自动注册
+     * @param reserved 谓词收<b>命令全名（含前导斜杠，如 {@code /skills}）</b>；命中即跳过自动注册
      */
     public static Plan plan(List<SkillLoader.Skill> skills, Predicate<String> reserved) {
         Plan plan = new Plan();
@@ -143,7 +143,7 @@ public final class SkillCommands {
                 continue;
             }
             String key = "/" + slug;
-            if (reserved != null && reserved.test(slug)) {
+            if (reserved != null && reserved.test(key)) {
                 plan.skipped.add(new Skipped(s.name, key,
                         "与核心命令同名，跳过自动注册；用 /skill " + s.name + " 加载"));
                 continue;

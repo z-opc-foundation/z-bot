@@ -493,8 +493,9 @@ public final class SlashRegistry {
      * 因此"命令表只有一张"这条 P10d 的不变量仍然成立。</p>
      */
     public SlashRegistry registerSkillCommands(List<SkillLoader.Skill> skills) {
-        SkillCommands.Plan plan = SkillCommands.plan(skills,
-                slug -> find("/" + slug) != null);
+        // 口径 A：`reserved` 收的是命令全名（含斜杠），归一只在 SkillCommands.plan 一处做。
+        // 这里从前写的是 `find("/" + slug)`——调用方各自补斜杠，正是 D-1 的另一半。
+        SkillCommands.Plan plan = SkillCommands.plan(skills, name -> find(name) != null);
         for (final SkillCommands.Entry e : plan.entries()) {
             final String key = e.key;
             final SkillLoader.Skill skill = e.skill;
