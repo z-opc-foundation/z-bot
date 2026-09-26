@@ -44,16 +44,37 @@ public class AcpCommandAdvertisementTest {
 
     private static final ObjectMapper M = new ObjectMapper();
 
+    /** 真握手：{@code initialize} 之前连接不该收到任何通知（{@value #SCHEMA_PATH} 同口径）。 */
+    private static void initialize(AcpConnection conn) {
+        conn.handleLine(AcpFakes.req(0, AcpMethods.INITIALIZE,
+                "{\"protocolVersion\":" + AcpMethods.PROTOCOL_VERSION
+                        + ",\"clientInfo\":{\"name\":\"p19-test\"},\"capabilities\":{}}"));
+    }
+
     /** 起一条真连接（内存通道），走完 session/new，返回收到的全部帧。 */
     private static List<JsonNode> sessionNewFrames() throws Exception {
+        return parseAll(sessionNewFramesRaw(true));
+    }
+
+    /** {@code handshaked=false} 时跳过 initialize，用来量"没握手不广告"这一侧。返回<b>原始行</b>。 */
+    private static List<String> sessionNewFramesRaw(boolean handshaked) throws Exception {
         AcpFakes.Recorder recorder = new AcpFakes.Recorder();
         AcpConnection conn = AcpFakes.connection(recorder);
         AcpSessionRegistry registry = new AcpSessionRegistry(new AcpFakes.Factory());
         AcpFakes.server(conn, registry, new AcpApprovalBridge()).register();
+        // 先握手：广告只对已 initialize 的连接发（hermes server.py:1716 的 `if not self._conn` 同义）。
+        if (handshaked) {
+            initialize(conn);
+        }
+        recorder.clear();
         assertTrue("session/new 必须被处理",
                 conn.handleLine(AcpFakes.req(1, AcpMethods.SESSION_NEW, "{\"cwd\":\"/tmp\"}")));
+        return recorder.lines();
+    }
+
+    private static List<JsonNode> parseAll(List<String> lines) throws Exception {
         List<JsonNode> out = new ArrayList<JsonNode>();
-        for (String line : recorder.lines()) {
+        for (String line : lines) {
             out.add(M.readTree(line));
         }
         return out;
@@ -76,6 +97,27 @@ public class AcpCommandAdvertisementTest {
     }
 
     // ================= 判据 =================
+
+    /** 广告的那道握手闸本身也要有牙：没 initialize 的连接一条通知都不许收。 */
+    @Test
+    public void nothingIsAdvertisedBeforeInitialize() throws Exception {
+        AcpFakes.Recorder recorder = new AcpFakes.Recorder();
+        AcpConnection conn = AcpFakes.connection(recorder);
+        AcpFakes.server(conn, new AcpSessionRegistry(new AcpFakes.Factory()),
+                new AcpApprovalBridge()).register();
+        conn.handleLine(AcpFakes.req(1, AcpMethods.SESSION_NEW, "{\"cwd\":\"/tmp\"}"));
+        assertEquals("未握手的连接不许收通知（只有 session/new 的回包一帧）: " + recorder.lines(),
+                0, countAdvertisements(recorder.lines()));
+        assertEquals("回包还得在: " + recorder.lines(), 1, recorder.lines().size());
+    }
+
+    /** 握手之后就必须广告 —— 摘掉 sendAvailableCommands 的调用点这条会红，闸就不是挡板而是漏发。 */
+    @Test
+    public void initializeThenNewDoesAdvertise() throws Exception {
+        assertEquals("握手后的 session/new 恰好广告一次", 1,
+                countAdvertisements(sessionNewFramesRaw(true)));
+    }
+
 
     @Test
     public void sessionNewEmitsExactlyTheAcpSegmentOfTheCatalog() throws Exception {
@@ -188,6 +230,8 @@ public class AcpCommandAdvertisementTest {
         AcpFakes.Factory factory = new AcpFakes.Factory("zb-777");
         AcpSessionRegistry registry = new AcpSessionRegistry(factory);
         AcpFakes.server(conn, registry, new AcpApprovalBridge()).register();
+        initialize(conn);
+        recorder.clear();
         // 先 new 一个在线 ACP 句柄，再按该句柄 load（load/resume 的在线复用路径）。
         conn.handleLine(AcpFakes.req(1, AcpMethods.SESSION_NEW, "{\"cwd\":\"/tmp\"}"));
         int newAdvertisements = countAdvertisements(recorder.lines());

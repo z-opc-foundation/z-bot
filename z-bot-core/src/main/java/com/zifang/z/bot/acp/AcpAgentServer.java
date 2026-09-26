@@ -289,6 +289,12 @@ public final class AcpAgentServer {
      * 帧本身排在回包之后，见 {@link AcpConnection#scheduleAfterResponse}。</p>
      */
     private void advertiseCommands(AcpSessionRegistry.AcpSession session) {
+        // 只对已 initialize 的连接广告：hermes 那两个方法体第一行都是 `if not self._conn: return`
+        // （acp_adapter/server.py:1716 / :1736），而她的 _conn 是 initialize 之后才拿到的 client
+        // （:524/:530）—— "没握手就没有通知"是她的既有口径。未握手就推通知在协议上也不成立。
+        if (!initialized) {
+            return;
+        }
         final AcpStreamPublisher publisher = new AcpStreamPublisher(conn, session.acpSessionId());
         conn.scheduleAfterResponse(new Runnable() {
             @Override
