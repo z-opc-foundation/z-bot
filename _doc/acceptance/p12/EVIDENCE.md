@@ -42,6 +42,8 @@ run3  [INFO] Tests run: 483, Failures: 0, Errors: 0, Skipped: 0     [INFO] BUILD
   （`logs/p12c_guardsolo.log`，rc=0），该类在 `809b927` 上是 4 条。
 - 与 `b64d294` 那一版的关系（简报点名的 `475 … Failures: 1`）：本棒没重跑 `b64d294`，
   只复算它那条红的性质没变——见 §2.1 的 M1/M1b 两支注入仍能把 `newSessionAndSwitchRestoreHistory` 判红。
+- **这三跑的被测字节 = 最终交付字节**：三跑之后本棒只动过 python 量具与文档，没动过一行 Java。复算
+  `git diff --stat 6998e68 HEAD -- z-bot-core` ⇒ 空输出（本棒收尾时复算过，仍是空）。
 
 ---
 
@@ -494,4 +496,58 @@ grep -h "^PASS  C1 \|^PASS  C5 " _doc/acceptance/p12/logs/p12c_e2e_run1.log
 
 ## 9. 与 P24 的交接件：system prompt 冻结回归
 
-UNKNOWN
+**这条回归的语义**：会话一旦起建，`system` 那段就是一份冻结快照（`BotAgent.java:175`
+`this.memory = new ConversationMemory(buildSystemPrompt(…))` 只在构造期走一次）；
+中途往盘上写 SOUL/记忆/技能，只能改道进 **user** 消息，绝不能改 system 的字节。
+P24 要把"记忆/血统/center 召回"继续往外挪，靠的就是这块不动的地基。
+
+### 9.1 命令（P24 直接复用，一条）
+
+```
+cd /private/tmp/zbot-wt-p12
+mvn -o -q package -DskipTests -pl z-bot-core && python3 -u _doc/acceptance/p12/p12_e2e.py --only cache
+```
+
+它做的是：真 JVM（`java -jar z-bot-core.jar gateway --config-dir <仓内 out/profile-cache>`，
+key 只用 `stub-key-not-real`）→ 第一次 chat → **中途写盘**（`memories/SOUL.md` 追加一行哨兵、
+`memories/MEMORY.md` 覆写一行哨兵）→ 第二次 chat → 从 **stub 落盘的请求原文**
+（`out/llm-requests/00N.json`，不是被测自述）取两轮实际发出去的 system 字节比 sha256。
+
+### 9.2 冻结在位时：两轮 sha256 相同（本棒五跑逐字相同）
+
+```
+run1  C1 … len1=2345 len2=2345 md5_1=7cf85e3c md5_2=7cf85e3c
+      sha256_1=8b38a41dc2ff8d9737d9fff928ac346701c1249bcaa2c0358f0e640d93d81eec
+      sha256_2=8b38a41dc2ff8d9737d9fff928ac346701c1249bcaa2c0358f0e640d93d81eec
+run2–run5 同（logs/p12c_e2e_run{2..5}.log 的 C1 行逐字相同）
+C5 中途写进 SOUL.md 的那一行不进 system prompt … 盘上 SOUL.md 含哨兵=True；两轮 system 含哨兵=False/False
+C6 反空跑：中途写的那行记忆下一轮真到了模型 … user2 含记忆哨兵=True；system2 含记忆哨兵=False；user1 含记忆哨兵=False
+```
+
+### 9.3 阳性对照（把冻结摘掉 ⇒ 哈希必须变）
+
+- 单测层（已实测）：`python3 -u _doc/acceptance/p12/p12_mutation.py` 里的 **M12**
+  （`SystemPromptCacheFreezeTest.java:83` 的 `assertArrayEquals(first, second)` 当场判红，
+  红在 `twoChatsInOneSessionSendByteIdenticalSystemPrompt`）。
+- 真进程层：UNKNOWN —— 摘掉冻结后跑 cache 段要独占 flock，本棒收尾前邻居（`zbot-mutlock`，
+  PID 91548/64902 那支 `p20d_tk5_equiv_probe.py`）一直攥着锁，四次重试全 `rc=5` 拒跑（原文见 §2.4），
+  没伪造读数。复算命令：
+  `python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M12`（拿到锁后期望 `e2e_rc≠0` 且
+  C1 的 `sha256_1 != sha256_2`）。
+- **本棒已经量到的反面事实（P24 必须知道）**：把 M12 摘掉冻结之后，**旧版 cache 段仍然全绿**
+  （`logs/p12c_mut_withe2e_M6_M12.log` 里 `e2e_rc=0`）—— 因为旧版只连打两次 chat、中间不写盘，
+  "每步按盘重建"和"冻结快照"算出同一份字节。所以 **C1 单独复用是无效的回归**：
+  必须连着 C5/C6 那种"中途真写盘 + 盘上确认那一行真在"的动作一起用（§6 G8）。
+
+### 9.4 现字节上的接线行号（简报里 `:273/:465/:914` 是 `b64d294` 的数，这里给复算后的）
+
+```
+$ git grep -n 'context.steer()' -- z-bot-core/src/main/java
+BotAgent.java:273  List<String> queued = context.steer().drain();      # /queue 侧（mergeQueued）
+BotAgent.java:465  List<String> pending = context.steer().drain();     # 工具缝侧（injectSteer）
+BotAgent.java:914  context.steer().clear();                            # 硬中断丢弃 pending
+BotAgent.java:933/934/943/948/1145 …                                  # steer() 单槽写入端与 hasPending
+$ git grep -n 'refundTokens' -- z-bot-core/src/main/java
+BotAgent.java:407  long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, compressed));
+BotAgent.java:979  long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, out));
+```
