@@ -180,7 +180,7 @@ MUTANTS = [
 
     # ===== p12c 补的四支：派单点名要覆盖、上一棒没注入的两条判据 =====
 
-    ("M12 system prompt 快照解冻（每步按盘重建）", "mvn", "bot",
+    ("M12 system prompt 快照解冻（每步按盘重建）", "mvn+e2e", "bot",
      "            listener.onEvent(new StreamEvent.StepStart(step));\n            context.interrupt().checkpoint();",
      "            listener.onEvent(new StreamEvent.StepStart(step));\n"
      "            // MUTANT: 冻结摘掉——每一步都按盘上的当前内容重建骨架（SOUL 是 buildSystemPrompt 读的盘）\n"
@@ -366,10 +366,15 @@ def run_mvn(log_name, argv):
     return rc, failing, ran, out, logpath
 
 
-def run_e2e_stop_section(tag):
-    """真进程层：返回 (是否判红, 读数详情)。mutated 的 jar 由 package 现打。"""
+def run_e2e_stop_section(tag, section="stop"):
+    """真进程层：返回 (是否判红, 读数详情)。mutated 的 jar 由 package 现打。
+
+    section="stop" 用在 M6（看门狗摘掉 ⇒ 真进程层必须变慢/不断）；
+    section="cache" 用在 M12（冻结摘掉 ⇒ 同一会话两轮的 system prompt 哈希必须变，
+    这一半是 P24 交接件要的**阳性对照**，只拿单测层的不算）。
+    """
     jsonpath = os.path.join(HERE, "out", "mutation-%s.json" % tag)
-    proc = subprocess.run([sys.executable, "-u", E2E, "--only", "stop", "--json", jsonpath],
+    proc = subprocess.run([sys.executable, "-u", E2E, "--only", section, "--json", jsonpath],
                           cwd=ZBOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     text = proc.stdout.decode("utf-8", "replace")
     detail = ""
@@ -475,7 +480,8 @@ def run_mutants(selected, with_e2e):
                 if prc != 0:
                     e2e_rc, e2e_detail = "PKG-BROKEN", "package rc=%s（见 logs/%s）" % (prc, pkglog)
                 else:
-                    e2e_rc, e2e_detail = run_e2e_stop_section(tag)
+                    e2e_rc, e2e_detail = run_e2e_stop_section(
+                        tag, "cache" if tag == "M12" else "stop")
             hit = sorted(set(expected) & failing)
             extra = sorted(failing - set(expected))
             if broken:

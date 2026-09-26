@@ -57,6 +57,9 @@ REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")
 STUB_KEY = "stub-key-not-real"
 MODEL = "gpt-4o-mini"        # 走 OpenAI 兼容协议；kernel 的 supportsModel 认 gpt- 前缀
 PROVIDER_CODE = "p12stub"    # 自定义 code：靠 providers= 声明 + Z_BOT_PROVIDER 双保险
+# 中途写盘的两个哨兵串（cache 段用；只含 ASCII 与汉字，不含任何 key 形状，免得撞 K2）
+MIDRUN_SOUL_MARKER = "P12-MIDRUN-SOUL-LINE-9e3f"
+MIDRUN_MEMORY_MARKER = "P12-MIDRUN-MEMORY-LINE-4b7a"
 STOP_LIMIT_MS = 2000         # 工单要求的判据
 STOP_PROBE_LIMIT_MS = 6000           # 量具的量程：超过它就记 FAIL（不是"再等等看"）
 STUB = {"url": None}                 # 起 stub 之后才有；jvm_env 用它钉 base.url
@@ -597,6 +600,15 @@ def section_cache(base_url):
         check("C0b 第一次 chat 打通了", False, repr(ex), "cache")
         return
     time.sleep(1.2)          # 让时钟这一路真的走一秒以上
+    # ===== 中途写盘（P24 交接件要的正是这个时刻）=====
+    # 冻结的语义：SOUL.md 是 system prompt 的头，但**中途改它不许进 prompt**；
+    # MEMORY.md 走 user 消息。两条一起写，C5/C6 才分得出"冻住了"与"根本没读到盘"。
+    memdir = os.path.join(profile, "memories")
+    os.makedirs(memdir, exist_ok=True)
+    with open(os.path.join(memdir, "SOUL.md"), "a", encoding="utf-8") as fh:
+        fh.write("\n%s\n" % MIDRUN_SOUL_MARKER)
+    with open(os.path.join(memdir, "MEMORY.md"), "w", encoding="utf-8") as fh:
+        fh.write("%s\n" % MIDRUN_MEMORY_MARKER)
     try:
         s2, b2 = http_post(base + "/bot/chat", "第二句：缓存不变量", timeout=120.0)
     except Exception as ex:
@@ -634,6 +646,20 @@ def section_cache(base_url):
     check("C4 用户原话仍然逐字出现在 user 消息末尾（上下文头没盖过正事）",
           u1.endswith("第一句：缓存不变量") and u2.endswith("第二句：缓存不变量"),
           "user1 尾部=%r" % u1[-40:], "cache")
+    # C5/C6 是本段给 P24 的交接件：冻结到底冻住了什么、改道到底改道到哪，两条互相反空跑。
+    with open(os.path.join(memdir, "SOUL.md"), encoding="utf-8") as fh:
+        soul_on_disk = fh.read()
+    check("C5 中途写进 SOUL.md 的那一行不进 system prompt（快照冻结；盘上真有那一行）",
+          MIDRUN_SOUL_MARKER in soul_on_disk and MIDRUN_SOUL_MARKER not in (sys2 or ""),
+          "盘上 SOUL.md 含哨兵=%s；两轮 system 含哨兵=%s/%s；sha256_1=%s sha256_2=%s"
+          % (MIDRUN_SOUL_MARKER in soul_on_disk, MIDRUN_SOUL_MARKER in (sys1 or ""),
+             MIDRUN_SOUL_MARKER in (sys2 or ""),
+             sha256_of_bytes(b_sys1), sha256_of_bytes(b_sys2)), "cache")
+    check("C6 反空跑：中途写的那行记忆下一轮真到了模型（在 user 消息里，不在 system 里）",
+          MIDRUN_MEMORY_MARKER in u2 and MIDRUN_MEMORY_MARKER not in (sys2 or ""),
+          "user2 含记忆哨兵=%s；system2 含记忆哨兵=%s；user1 含记忆哨兵=%s（上一轮不许被回写）"
+          % (MIDRUN_MEMORY_MARKER in u2, MIDRUN_MEMORY_MARKER in (sys2 or ""),
+             MIDRUN_MEMORY_MARKER in u1), "cache")
 
 
 def md5_of_bytes(bs):
