@@ -45,6 +45,29 @@ run3  [INFO] Tests run: 483, Failures: 0, Errors: 0, Skipped: 0     [INFO] BUILD
 - **这三跑的被测字节 = 最终交付字节**：三跑之后本棒只动过 python 量具与文档，没动过一行 Java。复算
   `git diff --stat 6998e68 HEAD -- z-bot-core` ⇒ 空输出（本棒收尾时复算过，仍是空）。
 
+### 1b 最终字节上的复核三跑（HEAD `5965f80`，本棒第二笔全量重跑之后）
+
+同一形态的串行三跑，在交付 HEAD 上再量一遍（不靠"字节没动所以读数不变"这句推理交差）：
+
+```
+cd /private/tmp/zbot-wt-p12
+for i in 1 2 3; do rm -rf z-bot-core/target/surefire-reports; \
+  mvn -o test > _doc/acceptance/p12/logs/p12c_bar1_final_run$i.log 2>&1; echo "run$i rc=$?"; done
+→ run1 rc=0 / run2 rc=0 / run3 rc=0
+```
+
+逐字读数（`grep -E "Tests run: 483, Failures: 0, Errors: 0, Skipped: 0|BUILD SUCCESS|Total time" logs/p12c_bar1_final_run<i>.log`）：
+
+```
+run1  [INFO] Tests run: 483, Failures: 0, Errors: 0, Skipped: 0   [INFO] BUILD SUCCESS   Total time: 17.017 s   rc=0
+run2  [INFO] Tests run: 483, Failures: 0, Errors: 0, Skipped: 0   [INFO] BUILD SUCCESS   Total time: 16.301 s   rc=0
+run3  [INFO] Tests run: 483, Failures: 0, Errors: 0, Skipped: 0   [INFO] BUILD SUCCESS   Total time: 15.432 s   rc=0
+```
+
+`-- in <类>` 行数三跑都是 **49**（`grep -c -- '-- in ' logs/p12c_bar1_final_run<i>.log`）。
+等价性取证（不是推理，是量）：`git diff --stat 6998e68 HEAD -- z-bot-core` ⇒ **空输出**
+⇒ §1 那三跑与 §1b 这三跑跑的是同一份 Java 字节，合计 **6 跑 × 483 条 0 红**。
+
 ---
 
 ## 2. 杠②：注入自证（`p12_mutation.py`）与 LEDGER.tsv
@@ -99,6 +122,63 @@ cd /private/tmp/zbot-wt-p12 && python3 -u _doc/acceptance/p12/p12_mutation.py
 派单点名要覆盖的四类判据落点：预算台账 token 退还 = M2/M3/M4；中断收口不吞账 = M16/M17/M19 + M6/M8/M9/M10/M11；
 `context.steer().drain()/clear()` = M5（`:914` 那面 `clear()`）/M7/M18（`drain()` 的排空侧）；
 **system prompt 快照冻结** = M12（这条必须能判红 —— 实测 `twoChatsInOneSessionSendByteIdenticalSystemPrompt` 当场红了）。
+
+### 2.1b 全量第二遍（带真进程层，HEAD `5965f80` 之前一笔的字节）—— 补上"没有第二遍对拍"这笔账
+
+上一版的 §7 第 4 条记着"全量只跑了一轮，单轮内的偶发漏判分不出来"。本棒重跑了一整轮 19 支，
+并且这次带 `--with-e2e`（上一轮全量没带 ⇒ M6/M12 只有单测层读数）：
+
+```
+cd /private/tmp/zbot-wt-p12 && python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e \
+    → _doc/acceptance/p12/logs/p12c_mut_full_run2.log   rc=0（11:17:46 拿锁 → 11:24 收工，19 支）
+```
+
+原始 tally 行（同上文件末尾，逐字；与第一遍 `p12c_mut_full_run1.log` 末尾**一字不差**）：
+
+```
+== 台账 ==
+  RED-OK             14
+  PARTIAL            2
+  GREEN-BUT-MUTATED  3
+  BROKEN             0
+  SRC_MD5_STABLE=yes
+  exec 读输出循环的逐行检查点、mvn_build 入口检查点：摘掉之后看门狗仍在 50ms 内端掉进程树，从「多久断」这一面量不出差别，属于第二道保险；如实记未覆盖，不假装注入过。
+  台账已机械写出: _doc/acceptance/p12/LEDGER.tsv
+```
+
+**逐支对拍**（把两遍 LEDGER 的 `verdict/named_hit/named_expected/mvn_rc/tests_that_went_red/restore_forensics_vs_git`
+六个字段逐行比；复算命令见 §8）⇒ `run1 rows=19 run2 rows=19 / 逐支可比字段全同的支数=19/19`，
+差异只有一处：**`e2e_rc` 这一列在第一遍全空，这一遍两支非空**：
+
+```
+run2 e2e_rc 非空的支: [('M6', '1'), ('M12', '1')]
+```
+
+⇒ 两遍全量互相印证（同一期望集、同一判据规则、零漂移），**不是**改期望集洗出来的。
+`LEDGER.tsv` 现在盘上那一版就是这个脚本产物（19 行 + 表头，人一行都没敲）。
+
+两支 `mvn+e2e` 的**真进程层红在哪一条**（`out/mutation-M6.json`、`out/mutation-M12.json` 原文，
+这层是单测抓不到的东西）：
+
+```
+M6 摘掉工具子进程看门狗 ⇒
+  FAIL S2 发 /stop 后工具子进程从内核进程表消失（pgrep -f token = 0 命中）
+       复算 pgrep=['61239','61240']；停之前 ps=[61239 SN bash -c sleep 92759786 & wait / 61240 SN sleep 92759786]
+  FAIL S3 发 /stop → 工具子进程真退出 ≤ 2000ms（os.waitpid 自己 spawn 的 waiter）
+       elapsed_ms=-1，waiter pid=61243 由本进程 spawn、退出条件只有 pgrep 空集这一条
+  FAIL S4 那一轮以中止收尾（辅助读数）  chat 回包='(没回包)'
+
+M12 system prompt 快照解冻 ⇒
+  FAIL C1 两次 chat 实际发出的 system prompt 逐字节相同（比 stub 落盘的请求原文）
+       len1=2345 len2=2372 md5_1=7cf85e3c md5_2=af2f6803
+       sha256_1=8b38a41dc2ff8d9737d9fff928ac346701c1249bcaa2c0358f0e640d93d81eec
+       sha256_2=2b4de93591fd6dff41a71f39245f8317b1fc500744b8bc408486c9f330a8b216
+  FAIL C5 中途写进 SOUL.md 的那一行不进 system prompt  盘上 SOUL.md 含哨兵=True；两轮 system 含哨兵=False/True
+```
+
+⇒ §6 G8 那条"进程层等价变异盲点"已经补成**两层都判红**：摘掉冻结 ⇒ 真 JVM 第二发的 prompt 里
+真长出了中途写的 SOUL 那一行（`False/True`），摘掉看门狗 ⇒ 工具子进程在进程表里数得到、`/stop` 断不掉。
+M12 那对 sha256 同时就是 §9 的阳性对照（冻结在位时两轮都是 `8b38a41d…`，摘掉后第二发变成 `2b4de935…`）。
 
 ### 2.2 非 RED-OK 的 5 条：逐条落到断言行 + 因果（不洗）
 
@@ -269,16 +349,28 @@ FAIL  K2 产物里出现的每一种 Bearer/api-key 值都只有 stub-key-not-re
 ```
 
 **双向实测**（跑的是仓里那份 `section_creds()` 原函数，只把扫描根 `HERE` 指到
-`~/.cache/zbot-p17/probe_k2/harness`，仓里的 `out/`、`logs/` 一个字节都没动；
-复算：`python3 -u ~/.cache/zbot-p17/probe_k2/two_way.py`，rc=0）：
+`~/.cache/zbot-p12-k2-probe/harness_*`，仓里的 `out/`、`logs/` 一个字节都没动）。
+**这一支本棒已经搬进入仓交付物**：`_doc/acceptance/p12/p12_k2_probe.py`
+（原来只在 `~/.cache` 里，仓外 ⇒ 复算式对未来读者不成立；现在 `python3 -u _doc/acceptance/p12/p12_k2_probe.py` 一条命令自解释，
+它同时跑**工作树字节**与 `git show 809b927:…p12_e2e.py` 的**封存字节**两套）。
+复算：`cd /private/tmp/zbot-wt-p12 && python3 -u _doc/acceptance/p12/p12_k2_probe.py`，rc=0（`logs/p12c_k2_probe.log`）：
 ```
-A  两形态并存（都只含 stub）        期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
-A2 同现场再跑一遍（稳定性）         期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
-B  混入别的 key 值                 期望=FAIL 实测=FAIL OK  | 见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
-B2 混入别的 Bearer 值              期望=FAIL 实测=FAIL OK  | 见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
-C  只有 stub 一种形态              期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
-D  产物里配不到任何 key（空跑）      期望=FAIL 实测=FAIL OK  | 见到的 key 值=[]
-F  api.key=not-configured         期望=FAIL 实测=FAIL OK  | 见到的 key 值=['not-configured', 'stub-key-not-real']
+成因对照（同一现场，两种取值方式算出的 key 值集合）:
+  坏语义 group(0)          = ['Bearer stub-key-not-real', 'api.key=stub-key-not-real']
+  run5/run6 报错原文的取值 = ['Bearer stub-key-not-real', 'api.key=stub-key-not-real']
+  现版语义（有组取值）     = ['stub-key-not-real']
+== 被测字节=工作树 p12_e2e.py ==
+  A  两形态并存（都只含 stub）        期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
+  B  混入别的 key 值                 期望=FAIL 实测=FAIL OK  | 见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
+  B2 混入别的 Bearer 值              期望=FAIL 实测=FAIL OK  | 见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
+  D  产物里配不到任何 key            期望=FAIL 实测=FAIL OK  | 见到的 key 值=[]
+  A2 同现场再跑一遍（稳定性）         期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
+  C  只有 stub 一种形态              期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
+  F  api.key=not-configured（假红侧） 期望=FAIL 实测=FAIL OK  | 见到的 key 值=['not-configured', 'stub-key-not-real']
+== 被测字节=git show 809b927:_doc/acceptance/p12/p12_e2e.py（上一棒临终工作文件）==
+  同样 7 支，逐项 OK（⇒ 封存字节也只收裸 key 值、判绿）
+双向实测结论：全部符合期望 ⇒ (a) 两形态并存判绿 与 (b) 混入别的值判红 两边都成立，判据没有被调松；
+              封存字节也算不出带前缀的取值 ⇒ run5/run6 是更早的字节
 ```
 
 (a) "两形态并存⇒判绿"与 (b) "塞进别的 key 值⇒判红" **两边都成立** ⇒ 判据没有被调松凑绿；
@@ -293,6 +385,8 @@ F 是**假红方向**的残余脆弱（`api.key=<任何 8 字符以上的非 key
 | 改前（run1–run6，03:39–03:46） | `python3 -u _doc/acceptance/p12/p12_e2e.py` | 6 | 0 | **0/6**（其中 2 跑 SyntaxError 崩在脚本自己头上） |
 | 改后·批次 c1（03:47 字节，本棒复跑） | 同上，`logs/e2e_c1_run{1..5}.log` | 5 | 5 | **5/5**，逐跑 `段=all 检查条数=23 PASS=23 FAIL=0`、`rc=0` |
 | 改后·批次 c2（本棒加了 sha256 读数之后重跑） | 同上，`logs/e2e_c2_run{1..5}.log` | 5 | 5 | **5/5**，逐跑 23/23、`rc=0` |
+| 改后·批次 p12c（cache 段补 C5/C6 之后，25 条） | 同上，`logs/p12c_e2e_run{1..5}.log` | 5 | 5 | **5/5**，逐跑 25/25、`rc=0`（§3.3） |
+| 改后·批次 final（交付字节 HEAD `5965f80`） | 同上，`logs/p12c_e2e_final_run{1..5}.log` | 5 | 5 | **5/5**，逐跑 25/25、`rc=0`，逐跑取值集合都是 `['stub-key-not-real']` |
 
 c1/c2 逐跑 rc 取自索引文件（`logs/e2e_c1_index.txt`、`logs/e2e_c2_index.txt`）：
 
@@ -300,8 +394,8 @@ c1/c2 逐跑 rc 取自索引文件（`logs/e2e_c1_index.txt`、`logs/e2e_c2_inde
 run1 rc=0 / run2 rc=0 / run3 rc=0 / run4 rc=0 / run5 rc=0     （两批各五条，共 10 条）
 ```
 
-⇒ **run7 的绿不是运气，但只跑过一次确实是测量不足**；本棒补到 10 跑，K2 零复发。
-裁决一句话：**这条间歇红是量具 self-bug（已修，修在 run7 之前 28 秒），不是产品缺陷；
+⇒ **run7 的绿不是运气，但只跑过一次确实是测量不足**；连同 §3.3 的两批（各 5 跑）本棒共补到 **20 跑**，
+K2 零复发。裁决一句话：**这条间歇红是量具 self-bug（已修，修在 run7 之前 28 秒），不是产品缺陷；
 判据本身不动。**
 
 ### 3.3 其余段的读数（HEAD `3be6fbd` 上的本棒自跑批次，5 连跑）
@@ -326,8 +420,9 @@ run4 10:57:45 rc=0 段=all 检查条数=25 PASS=25 FAIL=0
 run5 10:58:16 rc=0 段=all 检查条数=25 PASS=25 FAIL=0
 ```
 
-⇒ **K2 在本棒这一批 5 跑里 0 复发**；加上上一棒已有的 `e2e_c1/c2` 两批各 5 跑（§3.2），
-K2 的"改后"通过率是 **15/15**，改前 0/6。检查条数从 23 变 25 是本棒给 cache 段补的 C5/C6（§9），
+⇒ **K2 在本棒这一批 5 跑里 0 复发**；加上上一棒已有的 `e2e_c1/c2` 两批各 5 跑（§3.2）与本棒交付字节上的
+`p12c_e2e_final_*` 5 跑（下面 §3.3b），K2 的"改后"通过率是 **20/20**，改前 0/6。
+检查条数从 23 变 25 是本棒给 cache 段补的 C5/C6（§9），
 不是把任何一条判据换松或删掉。
 
 run1 全 25 条逐字（`sed -n '/===== summary/,$p' logs/p12c_e2e_run1.log`）：
@@ -381,6 +476,39 @@ run5  扫了 70 个运行期产物；见到的 key 值=['stub-key-not-real']
 ```
 
 杠④ 的逐跑读数就在每跑 summary 末行（`8→8 / 2dadaed0 / 690ddbc0`，五跑逐字相同），§4 另有独立三数的直接量法。
+
+### 3.3b 交付字节上的第五批 5 连跑（HEAD `5965f80`，杠② 第二遍全量之后重打）
+
+上面 §3.3 那批跑在 `3be6fbd`；本棒把杠② 重跑了一遍并入库了 K2 探针，交付 HEAD 已经不是 `3be6fbd`，
+所以整跑在**最终字节**上再打一遍（前置 `mvn -o -q package -DskipTests -pl z-bot-core` ⇒ rc=0，
+`find z-bot-core/src/main/java -name '*.java' -newer z-bot-core/target/z-bot-core.jar` ⇒ 空，jar 不旧于源码）：
+
+```
+cd /private/tmp/zbot-wt-p12
+for i in 1 2 3 4 5; do python3 -u _doc/acceptance/p12/p12_e2e.py \
+  --json _doc/acceptance/p12/out/p12c_e2e_final_run$i.json \
+  > _doc/acceptance/p12/logs/p12c_e2e_final_run$i.log 2>&1; echo "run$i rc=$?"; done
+```
+
+逐跑 summary + rc + K2 取值集合（`logs/p12c_e2e_final_index.txt` 原文，11:27:03–11:28:59）：
+
+```
+run1 11:27:03 rc=0 段=all 检查条数=25 PASS=25 FAIL=0 | 见到的 key 值=['stub-key-not-real']
+run2 11:27:32 rc=0 段=all 检查条数=25 PASS=25 FAIL=0 | 见到的 key 值=['stub-key-not-real']
+run3 11:28:02 rc=0 段=all 检查条数=25 PASS=25 FAIL=0 | 见到的 key 值=['stub-key-not-real']
+run4 11:28:31 rc=0 段=all 检查条数=25 PASS=25 FAIL=0 | 见到的 key 值=['stub-key-not-real']
+run5 11:28:59 rc=0 段=all 检查条数=25 PASS=25 FAIL=0 | 见到的 key 值=['stub-key-not-real']
+```
+
+真进程层计时与杠④ 的逐跑读数（同一批；`grep -hE "S3 |~/.zbot 跑前跑后" logs/p12c_e2e_final_run*.log`）：
+
+```
+S3 elapsed_ms=77 (run1) / 76 (run2) / 81 (run3) / 79 (run4) / 50 (run5)   阈值 2000ms，判据是 pgrep 空集 + 自 spawn 的 waitpid
+~/.zbot 跑前跑后: 项数 8→8, config md5 前缀 2dadaed0, state.db md5 前缀 690ddbc0     （五跑逐字相同）
+```
+
+⇒ 杠③ 在**交付 HEAD** 上的通过率 5/5，K2 零复发；每一跑都跑在 `ZBOT_HOME=<仓内 out/profile-*>`
+（`p12_e2e.py:308` 就是这句 `env["ZBOT_HOME"] = profile`），**没有一跑指向 `~/.zbot`**。
 
 ---
 
