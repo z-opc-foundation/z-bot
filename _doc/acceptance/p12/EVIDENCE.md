@@ -1126,3 +1126,108 @@ bash ~/.cache/zbot-p12d/bar3.sh ; bash ~/.cache/zbot-p12d/k3fix_check.sh ; bash 
 awk -F'\t' 'NR>1{c[$2]+=1} END{for(k in c) print k,c[k]}' _doc/acceptance/p12/LEDGER.tsv
 ls -A ~/.zbot | wc -l; md5 -q ~/.zbot/config.properties | cut -c1-8; md5 -q ~/.zbot/state.db | cut -c1-8
 ```
+
+---
+
+# 11. p12e 棒（两条硬账）：运行时上下文的持久化/复读副作用 + 合并树杠① 那 1 红
+
+**起讫**：起点 HEAD `20d371a`（分支 `w2-p12`，工作树 `/private/tmp/zbot-wt-p12`）。本棒只做派单
+`dispatch_p12e.md` 的两件事：①先取证再决定改不改「动态上下文被塞进 user 消息 ⇒ 落盘 + 复读 + 显示泄漏」；
+②给合并树杠① 那条 `GatewayDeliveryP16Test.java:381` 红交**补丁文本**（该类在禁改域，本棒一字不改）。
+未碰域：`channel/*`、`mcp/*`、`config/BotConfig.java`、`tool/Toolkit.java`、`tool/Toolsets.java`、
+`web/index.html`、`../z-agent-kernel`。原始日志留在仓外 `~/.cache/zbot-p12e/`（`.gitignore:5` 是 `*.log`，
+且 `logs/` 是 K3 扫描面，落进来会自污染）。
+
+## 11.0 第 0 步：复算主编三条「待推翻」事实
+
+### 11.0.1 (A) 那一红：本棒自己跑出来了，与主编读数一致
+
+```
+cd /private/tmp/zbot-wt-p12 && git log --oneline -3
+# 20d371a / 4416619 / b210ad7
+rm -rf z-bot-core/target/surefire-reports && mvn -o test -pl z-bot-core \
+    -Dtest=GatewayDeliveryP16Test -DfailIfNoTests=false
+```
+
+`surefire-reports/com.zifang.z.bot.channel.GatewayDeliveryP16Test.txt` 原文（rc=1，日志
+`~/.cache/zbot-p12e/step0A_p16test.log`）：
+
+```
+Tests run: 18, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 2.938 s <<< FAILURE! -- in com.zifang.z.bot.channel.GatewayDeliveryP16Test
+com.zifang.z.bot.channel.GatewayDeliveryP16Test.graftedChatsShareOneSessionAndSerializeWithoutWedging -- Time elapsed: 0.529 s <<< FAILURE!
+java.lang.AssertionError:
+回显对不上说明两条会话串味了: echo: [z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）
+当前时间: 2026-09-26 13:34:58 +08:00 GMT+08:00
+---
+A0
+	at com.zifang.z.bot.channel.GatewayDeliveryP16Test.graftedChatsShareOneSessionAndSerializeWithoutWedging(GatewayDeliveryP16Test.java:381)
+```
+
+⇒ **18 跑 1 红、红在 :381、实得文本形状** 三条全部复算成立，主编假设 (A) 未被推翻。
+
+### 11.0.2 (B) 剥头逻辑：`git grep` 0 命中，主编假设 (B) 未被推翻
+
+```
+git grep -n "运行时上下文\|VOLATILE_CONTEXT_HEADER" -- 'z-bot-core/src/main/java'
+```
+
+全量命中只有 3 行，**全在 `agent/BotAgent.java`**（定义 + 组块 + 拼接）：
+
+```
+BotAgent.java:87:  static final String VOLATILE_CONTEXT_HEADER = "[z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）";
+BotAgent.java:1306: 本轮 user 消息的运行时上下文头：…
+BotAgent.java:1326: return VOLATILE_CONTEXT_HEADER + "\n" + body.toString().trim() + "\n---\n";
+```
+
+再按派单口径 `| grep -v agent/BotAgent.java` ⇒ **exit=1（0 命中）**。
+为排除「不叫这个名字的剥头法」，另跑了一遍广谱（`-- 'z-bot-core/src/main/java'`）：
+` VOLATILE_CONTEXT_FOOTER ` 只在 `BotAgent.java:90` 定义、`:1326` 使用一处；`replace(` / `substring(0,` /
+`indexOf("---")` 在 `channel/HttpChannel.java`、`session/SessionManager.java` 里无一命中上下文块 ⇒
+**没有任何显示面/落盘面剥这个头**，(B) 成立。渲染面细节交给 §11.1.3 的实测，不靠这段 grep 定案。
+
+### 11.0.3 (C) 「没测试数过第二轮的时钟块数」：成立，且我给出全量口径
+
+```
+git grep -ln "运行时上下文\|VOLATILE_CONTEXT_HEADER"        # 全仓
+```
+
+命中 5 个文件：`EVIDENCE.md`、`p12_e2e.py`、`p12_mutation.py`（三份是文档/量具，不是断言面）、
+以及两个测试类 `agent/BotAgentTest.java`、`agent/SystemPromptCacheFreezeTest.java`。逐条查后两者：
+
+- `SystemPromptCacheFreezeTest.volatileContentReachesTheModelThroughTheUserMessageNotTheSystemPrompt`
+  用 `userTextOf(request)` 只取**最后一条** user（`:193-202` 的 helper 是 `last = …` 循环覆盖），
+  断言 `startsWith(VOLATILE_CONTEXT_HEADER)` —— 单轮，数不出堆叠。
+- `midRunMemoryWriteIsVisibleNextTurnWithoutTouchingThePrompt:144` 跑了两轮，但同样只 `contains("第二轮才写入的记忆")`，
+  **既没数 user 行数、也没数 `当前时间` 出现次数**。
+- `BotAgentTest` 对该头的引用同属单轮形状断言。
+
+⇒ 全仓**没有**一条测试数过「同一会话第 N 轮请求里堆了几块时钟」，(C) 成立，取证必须新建。
+主编那句「p12d 留下的 `out/llm-requests/*.json` 是空猎物」也复核了：那批产物每请求只有 1 条 user
+（各检查点新建会话），与本棒结论一致 ⇒ §11.1 的实验必须**自造猎物**（同一 agent、同一会话、连跑 3 轮、
+第 1 轮后改写 memory/skill）。
+
+## 11.1 任务一取证：三项原始读数（有猎物实验：同一 agent、同一会话、连跑 3 轮）
+
+- 11.1.1 第 3 次 provider 请求里 `user` 消息条数 / 含 `当前时间` 的条数
+- 11.1.2 落盘 transcript（`sessionDir` 会话 json）里 user 行是否含 `[z-bot 运行时上下文]` 整块（贴原文片段）
+- 11.1.3 渲染面：真起 `HttpChannel`，`/api` 回来的 `content` 字段是否含抬头
+
+## 11.2 判词：是缺陷 / 不是（带取证测试名与断言原文）
+
+## 11.3 修法与双向断言（若 11.2 判是）
+
+- 正向断言（动态块真到请求）：测试名 + 结果
+- 负向断言（落盘不含抬头 / 第 3 次请求含时钟 user 行 = 1 / web content 不含抬头）：测试名 + 结果
+- 阳性对照（缺了猎物就是空跑，逐条注明猎物是谁）
+
+## 11.4 杠①：全量单测串行三跑
+
+## 11.5 杠②：LEDGER 重算 + M1b 能不能从 PARTIAL 收成 RED-OK
+
+## 11.6 杠③：真进程 E2E 三整跑 + K2 探针
+
+## 11.7 杠④：`~/.zbot` 未污染三读数
+
+## 11.8 §交接：`GatewayDeliveryP16Test` 补丁文本（本棒不落刀，主编落刀）
+
+## 11.9 §未做（一条不许美化）
