@@ -1,6 +1,6 @@
 # P27 委托面对齐 —— EVIDENCE
 
-STATUS: p27b 收口棒进行中（§0 复测已跑；证伪面见 §10；四杠读数按 §5—§8 逐节落）
+STATUS: **p27b 收口完成** —— 四杠全部落地（杠① §5／杠② §6／杠③ §7／杠④ §8）、工单 §3.2 三问的证伪面在 §10、尺和产品的错分开记在 §9、停在哪儿写在 §收口。本文件所有决定性读数均为**实测**，`.log` 被 `.gitignore` 收走 ⇒ 原文贴在节内。
 
 写域：`z-bot-core/src/main/java/com/zifang/z/bot/delegate/**`、`z-bot-core/src/test/java/com/zifang/z/bot/delegate/**`、`_doc/acceptance/p27/**`、roadmap 自己那一行。
 禁止改动：`agent/BotAgent.java`、`config/BotConfig.java`、`session/**`（p14/p23/p26 在写）。
@@ -688,4 +688,29 @@ HEAD:.../delegate/DelegationLedger.java:494/495:        sweepDefault() 内部自
    或让 `claim()` 显式拒绝非终态现场；
 ③ 读侧对**解析不了**的面值不许静默返 null：保留目录 + 标 quarantine（否则 `pruneStale` 永远碰不到它）；
 ④ `DeliveryState` 读侧改成大小写无关，认 hermes 的线面值。
+
+## §收口（p27b 自报：停在哪儿、下一步是谁的什么）
+
+STATUS: **p27b 收口完成** —— 工单 §3 的 1—6 全部落到实测量（§3.1 那条是"实测不成立"），在 §4 停止线之前主动收手。
+
+| 项 | 实测 |
+|---|---|
+| 分支 / HEAD | `w11-p27` @ **`44d9af6`**；链：`07f25a8`（前棒 wip）→ `558900b`（保存现场，前棒 4M+2?? 全进历史）→ `5d0fc25`（证伪 5 支 + §0.2/§5/§10）→ `44d9af6`（杠②③④ + 修两处尺的错） |
+| 现场 | `git status --porcelain` = **空**；`git status --porcelain -- z-bot-core/src/main z-bot-core/src/test` = **0 条** ⇒ 21 支变异零残留 |
+| committed `@Test` | `git grep -c '@Test' HEAD -- z-bot-core/src/test` 求和 = **789**（开工实测 784，本棒 +5 支证伪用例） |
+| 杠① | `mvn -o test` 全 reactor ×3 全绿：**789 / F0 E0 S0**，双尺（模块级求和 == 类级 `-- in` 求和）同数，socket 类错误 0；被外来 `pkill -f surefire` 杀掉的那一跑单列为环境事故（P27b-G1），**不记成间歇率**（§5） |
+| 杠② | 21 支变异（批二 18:22:51）：**RED-OK=8 / PARTIAL=10 / SURVIVED=3** ⇒ 检出 18/21 = **85.7%**；`md5_restored=OK` 21/21；停机第六档 **0** 次（§6） |
+| 杠③ | 真进程 E2E **4 整跑**（`e2ed/e2ee/e2ef/e2eg`）各 `RUN\|…\|CHECKS=20\|FAILED=0\|全过` rc=0，java 侧 `E2E\|CHECKS=11 FAILED=0`；含真 `kill -9`（`returncode=-9` + md5 两端同值）与**另一个 JVM** 只从盘上判词（§7） |
+| 杠④ | 三时点逐字 **8 / 2dadaed0 / 690ddbc0**（t1 开工 → t2 测量在飞窗口（7 跑 × `HOME\|before`/`HOME\|after` 两端 + 18:15 独立复测）→ t3 收尾），真 key 全程只量长度 = **125**（§8） |
+
+**停在哪一步**：主线六条没有一条停在"跑了一半"；停在的是三处**本棒权限外**的落点——① §3.1 的 ff 实测不可行（分叉 `27  2` + 红线禁合并），所以四杠是 `w11-p27` 树的读数、**不是合并树读数**；② §9.2 的 D1—D6 六条产品的错只钉不修（修法要动 `BotAgent.java`/`WIRING.md`，在禁止改动清单里）；③ §6.4 的三支 `SURVIVED` 要并发驱动才咬得到（§未做 第 4/7 条）。
+
+**下一步（点名 + 依据哪条实测量）**：
+1. **主编在合并树重测四杠** —— 依据 §0.2 的 `git rev-list --left-right --count`=`27  2` 与只读 `merge-tree` 探测 tree `e75448b` 无 CONFLICT：本棒所有读数都在分叉树上，杠①③ 换树必须重跑。
+2. **补跨线程并发 `advance` / 双写覆盖的驱动** —— 依据 §6.4：`M13`/`M17`/`M19` 三支 `SURVIVED` 是 85.7%→100% 的唯一结构性缺口，且 `M17` 的 expected 测试 `concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth` 已存在、只在单线程里咬不到。
+3. **把 `delegation.sweepAtStartup()` 接进 `BotAgent` 构造器** —— 依据 §10.1 的 `git grep`（`src/main` 里 0 调用者）+ §7.3 的 `E2E\|after_kill state=RUNNING … prune_before_adoption=0`：幻影条目在真进程里活着，且保留期内任何回收碰不到。
+4. **裁定 6 个投递面入口（`release/drop/undeliveredTerminalResults/adoptOrphans/pruneStale/sweepAtStartup`）要不要接生产** —— 依据 §10.1（真 `submitBackground`+`backgroundResult` 连拉 6 次只烧 `attempts=1` ⇒ 上限 8 在现网撞不到）与 `M02/M04` 两支只有测试能杀的事实。
+
+**给主编的一句话**：本棒改的两处**尺**（`p27_mutation.py` 的 `name=`/`classname=` 取键、`p27_e2e.py` 的一行多字段取键）都是把"归属到具名测试"从**恒假红**改成可读，**没有放宽任何判据**；两处各自带了对照（§6.5 的 git+md5 双对账、§9.1 G6 的已知样本离线重放 + `field('after_kill','nope')` 仍 `<missing>` 的阴性对照），作废的批一台账原样留在 `~/.cache/zbot-p27-lead/LEDGER.pre-G5-fix.tsv` 可复核。
+
 
