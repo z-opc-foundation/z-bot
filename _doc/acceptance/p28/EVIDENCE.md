@@ -537,3 +537,92 @@ CTRL_DONE|lines=9 rc=0
 这个**字面量**，配对解析会把注释里的字当标签；改成只认**独占一行**的标签。
 ② 调用点判定原来要求 `NAME(`，会把 `addEventListener('input', autoResize)` 这种**当回调传出去**的正当接线
 判成孤儿（假红）；改成"去注释后的 JS 里出现这个名字本身"，HTML 那半仍只认调用式。
+
+---
+
+## P28-lead-7 · 三跑逐字对账（把 §8.11 那句"名字集合 md5 相同"换成一把更硬的尺）+ T1 篡改对照 v1 判作废
+
+### 一、三跑身份与读数（23:09–23:45，同一棵 main 树、同一份尺字节）
+
+```
+ROUND_START|lead_t9_r2|2026-09-26 23:21:34+0800|head=696c632|harness_md5=2e8134bb|src_md5=bb3ff2e6|tree_dirty=2
+ROUND_END|lead_t9_r2|rc=0|2026-09-26 23:33:41+0800
+E2E|run=lead_t9_r2 checks=32 pass=32 fail=0 llm_hits=1 serve_port=58116 result=OK
+ROUND_START|lead_t9_r3|2026-09-26 23:33:41+0800|head=d001ecf|harness_md5=2e8134bb|src_md5=bb3ff2e6|tree_dirty=0
+ROUND_END|lead_t9_r3|rc=0|2026-09-26 23:45:47+0800
+E2E|run=lead_t9_r3 checks=32 pass=32 fail=0 llm_hits=1 serve_port=54379 result=OK
+E2E|run=smoke_t9  checks=32 pass=32 fail=0 llm_hits=1 serve_port=51512 result=OK   （23:09 起跑的那一跑）
+```
+
+三跑的 `head` 不同（`696c632`→`d001ecf`）而 `harness_md5`/`src_md5` 相同：中间那一笔是这台机器上
+一个游离的"代提交"会话把我未提交的工作树改动原样提交并推送了（`d001ecf chore(代提交): 收妥本仓未提交的工作树改动`），
+被提交的 EVIDENCE/p28_e2e.py/index.html 与当时盘上字节逐字节一致 ⇒ **量的还是同一份字节**，但"钉 commit 号"
+这件事在这台机器上不能只靠提交信息判断，得看字节。
+
+### 二、跨轮一致性：第一版哈希是错的，第二版才成立
+
+链条脚本 `t9_series.sh:17` 写的是 `for t in "$SMOKE:smoke_t9" …`：**zsh 会把 `$名字:字母…` 当历史式修饰符解析**
+（`:s` 是替换修饰符、必须带分隔符），于是整支脚本从第 17 行起 `bad substitution` 直接退出 ⇒ **那条 CROSS 从未产出**
+（`CHAIN|series rc=1`）。病因不是"zsh 少了什么功能"，而是**未加花括号的展开后面紧跟了个冒号**；
+修法就是 `"${SMOKE}:smoke_t9"`（3 行最小复现实测：改前 rc=1、改后 rc=0）。
+我手算第一版时又把三跑的判决行原文拼起来取 md5，得到三个**互不相同**的哈希——
+那是尺的错，不是三跑真有差异：`CHECK|` 行里合法地嵌着墙钟、`bind(0)` 端口、每跑随机 token、tty 母设备字节 md5、
+临时 profile 绝对路径。把数字全抹掉又会被指责"抹太狠"。所以第二版**只点名、不泛指**（量具
+`~/.cache/zbot-integrate/norm_verdicts.py`，`VOLATILE` 表就是这张点名清单）：
+
+```
+BYTES_ID|run=smoke_t9|bytes=8485|len(run)=8|bytes-4*len=8453
+BYTES_ID|run=lead_t9_r2|bytes=8493|len(run)=10|bytes-4*len=8453
+BYTES_ID|run=lead_t9_r3|bytes=8493|len(run)=10|bytes-4*len=8453
+CROSS|bytes_residual_constant=8453|unique=YES（⇒ 载荷长度差全部由跑名长度解释，不是回归）
+NORM|smoke_t9.log|lines=55|md5=6536e35fcaf511026bb34b6b88845c4e
+NORM|p28_lead_t9_r2.log|lines=55|md5=6536e35fcaf511026bb34b6b88845c4e
+NORM|p28_lead_t9_r3.log|lines=55|md5=6536e35fcaf511026bb34b6b88845c4e
+PAIR|smoke_t9.log vs p28_lead_t9_r2.log|differing_lines=0 IDENTICAL
+PAIR|p28_lead_t9_r2.log vs p28_lead_t9_r3.log|differing_lines=0 IDENTICAL
+CROSS|three_round_verdict_identical=YES
+```
+
+**55 行 = 三跑各自的全部 `CHECK|`＋`TABLES`/`SERVED`/`JS_FNS`/`BUCKET`/`WIRING_EMIT`/`HAND_COPIED` 结构读数**，
+归一后逐字节相同。`checks=32`、`tools=14`、`9 格`、`rows=26`、被伺服字节的 md5 这些**定值一个都没被抹**——
+它们在三跑里本来就同，抹了才叫自欺。
+
+`S10` 那条的 `bytes` 是三跑里唯一一个"不能凭点名抹平"的数（请求体长度真会随代码变），所以我给它单独一条
+可算的恒等式而不是直接归一：拿这台机器上留存的 6 个不同长度跑名（7/8/10/13/14）拟合，
+`bytes = 8453 + 4·len(run)` 全部命中，唯一偏离点 `8439` 属于 p25 那一代量具（scratch 根目录本身更短，
+`bar3all/p25.all*.log`）⇒ 那 8 字节的差是路径算术，不是载荷回归。系数 4 是从数据点拟出来的
+（尺只存了 `len(rest)` 没存原文），我**没有**直接数过请求体里跑名出现几次——这条要写成结论就只能写成"长度差
+由跑名解释"，不能写成"我看见了 4 处"。
+
+### 三、T1 注入阳性对照 v1：判作废，病在注入时刻
+
+```
+T1_CTRL|START 2026-09-26 23:45:47 dir=/Users/zifang/.cache/zbot-integrate/t1_tamper_262345
+T1_CTRL|MD5_PRE classes=bb3ff2e6 snapshot=bb3ff2e6 src=bb3ff2e6
+T1_CTRL|TAMPER +1byte classes=bf6d3919 len=53094
+T1_CTRL|RUN_B rc=0 E2E|run=t1_tamper checks=32 pass=32 fail=0 llm_hits=1 serve_port=53713 result=OK
+SERVED|status='HTTP/1.1 200 OK' served=53093B/bb3ff2e6 disk=53093B/bb3ff2e6 classpath=53093B/bb3ff2e6
+T1_CTRL|RUN_B 其他红项（应只剩 T1）: 0 条红 / 红名=
+T1_CTRL|MD5_THREE_WAY classes=bb3ff2e6b03ed524c92dd4d877adfe9b snapshot=bb3ff2e6b03ed524c92dd4d877adfe9b src=bb3ff2e6b03ed524c92dd4d877adfe9b same=YES
+```
+
+注入后我实测到的两条形迹可疑的读数（也正是判作废的依据）：
+`target/classes/web/index.html` 在 23:45:49（注入后 2 s）自己变回 `53093` 字节、md5 回到 `bb3ff2e6`，
+mtime 却是新的。原因在尺的开头：每一跑第一件事就是 `mvn -o -pl z-bot-core test-compile`（`p28_e2e.py:674`），
+resources 插件把 `src/main/resources` 又拷了一遍 ⇒ **篡改被构建抹掉，从未进入伺服路径**。
+所以 `RUN_B` 的 32/32 全绿不能读成"T1 没牙"，也不能读成"T1 抓到了篡改"——它是**零猎物**的一次跑。
+还原步本身没问题（三方 md5 `same=YES`，长度回到 53093）。
+
+v2 的改法（`~/.cache/zbot-integrate/t1_tamper_v2.sh`，读数待下一节）：先起这一跑，**等它自己打印
+`BUILD|classpath_file=`**（这一行之后本跑再无 mvn）才注入那 1 字节；`HttpChannel.serveConsole()` 是
+每次请求 `getResourceAsStream`（`HttpChannel.java:890-891`），所以注入必然读得到。还原参照仍是
+注入前自己 cp 的那一份，且 `trap … EXIT` 保证半途退出也还原。
+
+### 四、杠④ 与一条我自己留下的环境账
+
+三跑全程 `~/.zbot` 三值不动（`dir=8 cfg=2dadaed0 db=690ddbc0`，`U1` 九时点同读数），真 key 只量长度（125）。
+本节点掉一个**我自己**这一会话留下的孤儿：`pid 90799 ppid=1`，argv
+`com.zifang.z.bot.ZBot serve --port 59384 --config-dir /Users/zifang/.cache/zbot-p28-browser/cfg`
+（23:24:01 起，P28-lead-6 浏览器取证那一跑没收线）⇒ `kill` 后 `lsof` 复扫 0 个 LISTEN，
+`~/.zbot` 三值复测不变。别的会话那 5 支 gateway/repl 仍只记账不杀。
+
