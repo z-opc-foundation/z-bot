@@ -222,13 +222,71 @@ hermes 长档表 `(30,60,90,120)` 全部 ≤ 她的 `max_delay=120`。我们把 
 （`ladderValue` 取 `min(档位, max-delay-ms)`），这样 `withBaseDelayMs()` 这条兼容口子（老 4 参构造把
 封顶压成 `4*backoffMs`）能一键把阶梯降成常数，既有 32 条 llm 单测与杠① 不会被 30s 档拖爆。
 
-## §3 换模型后重建在飞 system 上下文 + 重置压缩计数
+## §3 换模型后重建在飞的 system 上下文 + 重置压缩计数
 
-STATUS: 未跑
+STATUS: DONE（llm 侧接口 + BotAgent 侧重建/重置已落地并绿；`context/` 的压缩计数重置口归 §未做）
+
+复算：老代码 `ResilientLlmProvider.withModel()` 只换 `model` 字段 —— messages 里那条
+`Msg.system(...)` 与 `maxTokens` 还是主模型口径（缺陷 D）。
+
+新增接缝（都在可写域 `llm/`）：
+```java
+public interface ModelFallbackHook {
+    ChatCompletionsRequest rebuildContext(String fromModel, String toModel, ChatCompletionsRequest inFlight);
+    void resetCompressionState(String fromModel, String toModel);
+}
+```
+`ResilientLlmProvider.chat()` 在**每次真换模型之前**调 `switchModel()`：
+先 `rebuildContext`（返回 null 才退回旧的"只改 model"路径，保持向后兼容），再 `resetCompressionState`。
+
+`agent/BotAgent`（只动 fallback 相关行）在构造时注册 hook：
+- `rebuildForModel()`：用 `memory.getSystemPrompt()` 重贴 SYSTEM 行（工具清单/记忆块口径不变）、
+  按新模型重算 `maxTokens`（0 则回落到 `config.getMaxTokens()`），日志
+  `[BotAgent] 降级链 X -> Y：system 上下文已重建（N 条消息，maxTokens=…）`
+- `resetModelSwitchState()`：`lastRequestChars = 0` + cache 累加清零（这些是本侧按旧模型口径攒的账）。
+
+实测（`P26RetryPolicyTest`，33 绿里）：
+```
+modelSwitch_rebuildsContextAndResetsCounters     hook 各调 1 次；切换后请求
+                                                 model=second-model、maxTokens=999、
+                                                 messages[0]=SYSTEM("rebuilt-for-second-model")
+modelSwitch_withoutHookStillSwitchesModelBut…    没注册 hook ⇒ 仍降级成功，但 SYSTEM 行原样带过去
+                                                 （= P26 之前的行为，反向对照）
+```
+**没动 `context/**`**：`CompressorEngine` 的 `compressCount`（`context/CompressorEngine.java:43`，只有 getter
+`:134`）没有对外重置口 ⇒ 换模型后旧压缩计数仍然留着。接口需求（给 w6-p14/主编）：
+`CompressorEngine.resetForModelSwitch(String fromModel, String toModel)`（把 `compressCount` 归 0、
+并按新模型窗口重算阈值），我在 `resetModelSwitchState()` 里已留好调用位，见 §11。
 
 ## §4 流式陈旧看门狗（`max(default, floor)` + 用户可覆盖）
 
-STATUS: 未跑
+STATUS: DONE（单测绿；真进程断流与阈值分档的实测数字在 §8(b)）
+
+码：`llm/StreamStaleWatchdog.java` + `ResilientLlmProvider.streamChat()`。
+
+阈值解析（与 `reasoning_timeouts.py:24` 同语义）：
+```
+resolveTimeoutMs(policy, model) =
+    显式配了 llm.stream.stale-timeout-ms ⇒ 就用它（可以是 0 = 关掉，floor 不得覆盖）
+    否则 ⇒ max(llm.stream.stale-timeout-ms 默认 180000, floor(model))
+floor 表 llm.stream.stale-timeout-floors = "^(?:o1|o3|qwq|r1|deepseek-r1|glm-z1|qwen3|nemotron)(?:[-_.\d].*)?=300,.*(?:thinking|reasoner|nemo|preview).*|=240"
+匹配前先剥聚合器前缀（openai/o3-mini ⇒ o3-mini），与 hermes 的 slug-only 匹配同义
+```
+行为：单次触发（`AtomicBoolean` CAS）⇒ 上层只收到一次 `onError(StreamStaleException)`；
+触发或正常收尾（收到带 `finish_reason` 的块 / 出错）都 `close()` 自己的定时器线程。
+
+实测：
+```
+stale_floorIsMaxOfDefaultAndModelFloor    gpt-4o-mini ⇒ 180000；openai/o3-mini ⇒ 300000；deepseek-r1 ⇒ 300000
+stale_floorNeverLowersDefault             floor=5s 也压不动 default 180s ⇒ 180000
+stale_explicitUserConfigBeatsFloor        配 7000 + o3-mini ⇒ 7000（显式优先）
+stale_watchdogTripsAndDeliversErrorOnce   阈值 120ms、上游 600ms 后才吐字 ⇒ 恰好 1 次 onError、
+                                          类型 StreamStaleException、触发时上游确实还没吐过字
+stale_noHungThreadAfterTripOrNormalEnd    触发路径与正常收尾路径：z-llm-stale-watchdog* 线程数回到基线
+stale_zeroThresholdMeansNoWatchdog        配 0 ⇒ 阈值 0、不起线程、直通 delegate
+```
+`Tests run: 33, Failures: 0`（同 §1 那一跑）。真进程断流（本地代理 mid-stream kill）的
+检测延迟与 `pgrep`/线程数取证见 §8(b)。
 
 ## §5 usage 归一（含 cache 读/写命中）→ `session_model_usage`
 
