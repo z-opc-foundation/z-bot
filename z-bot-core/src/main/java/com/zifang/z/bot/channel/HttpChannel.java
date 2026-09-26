@@ -13,6 +13,9 @@ import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.cron.CronJob;
 import com.zifang.z.bot.cron.CronScheduler;
 import com.zifang.z.bot.session.SessionManager;
+import com.zifang.z.bot.slash.CommandCatalog;
+import com.zifang.z.bot.slash.SlashCommand;
+import com.zifang.z.bot.slash.SlashRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -292,7 +295,12 @@ public final class HttpChannel {
             // center 未配置时这一条只回 {ok,error}；配置了才多 {instanceCode,timestamp} ⇒
             // 顶层字段按状态分叉，台账只钉"必有的那一列"，分叉本身记 EVIDENCE §1.1。
             new Route("POST", "/api/agent/register", BodyShape.JSON_OBJECT,
-                    "object;fields:ok", "", "")));
+                    "object;fields:ok", "", ""),
+            // ---- P19 命令表单源：整张 CommandCatalog 从这里读出去，控制台不再自己抄清单 ----
+            // aliasOf 只在别名行出现（/quit /q /?），rowfields 是"出现过的列全集"口径，所以一起声明。
+            new Route("GET", "/api/commands", BodyShape.JSON_ARRAY,
+                    "array;rowfields:-:name,description,args,scope,endpoints,aliasOf",
+                    "CommandCatalog.defs() + SlashRegistry.live() 的技能段", "")));
 
     /** 台账全量（<b>方法</b>粒度）。渲染与断言都从这一张表出发，别处不许再抄一份清单。 */
     public static List<Route> routes() {
@@ -417,6 +425,8 @@ public final class HttpChannel {
                 json(ex, 200, cronResult(method, readBody(ex)));
             } else if ("/api/agent/register".equals(path)) {
                 json(ex, 200, agentRegisterResult(readBody(ex)));
+            } else if ("/api/commands".equals(path)) {
+                json(ex, 200, commandListResult());
             } else {
                 json(ex, 404, error("not found: " + path));
             }
@@ -678,6 +688,25 @@ public final class HttpChannel {
             m.put("name", tool.getName());
             m.put("description", tool.getDescription());
             out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * P19 单源：命令面就是 {@code CommandCatalog} 那一张表，HTTP 只序列化、不另立清单。
+     *
+     * <p>技能派生的那一段读 {@code SlashRegistry.live()}（注册表里已经有它，{@code /help} 与终端
+     * 补全都从同一处取），所以这里既没有第二份命令清单、也没有第二次扫盘。</p>
+     */
+    private List<Map<String, Object>> commandListResult() {
+        List<Map<String, Object>> out =
+                new ArrayList<Map<String, Object>>(CommandCatalog.asRows());
+        SlashRegistry live = SlashRegistry.live();
+        if (live != null) {
+            for (String key : live.skillCommandKeys()) {
+                SlashCommand c = live.find(key);
+                out.add(CommandCatalog.skillRow(key, c == null ? "" : c.description()));
+            }
         }
         return out;
     }
