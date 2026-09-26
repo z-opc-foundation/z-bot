@@ -982,3 +982,185 @@ mtimes harness=1790430140 ledger=1790440674
 - 杠④ `entries=8 cfg=2dadaed0 db=690ddbc0 keylen=125`（真 key 全程只量长度，值未被读取）。
   两支尺各自打印 `== 锁已释放 ==`；我只 `os.close(fd)`，未 `unlink` 共享锁。
 
+## §13 主编结掉 §12.3 登记的 P27c-G1：21→22 支新表五跑，三格按机制裁决（09-27 02:43:43–03:20:51，实测）
+
+欠账有两处，原文逐字（都是我上一轮写的）：
+
+- §12.3 末条（本文件 `:953–955`）："按红线"预期红集跑之前写死、不许回填"，我**没有**在本节动表；
+  要动必须**按"谁读这个值"重推归属**、改完**整批复跑**再记账 ⇒ 登记为 **P27c-G1**。"
+- roadmap §8.13.6："杠② p27：21 支按 `6f6b21f` 的新表整批复跑未做 ⇒ 新 expect 集"推导成立、未经实测"。"
+
+这一节把两件事一起结：**整批复跑**（新表 22 支、同树串行五跑）＋ 五跑里真正需要机制裁决的**三格**。
+"三格"不是我挑的，是台账 `c7` 列点名的三行：`M03` 预期红却没红 `ackWithoutClaimFailsLoudly`、
+`M10` 预期红却没红 `asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery`、
+`M17` 冒出一支未预测的红 `concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth`。
+三格里有两格是我上一轮**推导过头**，有一格是把"结构性看不见"写得太满、被第三跑当场打脸。
+
+原始件（三样，缺一样这节的话就不成立）：逐跑台账快照 `LEDGER.run{1,2,3,4,5}.tsv`、
+逐跑逐支 surefire 原文 `mutation.run{1,2,3,4,5}.tar.gz`（`OUT` 目录会被下一跑覆写，所以逐跑打了 tar，
+解出来即 `r{1..5}/mutation/M*-*.log`）、控制台日志 `~/.cache/zbot-integrate/p27_mut_21_270208.log`（r1）
++ `rerun_{2,3,4,5}.log` + 驱动侧 `rerun_env.log`（逐跑 `RUN|n=… load_average=… foreign_surefire_procs=…`）。
+**r1 不在 `rerun_chain.log` 那条链上**（它是链条外单独起的第一跑），而 `RUN|` 那两行采样是它之后才加进驱动的 ⇒
+r1 的**负载与外来进程数标"未采"，不补一个数**；它其余读数都有 console 原文可引（见 13.1 行号）。
+（这批原始件都在 `~/.cache/zbot-p27-lead/` 与 `~/.cache/zbot-integrate/`，`*.log` 被 `.gitignore` 拦着 ⇒
+决定性的那几行一律原样贴进本节，不放链接。）
+
+### 13.1 五张读数条（同一把尺、串行、每跑先过表自证与永挂体检）
+
+r1（`~/.cache/zbot-integrate/p27_mut_21_270208.log`，21 支表，pid 53160，02:43:43 起跑、02:46:22 收尾。
+下面 10 行是该文件的第 1、2、3、8、9、10、13、20、27、35 行，省略号处是其余 18 支的同类行）：
+
+```
+TABLE_SELFCHECK|mutants=21 ids_unique=yes fields_exact=yes dup_keys=0 expectations_nonempty=yes
+TARGET|repo=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot head=ce2fbc7 branch=main dirty_lines=2
+LOCK|acquired=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock pid=53160 proto=flock
+== 体检通过：0 处无界等待 ==
+== 基线（未注入）==
+   rc=0 elapsed=3.2s [INFO] Tests run: 88, Failures: 0, Errors: 0, Skipped: 0
+M03-ack-without-claim-allowed      RED-OK                 rc=1    预期红却没红:ackWithoutClaimFailsLoudly
+M10-orphan-adoption-eats-terminal  RED-OK                 rc=1    预期红却没红:asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery
+M17-gate-counts-running-only       PARTIAL                rc=1    未预测的红:concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth
+== 计数: PARTIAL=1, RED-OK=19, SURVIVED=1 ==
+```
+
+r2（`rerun_2.log`，同树同表，pid 71262）逐字相同，只有 `dirty_lines=2→3`（多出的一条正是 r1 自己重写的
+`LEDGER.tsv`，另两条是 `__pycache__`；**被注入的源码文件全部 `md5_restored=OK`，五跑 107 行（21×3 + 22×2）一行不差** ⇒
+"脏 3 行"不使这些读数脱离 `head=` 那个 commit，但杠① 那套 `dirty_tracked=0` 的纪律这里确实没做到，记在账上）。
+
+| 跑 | 起→止 | `head=` | load_average(1m) | 外来 surefire 进程 | M03 | M10 | M17 连发那支 | 计数 |
+|---|---|---|---|---|---|---|---|---|
+| r1 | 02:43:43→02:46:22 | `ce2fbc7` | 未采（该跑早于我加 `RUN|` 采样行） | 未采 | 没红 `ackWithoutClaimFailsLoudly` | 没红 `asyncSceneExists…` | **红** :257 | `PARTIAL=1 RED-OK=19 SURVIVED=1` |
+| r2 | 02:57:00→03:00:33 | `ce2fbc7` | 9.51 | 4 | 同上 | 同上 | **红** :257 | 同 r1 |
+| r3 | 03:00:33→03:03:34 | `ce2fbc7` | 20.36 | 2 | 同上 | 同上 | **绿** | `RED-OK=20 SURVIVED=1` |
+| r4 | 03:09:12→03:12:36 | `5e6a014`（新表 22 支） | 5.79 | 2 | 预期内 | 预期内 | 绿（未红） | `RED-OK=21 SURVIVED=1` |
+| r5 | 03:12:36→03:15:32 | `5e6a014` | 26.58 | 4 | 预期内 | 预期内 | 绿（未红） | `RED-OK=21 SURVIVED=1` |
+
+
+每跑的分母不变：五跑的 M17 逐支日志里 `Tests run: 88` 全部出现，只有 `Failures:` 那一项是
+**2 / 2 / 1 / 1 / 1**（r1–r5），多出来的那一条正是连发用例 ⇒
+不存在"少跑了几条所以没红"，也不存在"红是别的用例凑的"。r4/r5 的支数从 21 变 22 是我这一节新立的 **M22**（见 13.2）。
+
+
+### 13.2 M03：把名字**挪家**而不是删掉——两层各注一支
+
+`ackWithoutClaimFailsLoudly` 三跑都不红。病在源码，不在尺：
+`DelegationDelivery.java:131` 在**查迁移表之前**就
+`if (e.delivery == DeliveryState.PENDING) throw new IllegalStateException("拒绝无凭证的 ack: …")`。
+M03 注的是 `DelegateTransitions` 那张表（给 `PENDING --RESULT_DELIVERED--> DELIVERED` 开一条边），
+而这条边永远走不到那一行 ⇒ **与这支用例的通过条件等价**，不是空跑。
+
+真红的是表格层那两支（r5 `r5/mutation/M03-ack-without-claim-allowed.log` 第 153–154 行原文）：
+
+```
+[ERROR]   DelegateStateMachineTest.ackWithoutClaimIsIllegal:177 只有 CLAIMED 才允许 ack（PENDING） expected:<false> but was:<true>
+[ERROR]   DelegateStateMachineTest.deliveryMatrixIsExhaustive:135 投递迁移表与手写基准不一致:
+```
+
+处理方式不是把名字删了，而是**另立 M22 把服务层那句预检摘掉**（`if (false && e.delivery == PENDING)`），
+让这个名字有一个真会红它的注入：r4/r5 都判 `RED-OK 预期内`，红名逐字（r4/r5 各自的
+`M22-ack-precheck-removed.log` 第 116 行）
+
+```
+[ERROR]   DelegationDeliveryTest.ackWithoutClaimFailsLoudly:96 PENDING 行上的 ack 必须抛，不许静默返回 false
+```
+
+⇒ 表里 M03 点名的集合含表格层、不含服务层，M22 反之。**两支的差集就是"分层"这件事单独有牙的证据**
+（与 P18 那组 D10/D11 的互补两层同形）。
+同一判据在真进程那一层由 `P27DelegationDriver` 第⑧段（`E2E|ack_without_claim=IllegalStateException`）钉住，
+它不在杠② 的 `-Dtest` 范围里 ⇒ 只记账指向杠③，不在这里冒充覆盖。
+
+### 13.3 M10：调了被改函数**也不等于**抓得到——两道闸护同一行
+
+`asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery` 从头到尾不调 `adoptOrphans`
+（它在 `DelegateManagerLedgerTest.java:94`，测 dispatch→闸门→pull 的投递轴；整个文件里 `adoptOrphans`
+**只有一个调用点** `:152`，属于另一支 ⇒ `grep -n adoptOrphans` 一把就能复核）⇒ 结构上看不见这支变异，摘出预期红集。
+
+顺着这条查出一个**反方向**的坑，比原判断更值得记：
+`unfinishedAsyncSceneIsAdoptableAsOrphan`（`:135`）真的调了 `adoptOrphans`（`:152`）也真的断言
+"只有超期的非终态被认领"=1、`DONE` 不许被改判（`:154`）——但它那条 DONE 现场是**刚由 `awaitPull` 收工写下的**
+（`:143`，`updatedAt` 距 `now` 毫秒级），第二道**年龄**闸（`DelegationLedger.java:446`）独立就把它挡住了
+⇒ 摘掉终态闸（`:443`）它照样绿。摘名之后终态闸今天**只剩一支**确定性捕手：
+`orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes`（`DelegationLedgerTest.java:212-215` 把 `dlg-done`
+写成 `now - 10×ORPHAN_STALE_MILLIS`，年龄闸挡不住、只有终态闸挡）——r1–r5 五跑全红（每跑该支日志各有 1 行
+`[ERROR]   DelegationLedgerTest.orphanAdoptionMarksStale…` 实量）。红的方式也订正一处：它不是数数比不中，是**抛**
+（引 r5 `M10-orphan-adoption-eats-terminal.log:119`）：
+
+```
+[ERROR]   DelegationLedgerTest.orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes:218 » IllegalTransition 非法委托迁移[lifecycle]: DONE --delegate.orphan_adopted--> ?（该事件在此状态下没有出口，合法事件集见 legalEventsFrom/legalDeliveryEventsFrom）
+```
+
+⇒ 摘掉终态闸的真实后果不是"DONE 被静默改成 UNKNOWN"（原 `why` 就是这么写的，已改），
+而是 `adoptOrphans` 在 `advance()` 处抛出去、**整轮回收中断**（后面的孤儿一条都认领不到）。
+判"某支是不是捕手"要问的是"**只有这道闸在场时它会红吗**"，两道闸护同一行时谁都测不到对方被摘。
+
+### 13.4 M17：我那句"结构上看不到"被第三跑否证（连发是捕手，但不承重）
+
+原表 `why` 写着"三次提交到第 4 次时三条早已 RUNNING ⇒ 这一支**结构上看不到** QUEUED 那半边"。
+r1/r2 实测**红了**，失败点正是那条不变式（r1/r2 的 `M17-gate-counts-running-only.log` 同为第 154 行；
+r3/r4/r5 同一份日志里这条 `grep -c` 为 0）：
+
+```
+[ERROR]   DelegateManagerLedgerTest.concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth:257 前 3 条都该收下 expected:<3> but was:<4>
+```
+
+⇒ 那句断言撤回。但 r3 **又绿了**，r4/r5 也绿 ⇒ 五跑合计 2 红 3 绿：它是捕手，不是确定性判据。
+机理：`submitAsync` 里 `ASYNC_POOL` 是 `newCachedThreadPool`，第 N 行的 `d.status="RUNNING"`
+与主线程下一次闸门检查赛跑；红了 = 闸真放行了 `width` 之外的条数（真阳性），绿了 = 三条都已起跑。
+
+**我第一版归因（"负载把 QUEUED 窗口拉宽所以红"）被同一批数据否证**：
+红的 r1/r2 是 load 9.5 与未采，绿的 r3 是 load **20.36**、绿的 r5 是 load **26.58**，方向相反 ⇒
+纯竞态，没有环境预测因子。这也是为什么我先把 r2/r3 两跑测完、**再**改表——
+中途改表等于拿新 expect 去量，读出来的"预期内"就不是证据了。
+
+裁决：`expect=[flyingPredicateCountsQueuedRowsButNotTerminals]`（无时序、五跑五红，载荷在这一层），
+`allow_extra=[concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth]`，
+连发那支继续留在套件里当产品级"槽位数对不对"守卫。
+两处**源码注释**同时订正（`5e6a014`，diff 全是 `*` 行）：`DelegateManager.isFlying()` 的 javadoc
+和该用例自己的注释——原先那两句都在教下一个人"连发用例量不到它"，是错的。
+
+### 13.5 新表两跑的一致性 + 我自己这把比对尺的一次空跑
+
+`LEDGER.tsv`（提交于 `0b47cc8`）取 r5 字节，`# counts RED-OK=21 SURVIVED=1`，
+唯一 `SURVIVED` 仍是 **M13**（§11 已判的等价变异位，APFS 同卷 `Files.move` 8/8 不抛，拒绝为它写源码文本守卫）。
+
+r4 vs r5 逐列比（跳过 `elapsed_s`）：**只有 M05 一行两格不同**，且是同一个事件——
+`q3a_killedDelegatorLeavesAPhantomInFlightSceneAndNoReadPathReconcilesIt` 这支连带红在 r4 出现、r5 没出现
+（五跑里 r1/r2/r3/r4 各出现 1 次、r5 为 `预期内` ⇒ 4/5）⇒ 它记 `allow_extra` 有据（G1 给它的理由就是"零窗口 `pruneStale(0L, now)` 要靠两次取时跨过 1 ms"）。
+两跑 `elapsed_s` 合计 192.6 s / 169.9 s，整跑墙钟 3 m 24 s / 2 m 56 s ⇒ §11 之后那句"整批要几十分钟"是废案期的数，已改。
+
+**比对尺自己踩了一次空跑**：第一版按 `len(fields)>=11` 过滤，而这张表是 **10 列**（表头现数是 10）
+⇒ 22 行全被筛掉，脚本却打印"不同的格子数: 0"，读起来正好像"两轮逐字相同"。
+修法是列数从表头取、并把**行数当分母打出来**（`支数 run4=22 run5=22` 那两行就是补的自证）。
+这条已经写进量具自己的注释，别只留在这里。
+
+### 13.6 新树上的杠① 与量具修补
+
+- 杠① 在 `0b47cc8`（`dirty_tracked` 起止都 0）×3 串行，原文：
+
+```
+BAR1_SERIES|dir=/Users/zifang/.cache/zbot-integrate/bar1_270317 start=2026-09-27 03:17:28 HEAD=0b47cc8
+BAR1_TREE|dirty_total=2 dirty_tracked=0 src_md5_delegate=5abe755b
+ROUND|r=1 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 03:18:39
+ROUND|r=2 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 03:19:46
+ROUND|r=3 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 03:20:51
+BAR1_DONE|end=2026-09-27 03:20:51 dir=… HEAD=0b47cc8 dirty_tracked=0 src_md5_delegate=5abe755b
+```
+
+  `src_md5_delegate` 从 `fd1652b3` 变到 `5abe755b` 正是 §13.4 那两处 javadoc：`git show ce2fbc7:…DelegateManager.java | md5 -q` = `fd1652b3`、
+  `git show 5e6a014:…` = `5abe755b`（`0b47cc8` 同）。而 `git diff ce2fbc7..5e6a014 -- '*.java'` 一共只改 11 行、
+  **非注释行 = 0**（同一命令去掉 `-- '*.java'` 会数出 52 条非注释行，那全是 `p27_mutation.py` 里重写的预期红集表 ——
+  量具改了，被量的生产码没改。新表行数用表自己的形状数（`python3 -c` 数 `MUTANTS` 亦为 22）：
+  `grep -c 'dict(id="M' _doc/acceptance/p27/p27_mutation.py` ⇒ **22**（与 r4/r5 的 `TABLE_SELFCHECK|mutants=22` 同分母；
+  那 52 条非注释行就是这张重写过的预期红集表 + 新增的 `allow_extra` 档，表里带 `allow_extra` 的共 4 支：
+  M05 / M12 / M17 / M18）：
+  `git diff ce2fbc7..5e6a014 -- '*.java' | grep -E "^[+-]" | grep -vE "^(\\+\\+\\+|---)" | grep -vE "^[+-][[:space:]]*(\\*|/\\*|//)" | wc -l` ⇒ `0`
+  ⇒ 这一节的"树变了"只变在注释上，测试数仍是 1162（109 文件）不变。
+- 杠④：**先记一处我这节的空档**——`p27_mutation.py` 这五跑**没有**采样 `~/.zbot`（`grep -c bar4 rerun_2.log rerun_4.log rerun_env.log` 全是 0），
+  所以杠② 这五跑（墙钟合计约 15 分钟）里"不变量成立"这句话**没有直接读数**，只能由前后两天的杠①/杠③ 驱动采样点（它们每个 `ROUND`/`ROUND_START` 都打一条 `bar4=`）夹住。
+  本节能引的都是那些点：`8/2dadaed0/690ddbc0` 全等，真 key 只量长度 `key_len_only=125`，值未被读取。
+  要把这个空档补成硬账，就该在 `p27_mutation.py` 的每跑首尾各打一条 `bar4=`（下一步做，别在做了之前先声称）。
+  锁的纪律这五跑是齐的：各自打印 `== 锁已释放 ==`，我只 `os.close(fd)`，未 `unlink` 共享锁。
+- 跨轮一致性那把尺的口径错与修补（`CROSS|e2e_verdict` 数出 4 那件事）**写在 `p28/EVIDENCE.md` P28-lead-10**——
+  尺和被量的判据都在 p28 那一族，别在两个文件里各写一遍然后各自漂。本节只借用它的结论：
+  杠③ 在当前树成立 —— `0b47cc8` 上 03:21:26–03:57:32 串行三轮，每轮 `checks=32 pass=32 fail=0`、
+  `CROSS|e2e_verdict=1`、`CROSS_CTRL|…实测=2`，且 `BAR3_SRC_MD5_END` 与 START 同字节 ⇒ `§8.12.5`/`§8.13.6` 那句"待补"可以划掉。

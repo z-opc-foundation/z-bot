@@ -823,3 +823,55 @@ classpath 是同一份产物。
 
 _再生成本节读数：`bash ~/.cache/zbot-integrate/t1_tamper_v2.sh`（它会注入 `target/classes`，跑完自还原；与任何 mvn/杠② 串行）；
 原始日志 `~/.cache/zbot-integrate/t1_tamper_v2_outer.log`、`~/.cache/zbot-integrate/t1_tamper_v2_270111/run_{B,D}.log`。_
+
+## P28-lead-10 · 杠③ 在合并树 `0b47cc8` 上 ×3 真进程整跑 + 一把会数出"4"的跨轮尺被修掉（09-27 03:21:26–03:57:32，主编亲测）
+
+驱动 `~/.cache/zbot-integrate/bar3_x3_v2.sh`，日志 `~/.cache/zbot-integrate/bar3_0b47cc8.log`（22 行，逐字）：
+
+```
+BAR3_SERIES|start=2026-09-27 03:21:26 dir=/Users/zifang/.cache/zbot-integrate/bar3_x3_270321 HEAD=0b47cc8 harness_md5=2e8134bb src_md5=bb3ff2e6 tree_dirty=2
+BAR3_SRC_MD5_START|index.html=bb3ff2e6b03ed524c92dd4d877adfe9b harness=2e8134bbcb69b0e7bc615c9124d72b8a
+ROUND_START|bar3_x3_r1|2026-09-27 03:21:26|bar4=8/2dadaed0/690ddbc0/key_len_only=125
+ROUND|bar3_x3_r1|rc=0|2026-09-27 03:33:28|E2E|run=bar3_x3_r1 checks=32 pass=32 fail=0 llm_hits=1 serve_port=54102 result=OK
+ROUND|bar3_x3_r1|pass=32 fail=0|bar4=8/2dadaed0/690ddbc0/key_len_only=125
+ROUND|bar3_x3_r1|SERVED|status='HTTP/1.1 200 OK' served=53093B/bb3ff2e6 disk=53093B/bb3ff2e6 classpath=53093B/bb3ff2e6
+ROUND_START|bar3_x3_r2|2026-09-27 03:33:28|bar4=8/2dadaed0/690ddbc0/key_len_only=125
+ROUND|bar3_x3_r2|rc=0|2026-09-27 03:45:30|E2E|run=bar3_x3_r2 checks=32 pass=32 fail=0 llm_hits=1 serve_port=59626 result=OK
+ROUND|bar3_x3_r2|pass=32 fail=0|bar4=8/2dadaed0/690ddbc0/key_len_only=125
+ROUND|bar3_x3_r2|SERVED|status='HTTP/1.1 200 OK' served=53093B/bb3ff2e6 disk=53093B/bb3ff2e6 classpath=53093B/bb3ff2e6
+ROUND_START|bar3_x3_r3|2026-09-27 03:45:30|bar4=8/2dadaed0/690ddbc0/key_len_only=125
+ROUND|bar3_x3_r3|rc=0|2026-09-27 03:57:32|E2E|run=bar3_x3_r3 checks=32 pass=32 fail=0 llm_hits=1 serve_port=55054 result=OK
+ROUND|bar3_x3_r3|pass=32 fail=0|bar4=8/2dadaed0/690ddbc0/key_len_only=125
+ROUND|bar3_x3_r3|SERVED|status='HTTP/1.1 200 OK' served=53093B/bb3ff2e6 disk=53093B/bb3ff2e6 classpath=53093B/bb3ff2e6
+BAR3_SRC_MD5_END|index.html=bb3ff2e6b03ed524c92dd4d877adfe9b harness=2e8134bbcb69b0e7bc615c9124d72b8a
+ROUNDNAMESET|p28_bar3_x3_r1.log|n=32|c60453c818ed7ad2568d4c3a88138022
+ROUNDNAMESET|p28_bar3_x3_r2.log|n=32|c60453c818ed7ad2568d4c3a88138022
+ROUNDNAMESET|p28_bar3_x3_r3.log|n=32|c60453c818ed7ad2568d4c3a88138022
+CROSS|check_names_across_rounds=8abab1541f5f849c0fb2108ce57959ec
+CROSS|e2e_verdict=1 unique_distinct_readings(1=三轮逐字相同)
+CROSS_CTRL|注入一轮 fail=1 应当=2，实测=2
+BAR3_DONE|end=2026-09-27 03:57:32 dir=/Users/zifang/.cache/zbot-integrate/bar3_x3_270321 HEAD=0b47cc8 harness_md5=2e8134bb src_md5=bb3ff2e6 tree_dirty=2
+```
+
+- **量的是当前树**：驱动开头钉 `HEAD=0b47cc8 harness_md5=2e8134bb src_md5=bb3ff2e6`，`BAR3_SRC_MD5_END` 与 START 逐字节相同
+  ⇒ 这 36 m 06 s 里 `index.html` 与 `p28_e2e.py` 都没被碰过（`tree_dirty=2` 从头到尾是那两个未跟踪的 `__pycache__/*.pyc`，
+  受跟踪件为 0）；每轮 `SERVED` 三方（served / disk / classpath）都是 `53093B/bb3ff2e6`。
+- 判据分母：三轮都是 `checks=32 pass=32 fail=0`（`pass=`/`fail=` 由驱动现数 `^CHECK|.* PASS/FAIL`，不是抄判决行），
+  `llm_hits=1`（打的是自写假 LLM，`Authorization` 里只有 `Bearer stub-key-not-real`）；
+  三轮 `CHECK` 名字集合的 md5 都是 `c60453c8…`（`n=32` 三行）⇒ 每轮跑的是同一套 32 项。
+- **跨轮一致性两把尺**：`CROSS|check_names_across_rounds=8abab154…`（三轮名字拼起来一把哈希）一轮都不许变；
+  `CROSS|e2e_verdict=1` = 三轮判决行去标识后**逐字相同**。
+- **旧尺在这里会数出 4，而 4 不是"三轮不一致"**：它把每轮驱动开跑时那行
+  `E2E|run=… out=~/.cache/…/bar3_x3_rN` 头行一起算进比对，而 `sed` 只剥 `run=` 与 `serve_port=`，
+  `out=` 里的 `rN` 每轮不同 ⇒ 三轮判决完全相同也数出 4。改成只取含 `checks=` 的判决行，并配**阳性对照**
+  （人造一轮把 `fail=0` 改 `fail=1`，必须数出 2）。两批各量一遍，读数在
+  `~/.cache/zbot-integrate/cross_gauge_recheck_270207.log`（`bash ~/.cache/zbot-integrate/cross_gauge_recheck.sh <目录>` 可复算）：
+  旧批 `bar3_x3_270207/` 上 `OLD|count=4`、`FIXED|count=1`、`CTRL|expect=2 got=2`、`CTRL_OLD|同一份对照用旧剥法=5`；
+  本批由驱动自己收口：`CROSS|e2e_verdict=1` + `CROSS_CTRL|注入一轮 fail=1 应当=2，实测=2`。
+  **教训**：任何"N 轮相同吗"的尺都要问一句"被比对的字段里有没有每轮必然漂移的身份项"，
+  并且要有一支"故意不同"的对照证明它数得出 >1；只报 1 而不报对照，读数没有意义。
+  这与 `P28-lead-7` 是同一个病的第二次现形（那次我手算三跑判决行 md5 得到三个互不相同的哈希，成因也是行内嵌着墙钟/端口/随机 token）
+  ——⇒ 同族的尺应当合并：那条链已产出 `CROSS|three_round_verdict_identical=YES`，本节的 `e2e_verdict` 只该作为它的独立复核，不该各写一套剥法。
+- 杠④ 与真 profile：每轮首尾各一条 `bar4=8/2dadaed0/690ddbc0/key_len_only=125`（每轮首尾各一次）；`U1`（三时点不变）/
+  `U2`（真 key 未被读、线上只有 stub）/ `U3`（serve 子进程被回收）/ `U4`（用的是临时 profile）四支 PASS 原文见上块。
+- 这一节**没有**证的：浏览器渲染层（DOM 拿到之后）的 `/help` 实输出对照 —— 仍是未完项，见 roadmap §8.13.6。

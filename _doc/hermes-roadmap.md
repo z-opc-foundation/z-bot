@@ -1119,7 +1119,46 @@ BAR1_DONE|end=2026-09-27 02:02:08 dir=/Users/zifang/.cache/zbot-integrate/bar1_2
 ### 8.13.6 这一期仍然欠的（写在这里，别让下一个人以为已过）
 
 - ~~杠② p28~~ → **已闭（§8.13.5，`5d28377`，15 RED-OK / 1 刻意等价变异）**。
-- 杠② p27：21 支按 `6f6b21f` 的新表整批复跑未做 ⇒ 新 expect 集"推导成立、未经实测"。
-- 杠③：当前树 ×3 真进程 E2E 未跑（§8.12.5 那条待补不变）。
+- ~~杠② p27：21 支按 `6f6b21f` 的新表整批复跑未做 ⇒ 新 expect 集"推导成立、未经实测"~~ → **已闭（§8.13.7：新表 22 支五跑，`RED-OK=21 SURVIVED=1`，三格按机制裁决；逐跑原文见 `p27/EVIDENCE.md` §13）**。
+- ~~杠③：当前树 ×3 真进程 E2E 未跑（§8.12.5 那条待补不变）~~ → **已闭（§8.13.7：`0b47cc8` 上 03:21:26–03:57:32 串行 ×3，逐轮 32/32、`CROSS|e2e_verdict=1` + `CROSS_CTRL|…实测=2`，原文见 `p28/EVIDENCE.md` P28-lead-10）**。
 - 浏览器渲染层 `/help` 实输出对照未做（`P28-lead-6` 的未完项）。
+- **杠② 的 `p27_mutation.py` 不采样 `~/.zbot`**（`grep -c bar4 rerun_2.log rerun_4.log rerun_env.log` = 0）⇒ 杠② 那五跑对杠④ 没有直接读数，只被杠①/杠③ 的 `bar4=` 采样点夹着。补法是在每跑首尾各打一条 `BAR4|…`，但**注意**：整跑会把受跟踪的 `LEDGER.tsv` 覆写一遍（"跑一次就改一次台账字节"），所以补这一刀要么先把 r5 字节存档、跑完按字节对账，要么给脚本加一个"台账只落 stdout、不写 `LEDGER.tsv`"的 dry 档 —— 别用 `git checkout --` 当还原步。
 - P29 其余：`z-agent` / `z-agent-kernel` / `z-agent-proxy` 三篇 README、`<revision>` 抬号、发 Central —— 后两件在 z-bot 的 push 授权之外，等点头。
+
+### 8.13.7 杠②（p27 族）：21→22 支整批五跑 + 三格按机制裁决，杠①③ 在新树补量（09-27 02:43:43–03:57:32，主编亲测）
+
+台账 `_doc/acceptance/p27/LEDGER.tsv`（`0b47cc8`）：`# counts RED-OK=21 SURVIVED=1`，
+唯一 `SURVIVED` 仍是 **M13**（`p27/EVIDENCE.md` §11.4 判过的等价变异位：APFS 同卷 `Files.move` 8/8 不抛，
+拒绝为它写"源码文本守卫"那种假牙）。逐跑日志与逐支 surefire 原文见 `p27/EVIDENCE.md` §13。
+
+- **三格裁决全部以机制落，不以读数落**（五跑：r1 `ce2fbc7` 02:43:43→02:46:22 / r2 02:57:00 / r3 03:00:33 / r4 `5e6a014` 03:09:12 / r5 03:12:36，起止逐条见 `p27/EVIDENCE.md` §13.1）：
+  - **M03** 的 `ackWithoutClaimFailsLoudly` 三跑没红 ⇒ 它走**服务层**
+    （`DelegationDelivery.complete():131` 在查迁移表之前就 `if (PENDING) throw`），表格多一条边改不动它。
+    处理不是删名，而是**新立 M22 摘掉那句预检**把它接住（r4/r5 `RED-OK 预期内`，红名
+    `DelegationDeliveryTest.ackWithoutClaimFailsLoudly:96`）⇒ M03 含表格层、M22 含服务层，差集即分层有牙的证据。
+  - **M10** 的 `asyncSceneExists…` 没红 ⇒ 该方法不调 `adoptOrphans`。反向还查出一条更值钱的：
+    `unfinishedAsyncSceneIsAdoptableAsOrphan` 调了、也断言了"DONE 不许被认领"，却**照样不红**，
+    因为它的 DONE 现场是刚写的，**年龄闸独立**挡住了 ⇒ 两道闸护同一行时谁都测不到对方被摘。
+    终态闸今天只剩一支确定性捕手（`dlg-done` 是 10× 超期），且红的方式是**抛**
+    `IllegalTransition … DONE --delegate.orphan_adopted--> ?`，不是数数比不中
+    ⇒ 原 `why` 那句"DONE 被改判 UNKNOWN"订正为"整轮回收中断"。
+  - **M17** 我上一版写的"连发用例**结构上看不到** QUEUED 那半边"**被实测否证并撤回**：
+    r1/r2 红了，失败点 `DelegateManagerLedgerTest.java:257 前 3 条都该收下 expected:<3> but was:<4>`（真阳性），
+    r3/r4/r5 又绿 ⇒ 五跑 2 红 3 绿 = 捕手但不承重。归因到负载也被同一批数据否证
+    （红的 r2 是 load 9.51，绿的 r3 是 20.36、绿的 r5 是 26.58，方向相反）⇒ 记 `allow_extra`，
+    载荷留在无时序的 `flyingPredicateCountsQueuedRowsButNotTerminals`（五跑五红）。
+    两处教错人的**源码注释**（`DelegateManager.isFlying()` javadoc + 该用例注释）随 `5e6a014` 一起订正，diff 全是注释行。
+- **改表之前先把 r2/r3 测完**：中途改 expect 再去量，读出来的"预期内"就不是证据（这一条是我自己定的规矩，不是代理的）。
+- **新表两跑（r4/r5）逐列一致**，唯一分歧是 M05 那支 `q3a_…` 连带红 r4 有、r5 无（五跑出现 4 次）⇒ 它进 `allow_extra` 有据。
+  整跑墙钟 3 m 24 s / 2 m 56 s，"整批要几十分钟"是废案期的旧数，已改。
+- **我这把比对尺踩了一次空跑**（诚实记）：第一版按 `len(fields)>=11` 过滤一张 **10 列**的表 ⇒ 22 行全被筛掉，
+  却打印"不同的格子数: 0"，读起来恰好像"两轮逐字相同"。修法=列数从表头现取，并把行数当分母打出来。
+- **杠① 在新树补量成立**（`0b47cc8`，`dirty_tracked` 起止 0）：`1162 / F=E=S=0 / files=109 / socket_hits=0` ×3，
+  逐字原文见 `p27/EVIDENCE.md` §13.6；`src_md5_delegate` 由 `fd1652b3` → `5abe755b` 正是那两句 javadoc。
+  杠④ 本节全部采样点 `8/2dadaed0/690ddbc0`，真 key 只量长度（125）。
+- **杠③ 在当前树补量成立**（`0b47cc8` 上 03:21:26–03:57:32 串行 ×3 真进程整跑，三轮都是 `checks=32 pass=32 fail=0`、`llm_hits=1` 只打自写假 LLM、
+  每轮 `SERVED` 三方同字节 `53093B/bb3ff2e6`、`bar4` 每轮首尾各采一次且全等）：原文与两处 `CROSS` 尺的读数见 `p28/EVIDENCE.md` P28-lead-10。
+  顺带修掉的那把会骗人的跨轮尺（`CROSS|e2e_verdict` 把每轮必然漂移的 `out=…/rN` 头行算进比对 ⇒ 三轮相同也数出 4；
+  改为只取 `checks=` 判决行 + 阳性对照 `OLD|count=4 / FIXED|count=1 / CTRL|expect=2 got=2`，
+  三条读数原文在 `~/.cache/zbot-integrate/cross_gauge_recheck_270207.log`，`bash cross_gauge_recheck.sh <批目录>` 可复算）也记在同一节——
+  这是 `P28-lead-7` 那个病的第二次现形，同族的尺该合并而不是各写一套剥法。
