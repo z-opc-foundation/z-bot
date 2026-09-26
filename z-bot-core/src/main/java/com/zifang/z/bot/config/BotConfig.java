@@ -781,6 +781,87 @@ public final class BotConfig {
         }
     }
 
+    // ===== 上下文压缩（P14）：只增键，不重排上面任何一行 =====
+
+    /** {@code agent.context.compress}：总开关，false = 完全不压（默认开）。 */
+    public boolean isContextCompressEnabled() {
+        return boolOf("agent.context.compress", true);
+    }
+
+    /**
+     * {@code agent.context.window}：模型上下文窗口。未配置时退回 {@code agent.token.budget}
+     * （旧行为：把预算当窗口），配了就以配的是准。
+     */
+    public long getContextWindow() {
+        return longOf("agent.context.window", getTokenBudget());
+    }
+
+    /** {@code agent.context.max.output.tokens}：从窗口里扣掉、留给回答的输出额度。默认 {@code agent.max.tokens}。 */
+    public int getContextMaxOutputTokens() {
+        return intOf("agent.context.max.output.tokens", getMaxTokens());
+    }
+
+    /**
+     * {@code agent.context.compress.pct}：触发比例 —— 观测上下文 ≥
+     * {@code (窗口 − 输出额度) × pct} 才压。默认 0.50（hermes 量级；旧实现是写死的 0.85「占满才压」）。
+     */
+    public double getContextCompressPct() {
+        double pct = doubleOf("agent.context.compress.pct", 0.50D);
+        return pct <= 0D || pct > 1D ? 0.50D : pct;
+    }
+
+    /** {@code agent.context.compress.keep.recent}：压缩时原样保留的最近消息条数。 */
+    public int getContextCompressKeepRecent() {
+        return intOf("agent.context.compress.keep.recent", 8);
+    }
+
+    /** {@code agent.context.compress.cooldown.ms}：压缩失败后的冷却时长（入库，跨进程重启仍生效）。 */
+    public long getContextCompressCooldownMillis() {
+        return longOf("agent.context.compress.cooldown.ms", 120_000L);
+    }
+
+    /** {@code agent.context.compress.max.ineffective}：连续无效压缩几次之后停手（防抖）。 */
+    public int getContextCompressMaxIneffective() {
+        return intOf("agent.context.compress.max.ineffective", 2);
+    }
+
+    /** {@code agent.context.compress.lock.ttl.ms}：{@code compression_locks} 里这把锁的 TTL。 */
+    public long getContextCompressLockTtlMillis() {
+        return longOf("agent.context.compress.lock.ttl.ms", 90_000L);
+    }
+
+    /**
+     * 本棒新增的压缩键清单（名字 + 当前生效值）。
+     *
+     * <p>产品里目前没有 {@code /config} 斜杠命令（{@code slash/SlashRegistry} 未注册），
+     * 所以这张表就是「配置位能被列出来」这一验收的落点：{@code /compress preview} 直接打它。</p>
+     */
+    public java.util.List<String> contextCompressConfigLines() {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        out.add("agent.context.compress=" + isContextCompressEnabled());
+        out.add("agent.context.window=" + getContextWindow());
+        out.add("agent.context.max.output.tokens=" + getContextMaxOutputTokens());
+        out.add("agent.context.compress.pct=" + getContextCompressPct());
+        out.add("agent.context.compress.keep.recent=" + getContextCompressKeepRecent());
+        out.add("agent.context.compress.cooldown.ms=" + getContextCompressCooldownMillis());
+        out.add("agent.context.compress.max.ineffective=" + getContextCompressMaxIneffective());
+        out.add("agent.context.compress.lock.ttl.ms=" + getContextCompressLockTtlMillis());
+        return out;
+    }
+
+    private double doubleOf(String key, double current) {
+        String raw = trim(rawProps.getProperty(key));
+        if (raw.isEmpty()) {
+            return current;
+        }
+        try {
+            return Double.parseDouble(raw);
+        } catch (NumberFormatException e) {
+            System.err.println("[BotConfig] " + key + "=" + raw + " 不是小数，沿用 " + current);
+            return current;
+        }
+    }
+
     /**
      * 单个 LLM provider 的连接信息。type 决定走哪个 kernel provider。
      */
