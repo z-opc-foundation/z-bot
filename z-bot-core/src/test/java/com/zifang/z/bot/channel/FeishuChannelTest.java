@@ -150,18 +150,28 @@ public class FeishuChannelTest {
     }
 
     @Test
-    public void getUrlVerificationReturnsEchostr() throws Exception {
-        // 形状存疑（三份权威参照里都没有 GET echostr，那是企微的回调校验形状）⇒ 见 roadmap D-P30-1，
-        // 这一支只钉"现在的行为"，不为它辩护。
-        HttpURLConnection con = (HttpURLConnection)
-                new URL("http://127.0.0.1:" + port + "/feishu/event?echostr=hello-feishu").openConnection();
+    public void getEchostrIsNotAnsweredOnTheFeishuFace() throws Exception {
+        // D-P30-1 的裁定：`echostr` 是**企微**的回调校验形状，不是飞书的 —— `lark_oapi` 1.5.3 全包
+        // `echostr` 0 命中、hermes `plugins/platforms/feishu/` 0 命中，而她的 wecom 适配器有 6 处
+        // （`callback_adapter.py:274-278`，且那份是解密后才回显）。挂在飞书面上就是一条验签/token 门
+        // **之前**的查询参数原文回显 ⇒ 拆掉，GET 一律 405。
+        HttpURLConnection con = (HttpURLConnection) new URL("http://127.0.0.1:" + port
+                + "/feishu/event?echostr=attacker-controlled-probe").openConnection();
         con.setRequestMethod("GET");
         int rc = con.getResponseCode();
-        assertEquals(200, rc);
-        try (InputStream is = con.getInputStream()) {
-            String body = readAll(is);
-            assertEquals("hello-feishu", body);
-        }
+        assertEquals("GET 必须 405（这一面只有 POST）", 405, rc);
+        String body = readAll(con.getErrorStream() == null ? con.getInputStream() : con.getErrorStream());
+        assertFalse("门外的原文回显不许留下 attacker 那半轴: " + body,
+                body.contains("attacker-controlled-probe"));
+
+        // 阳性对照：同一路径同一端口的 POST url_verification（签名对、token 对）必须照旧 200 + 回显
+        // challenge。缺了这一臂，上面的"405 且不回显"可以是"整个面被打死了"读出来的。
+        String chal = "{\"type\":\"url_verification\",\"token\":\"" + VERIFY_TOKEN
+                + "\",\"challenge\":\"post-arm-works\"}";
+        String[] resp = postEvent(chal, TS, "n-get-echostr-control", Sign.CORRECT);
+        assertEquals("同一路径的 POST 仍然活着: " + resp[1], "200", resp[0]);
+        assertEquals("challenge 仍按 P30 的顺序（过 token 门才回显）给出",
+                "{\"challenge\":\"post-arm-works\"}", resp[1]);
     }
 
     @Test
@@ -178,6 +188,34 @@ public class FeishuChannelTest {
         assertEquals("ou_1", e.senderId);
         assertEquals("你好", e.text);
         assertTrue("reply 应是 echo 形式，实际: " + e.reply, e.reply.contains("你好"));
+    }
+
+    @Test
+    public void flatV1ToleranceStopsAtTheKeysAlreadyReadThere() throws Exception {
+        // D-P30-2 的边界：`lark_oapi` 1.5.3 的类型化模型 `P2ImMessageReceiveV1Data` 只声明
+        // {sender, message}（`_types` 实测就这两项），hermes 的分发只读 `payload["header"]["event_type"]`
+        // （`adapter.py:3585-3596`）、零平铺分支 ⇒ 这里的平铺容错是**没有出处的多认一手**，
+        // 它只准认代码里已经读过的那几个键。曾经有一条主张说"v1 正文埋在 `event.content`"，
+        // 三处参照里一个字都找不到 ⇒ 不给无出处的键开读取点，并且由这一支钉住这条边界
+        // （否则"没加"与"加了但没人管"在测试里长得一模一样）。
+        int before = bus.history().size();
+        String noSource = "{\"token\":\"" + VERIFY_TOKEN + "\",\"event\":"
+                + "{\"chat_id\":\"oc_content\",\"chat_type\":\"group\",\"content\":\"from-content\"}}";
+        String[] resp = postEvent(noSource, TS, "n-12", Sign.CORRECT);
+        assertEquals("这一面是活的（否则下面那句'没投递'可以是整面被打死读出来的）: " + resp[1],
+                "200", resp[0]);
+
+        // 阳性对照：同一形状、同一个签名，只把键换成有出处的那一个 ⇒ 必须真投递。
+        String[] ctrl = postEvent("{\"token\":\"" + VERIFY_TOKEN + "\",\"event\":"
+                + "{\"chat_id\":\"oc_text\",\"chat_type\":\"group\",\"text\":\"from-text\"}}",
+                TS, "n-13", Sign.CORRECT);
+        assertEquals("对照请求本身要过门: " + ctrl[1], "200", ctrl[0]);
+        waitFor(() -> bus.history().size() > before, 2000);
+        assertEquals("`event.content` 不是读取点：无出处那一条不许产出投递",
+                before + 1, bus.history().size());
+        ChannelBus.Entry got = bus.history().get(bus.history().size() - 1);
+        assertEquals("from-text", got.text);
+        assertEquals("group:oc_text", got.conversationId);
     }
 
     @Test

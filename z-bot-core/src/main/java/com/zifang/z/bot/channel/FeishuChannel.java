@@ -44,8 +44,17 @@ import javax.crypto.spec.SecretKeySpec;
  * <p>入站这一面（{@code POST /feishu/event}）按顺序过四道：
  * 原始 body 字节的 SHA-256 验签（配了 {@code encrypt-key} 才关，缺头即 401）⇒
  * {@code {"encrypt": …}} 解密成事件 JSON ⇒ verification-token 比对（v2 在 {@code header.token}，
- * v1 在顶层）⇒ 事件投递（v1 平铺字段与 v2 的 {@code sender}/{@code message.content} 都认）。
- * {@code url_verification} 只在过了 token 门之后回显 challenge。</p>
+ * v1 在顶层）⇒ 事件投递（v1 平铺字段与 v2 的 {@code sender}/{@code message.content} 都认）。</p>
+ *
+ * <p>{@code url_verification} 只在过了 token 门之后回显 challenge。</p>
+ *
+ * <p><b>GET 不在这张合同里</b>（D-P30-1，09-27 裁定并拆掉旧的 {@code GET …?echostr=} 回显）：
+ * 查询参数原样回显是<b>企微</b>的回调校验形状，两份读得到的权威里飞书面都没有它 ——
+ * {@code lark_oapi} 1.5.3 全包 {@code echostr} <b>0</b> 命中、hermes {@code plugins/platforms/feishu/}
+ * <b>0</b> 命中（她的 URL 校验是 POST + token 门后回显 challenge，{@code adapter.py:3552-3569}），
+ * 而她的 wecom 适配器有 6 处（{@code plugins/platforms/wecom/callback_adapter.py:274-278}
+ * 拿 {@code verify_url(msg_signature, timestamp, nonce, echostr)} 解出明文才回显）。
+ * 这跟 P18 那次"SHA-1 属于企微不属于飞书"是同一形状的近亲串台 ⇒ 现在 GET/PUT/DELETE 一律 405。</p>
  *
  * <p>配置三选一（构造时传 {@code null} 则该通道不启动）：</p>
  * <ul>
@@ -383,19 +392,9 @@ public final class FeishuChannel implements Channel {
 
     private void handleEvent(HttpExchange ex) throws IOException {
         try {
-            if ("GET".equalsIgnoreCase(ex.getRequestMethod())) {
-                // 飞书 URL 校验：echostr 原样返回
-                Map<String, String> q = queryParams(ex);
-                String echostr = q.get("echostr");
-                if (echostr != null) {
-                    ex.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
-                    ex.sendResponseHeaders(200, 0);
-                    ex.getResponseBody().write(echostr.getBytes(StandardCharsets.UTF_8));
-                } else {
-                    text(ex, 400, "missing echostr");
-                }
-                return;
-            }
+            // POST 是这一面唯一的入站形状。GET ?echostr= 那半轴 09-27 拆掉了（D-P30-1）：
+            // 它是**企微**的回调校验形状，挂在飞书面上等于在验签/token 门之前原文回显查询参数，
+            // 出处对照见类 javadoc。
             if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
                 text(ex, 405, "method not allowed");
                 return;
@@ -448,7 +447,13 @@ public final class FeishuChannel implements Channel {
             if (!evt.isEmpty()) {
                 // 两种形状都得认，否则"解得开却投不出"：
                 //   v2（im.message.receive_v1）sender/message 各一层对象，正文埋在 message.content 的字符串化 JSON 里；
-                //   v1 把这些字段直接平铺在 event 上。
+                //   v1 把这些字段直接平铺在 event 上 —— **这条是 defensive tolerance，没有权威出处**
+                //   （D-P30-2 裁定，09-27：`lark_oapi` 的类型化模型 `P2ImMessageReceiveV1Data`
+                //   只声明 `sender` + `message`，hermes 的 webhook 分发只读 `payload["header"]["event_type"]`
+                //   （`adapter.py:3585-3596`）、零平铺分支）。所以这里**只多认、不另加字段**：曾经记过一条
+                //   "v1 正文埋在 event.content"，那句同样查不到出处 ⇒ 不照它加读取点。
+                //   参照 hermes `adapter.py:459`（"receive_v1 docs say {user, bot}; accept 'app' defensively"）
+                //   的做法：容错要写明它是容错。
                 String sender = firstNonEmpty(
                         nestedStr(evt.get("sender"), "sender_id", "open_id"),
                         nestedStr(evt.get("sender"), "sender_id", "user_id"),
@@ -646,22 +651,6 @@ public final class FeishuChannel implements Channel {
         } catch (IOException e) {
             return Collections.<String, Object>emptyMap();
         }
-    }
-
-    private static Map<String, String> queryParams(HttpExchange ex) {
-        Map<String, String> out = new HashMap<String, String>();
-        String query = ex.getRequestURI().getRawQuery();
-        if (query == null) {
-            return out;
-        }
-        for (String pair : query.split("&")) {
-            int eq = pair.indexOf('=');
-            if (eq > 0) {
-                out.put(pair.substring(0, eq), java.net.URLDecoder.decode(pair.substring(eq + 1),
-                        StandardCharsets.UTF_8));
-            }
-        }
-        return out;
     }
 
     private static String str(Object v) {
