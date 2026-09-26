@@ -86,6 +86,11 @@ public final class FeishuChannel implements Channel {
     public static final String DEFAULT_API_BASE = "https://open.feishu.cn/open-apis";
     public static final String TOKEN_PATH = "/auth/v3/tenant_access_token/internal";
     public static final String MESSAGE_PATH = "/im/v1/messages";
+
+    /** 事件订阅签名三件套（飞书侧的 HTTP 头名）；配了 {@code encrypt-key} 就必带。 */
+    public static final String HEADER_SIGNATURE = "X-Lark-Signature";
+    public static final String HEADER_REQUEST_TIMESTAMP = "X-Lark-Request-Timestamp";
+    public static final String HEADER_REQUEST_NONCE = "X-Lark-Request-Nonce";
     public static final String DEFAULT_RECEIVE_ID_TYPE = "open_id";
 
     /** 距过期不足这么多毫秒就先续期（避免卡在边界上用到废 token）。 */
@@ -388,7 +393,17 @@ public final class FeishuChannel implements Channel {
                 return;
             }
             String body = readBody(ex);
-            // 简化 — 真接入时按 encryptKey 解密
+            // 飞书事件订阅的签名算在**原始 body** 上 ⇒ 必须赶在解析之前验；
+            // 配了 encrypt-key 却缺任一头也拒（fail-closed，不能让攻击者靠"不带头"绕过）。
+            if (encryptKey != null && !encryptKey.isEmpty()) {
+                String ts = header(ex, HEADER_REQUEST_TIMESTAMP);
+                String nonce = header(ex, HEADER_REQUEST_NONCE);
+                String signature = header(ex, HEADER_SIGNATURE);
+                if (!verifySignature(ts, nonce, body, signature)) {
+                    text(ex, 401, "{\"error\":\"signature mismatch\"}");
+                    return;
+                }
+            }
             Map<String, Object> parsed = parseObject(body);
             String token = str(parsed.get("token"));
             if (verificationToken != null && !verificationToken.isEmpty()
@@ -621,6 +636,10 @@ public final class FeishuChannel implements Channel {
 
     private static String str(Object v) {
         return v == null ? "" : v.toString();
+    }
+
+    private static String header(HttpExchange ex, String name) {
+        return ex.getRequestHeaders().getFirst(name);
     }
 
     /**

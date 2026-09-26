@@ -215,9 +215,20 @@ MUTANTS = [
     ("D10 verifySignature 恒真（无错签名负例可杀）", "D-飞书协议", "fei",
      "            return hex.toString().equals(signature);",
      "            return hex.toString().equals(hex.toString());", 1,
-     ["FeishuChannelTest#signatureHelperAcceptsCorrectDigest"],
-     "本期工单点名的『没有兑现路径的能力』候选：verifySignature 在 main 里没有任何调用方，"
-     "且没有任何一支测试断言『错签名必须被拒』 ⇒ 预期判绿，如实记 GREEN-BUT-MUTATED"),
+     ["FeishuChannelTest#signatureHelperRejectsWrongDigest",
+      "FeishuChannelTest#tamperedSignatureIsRejectedWith401AndNeverReachesBus",
+      "FeishuChannelTest#missingSignatureHeadersAreRejectedWhenEncryptKeyConfigured"],
+     "p18b 那两跑这一支是 GREEN-BUT-MUTATED（LEDGER D10 行原样记着）：当时 verifySignature 在 main 里"
+     "零调用方、也没有一支断言『错签名必须被拒』。p18c 把它接进 handleEvent 并补了负例 ⇒ 期望集"
+     "随代码变更**重声明**（不是事后凑）：算法层 1 支 + 接线层 2 支，恒真实现三红。"),
+
+    ("D11 handleEvent 摘掉验签守卫（配了 key 也不验）", "D-飞书协议", "fei",
+     "            if (encryptKey != null && !encryptKey.isEmpty()) {",
+     "            if (false) {", 1,
+     ["FeishuChannelTest#tamperedSignatureIsRejectedWith401AndNeverReachesBus",
+      "FeishuChannelTest#missingSignatureHeadersAreRejectedWhenEncryptKeyConfigured"],
+     "这一支打的是『接线』而不是算法：签名函数照旧正确但没人调 ⇒ 只有 HTTP 层负例能红，"
+     "helper 层那几支结构上看不见（D10 与 D11 因此互补，缺一层就是空档）。"),
 
     # ===== E 族：钉钉 webhook 签名 =====
     ("E1 签名原文丢掉换行", "E-钉钉签名", "din",

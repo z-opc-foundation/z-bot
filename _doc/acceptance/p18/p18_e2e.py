@@ -103,8 +103,9 @@ def http_get(url, timeout=15):
         return e.code, e.read().decode("utf-8", "replace")
 
 
-def http_post(url, obj, headers=None, timeout=25):
-    body = json.dumps(obj).encode("utf-8")
+def http_post(url, obj, headers=None, timeout=25, raw_body=None):
+    # raw_body：签名算的是上线的那串字节，所以序列化必须只做一次
+    body = raw_body.encode("utf-8") if raw_body is not None else json.dumps(obj).encode("utf-8")
     h = {"Content-Type": "application/json"}
     h.update(headers or {})
     req = urllib.request.Request(url, data=body, headers=h)
@@ -448,7 +449,8 @@ def manifest_body(fake_base, feishu_port, ding_port, feishu_creds=True, with_din
     if feishu_creds:
         lines += ["channel.feishu.config.app-id=%s" % FAKE_APP_ID,
                   "channel.feishu.config.app-secret=%s" % FAKE_APP_SECRET,
-                  "channel.feishu.config.verification-token=%s" % FAKE_VERIFY_TOKEN]
+                  "channel.feishu.config.verification-token=%s" % FAKE_VERIFY_TOKEN,
+                  "channel.feishu.config.encrypt-key=%s" % FAKE_ENCRYPT_KEY]
     if with_ding:
         lines += ["channel.dingtalk.kind=dingtalk",
                   "channel.dingtalk.enabled=true",
@@ -492,12 +494,30 @@ def read_ledger(profile, tag):
     return rows, "rows=%d" % len(rows)
 
 
-def feishu_inbound(port, conv, text, token=FAKE_VERIFY_TOKEN):
+_NONCE = [0]
+
+
+def feishu_inbound(port, conv, text, token=FAKE_VERIFY_TOKEN, sign=True, key=FAKE_ENCRYPT_KEY):
+    """按飞书事件订阅口径入站：signature = sha1(timestamp + nonce + encrypt_key + 原始 body)。
+
+    `key` 传别的值就是**故意签错**（A21 的猎物）；`sign=False` 是一个头都不发。
+    profile 里配了 `channel.feishu.config.encrypt-key` ⇒ 不签就进不来。
+    """
     chat_type, chat_id = conv.split(":", 1)
-    return http_post("http://127.0.0.1:%d/feishu/event" % port,
-                     {"token": token,
-                      "event": {"sender_id": "ou_sender_1", "text": text,
-                                "chat_id": chat_id, "chat_type": chat_type}})
+    obj = {"token": token,
+           "event": {"sender_id": "ou_sender_1", "text": text,
+                     "chat_id": chat_id, "chat_type": chat_type}}
+    raw = json.dumps(obj)
+    headers = {}
+    if sign:
+        _NONCE[0] += 1
+        ts = str(int(time.time()))
+        nonce = "e2e-n%d-%d" % (os.getpid(), _NONCE[0])
+        headers = {"X-Lark-Request-Timestamp": ts, "X-Lark-Request-Nonce": nonce,
+                   "X-Lark-Signature": hashlib.sha1(
+                       (ts + nonce + key + raw).encode("utf-8")).hexdigest()}
+    return http_post("http://127.0.0.1:%d/feishu/event" % port, obj,
+                     headers=headers, raw_body=raw)
 
 
 def ding_inbound(port, conv, text):
@@ -636,6 +656,21 @@ def section_a(base_url, fake_base):
                   "A17 sign 独立重算比对（HMAC-SHA256(secret, ts+\"\\n\"+secret) 的 base64，URL 解码后）",
                   "A18 钉钉体形状：msgtype=text 且 text.content 就是回复串"):
             check(n, False, "没有钉钉请求可断")
+    # A21/A22：入站签名门的跨进程实据（单测层已经有 D10/D11 两条，这一层证的是"真 JVM + manifest 配的 key"）
+    before = len(im_records())
+    st, body = feishu_inbound(fp, "p2p:oc_bad", "签名是拿别人的 key 算的")
+    rec401 = im_records()
+    check("A21 配了 encrypt-key 后，签错的入站被拒 401 且不产生任何出站",
+          st == 401 and "signature mismatch" in body and len(rec401) == before,
+          "status=%d body=%s 假端点新增请求=%d（应为 0）" % (st, body[:60], len(rec401) - before))
+    st, body = feishu_inbound(fp, "p2p:oc_nosig", "一个签名头都不带", sign=False)
+    check("A21b 缺签名头同样拒（fail-closed：不许靠『不带头』绕过去）",
+          st == 401 and "signature mismatch" in body, "status=%d body=%s" % (st, body[:60]))
+    st, body = feishu_inbound(fp, "p2p:oc_ok", "签名正确的这条要进得来")
+    grew = wait_until(lambda: len(im_records("/im/v1/messages")) >= 3, 30)
+    check("A22 阳性对照：签名正确就真进得来（不多这一步，A21 只是空跑）",
+          st == 200 and "true" in body and grew,
+          "status=%d body=%s send 累计=%d" % (st, body[:40], len(im_records("/im/v1/messages"))))
     conns = jvm_connections(gw.pid())
     outside = [l for l in conns if "127.0.0.1" not in l and "[::1]" not in l]
     recs = im_records()
