@@ -1,8 +1,10 @@
 package com.zifang.z.bot.tool;
 
+import com.zifang.z.agent.kernel.agent.InterruptFlag;
 import com.zifang.z.agent.kernel.tool.Tool;
 import com.zifang.z.agent.kernel.tool.ToolResult;
 import com.zifang.z.agent.kernel.tool.ToolSchemaBuilder;
+import com.zifang.z.bot.agent.InterruptScope;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -19,6 +21,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>沙箱根目录 = {@code <profile>/workspace}（{@code --sandbox} 可覆盖），写/读/exec 都被约束在里面；
  * search 是只读遍历，允许指定任意目录（与老 bot 一致）。</p>
+ *
+ * <p>P12 起这些工具是<b>可断的</b>：每次进入工具与每读到一行输出都过一次
+ * {@link InterruptScope#checkpoint()}，子进程在飞期间另有一条看门狗线程盯着同一面旗子
+ * （{@code sleep 45} 那种「一行都不吐」的命令，只在循环里查旗子是查不到的）。
+ * 旗子按执行线程定向，所以并发会话之间不会互相打断。</p>
  */
 public final class BuiltinTools {
 
@@ -154,6 +161,8 @@ public final class BuiltinTools {
                         return ToolResult.error("参数错误：path 不能为空");
                     }
                     try {
+                        // 文件读检查点：入口一次 + 每读到一行一次（大文件在循环里断）
+                        InterruptScope.checkpoint();
                         File target = sandbox.resolve(path);
                         if (!target.exists()) {
                             return ToolResult.error("文件不存在：「" + path + "」");
@@ -166,6 +175,7 @@ public final class BuiltinTools {
                             String line;
                             int lines = 0;
                             while ((line = br.readLine()) != null && lines < READ_MAX_LINES) {
+                                InterruptScope.checkpoint();
                                 sb.append(line).append('\n');
                                 lines++;
                             }
@@ -173,6 +183,8 @@ public final class BuiltinTools {
                         String content = sb.toString();
                         return text(content.length() > READ_MAX_CHARS
                                 ? content.substring(0, READ_MAX_CHARS) + "\n...(已截断)" : content);
+                    } catch (InterruptFlag.AgentInterruptedException e) {
+                        throw e;
                     } catch (Exception e) {
                         return ToolResult.error("读取失败：" + e.getMessage());
                     }
@@ -193,6 +205,8 @@ public final class BuiltinTools {
                         return ToolResult.error("参数错误：path 不能为空");
                     }
                     try {
+                        // 文件写检查点：真落盘之前问一次， stop 之后不再改沙箱
+                        InterruptScope.checkpoint();
                         File target = sandbox.resolve(path);
                         target.getParentFile().mkdirs();
                         // 某些模型会把换行回传成字面量 \n
@@ -201,6 +215,8 @@ public final class BuiltinTools {
                             fw.write(actual);
                         }
                         return text("写入成功：「" + target.getCanonicalPath() + "」（" + actual.length() + " bytes）");
+                    } catch (InterruptFlag.AgentInterruptedException e) {
+                        throw e;
                     } catch (Exception e) {
                         return ToolResult.error("写入失败：" + e.getMessage());
                     }
@@ -303,6 +319,9 @@ public final class BuiltinTools {
                     try {
                         ProcResult r = bash(sandbox, command, EXEC_MAX_LINES, EXEC_MAX_CHARS);
                         return text("exit=" + r.exitCode + "\n" + r.output);
+                    } catch (InterruptFlag.AgentInterruptedException e) {
+                        // 中止不是「执行失败」：揉成 error 回灌给模型，它会换个命令再试一次
+                        throw e;
                     } catch (Exception e) {
                         return ToolResult.error("执行失败：" + e.getMessage());
                     }
@@ -368,8 +387,12 @@ public final class BuiltinTools {
                         return ToolResult.error("安全错误：" + ExecGuard.hardlineMessage("mvn " + goal));
                     }
                     try {
+                        // mvn_build 检查点：起 JDK 进程之前先问一次（bash 里还有逐行与看门狗两道）
+                        InterruptScope.checkpoint();
                         ProcResult r = bash(sandbox, "mvn " + goal + " 2>&1 | tail -50", 0, 2000);
                         return text("exit=" + r.exitCode + "\n" + r.output);
+                    } catch (InterruptFlag.AgentInterruptedException e) {
+                        throw e;
                     } catch (Exception e) {
                         return ToolResult.error("编译失败：" + e.getMessage());
                     }
@@ -422,34 +445,48 @@ public final class BuiltinTools {
     /**
      * 在沙箱里跑一条 shell 命令。
      *
+     * <p>可断的三层：入口检查点（已经按了停止就不起子进程）、读输出循环里的逐行检查点
+     * （出字的长命令）、{@link InterruptScope#watch} 登记的看门狗（几十秒不吐一行的
+     * {@code sleep}/{@code mvn} —— 那种命令上「循环内检查点」根本执行不到，只能靠看门狗）。</p>
+     *
      * @param maxLines 0 表示不限行数；超限部分直接丢弃
      * @param maxChars 0 表示不限长度
      */
     private static ProcResult bash(Sandbox cwd, String script, int maxLines, int maxChars) throws Exception {
+        InterruptScope.checkpoint();
         ProcessBuilder pb = new ProcessBuilder("bash", "-c", script);
         if (cwd != null) {
             pb.directory(cwd.root());
         }
         pb.redirectErrorStream(true);
         Process p = pb.start();
-        StringBuilder out = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-            String line;
-            int lines = 0;
-            while ((line = br.readLine()) != null) {
-                if (maxLines > 0 && lines >= maxLines) {
-                    break;
+        InterruptScope.watch(p);
+        try {
+            StringBuilder out = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
+                String line;
+                int lines = 0;
+                while ((line = br.readLine()) != null) {
+                    InterruptScope.checkpoint();
+                    if (maxLines > 0 && lines >= maxLines) {
+                        break;
+                    }
+                    out.append(line).append('\n');
+                    lines++;
                 }
-                out.append(line).append('\n');
-                lines++;
             }
+            int exit = p.waitFor();
+            // 看门狗动过手 ⇒ 这条命令是被中止的，不是它自己跑完了：
+            // 半截输出绝不能当正常结果回给模型
+            InterruptScope.checkpoint();
+            String result = out.toString();
+            if (maxChars > 0 && result.length() > maxChars) {
+                result = result.substring(0, maxChars) + "\n...(已截断)";
+            }
+            return new ProcResult(exit, result);
+        } finally {
+            InterruptScope.unwatch(p);
         }
-        int exit = p.waitFor();
-        String result = out.toString();
-        if (maxChars > 0 && result.length() > maxChars) {
-            result = result.substring(0, maxChars) + "\n...(已截断)";
-        }
-        return new ProcResult(exit, result);
     }
 
     private static ToolResult text(String content) {

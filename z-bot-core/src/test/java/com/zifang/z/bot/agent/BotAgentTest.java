@@ -329,7 +329,41 @@ public class BotAgentTest {
         assertEquals(0, agent.getMemory().size());
         agent.switchSession(oldSession);
         assertEquals(2, agent.getMemory().size());
-        assertEquals("hello", agent.getMemory().getMessages().get(0).getContent());
+        // P12e：运行时上下文块<b>只在建 request 时注入</b>，记忆/transcript 只存用户原话。
+        // 四条腿都要钉住（少一条就退化成「上下文被整个摘掉也能过」）：
+        //  ① 落盘再读回的 user 行**逐字**等于用户原话，抬头与时钟一次都不许出现；
+        //  ② 但上下文必须真到得了模型：实际发出的那一行 user 是「块 + 分隔符 + 原话」，
+        //     且按协议分隔符剥头之后**逐字**相等（不是 contains）；
+        //  ③④ 这块东西不许出现在 system prompt 的任何位置（P12 缓存不变量的另一半）。
+        Msg restored = agent.getMemory().getMessages().get(0);
+        assertEquals(MessageRole.USER, restored.getRole());
+        String stored = restored.getContent();
+        assertEquals("P12e：记忆与 transcript 只许存用户原话，实得:\n" + stored, "hello", stored);
+        assertFalse("落盘的 user 行不许带运行时上下文抬头:\n" + stored,
+                stored.contains(BotAgent.VOLATILE_CONTEXT_HEADER));
+        assertFalse("落盘的 user 行不许带时钟:\n" + stored, stored.contains("当前时间"));
+
+        List<Msg> sentMessages = llm.requests.get(0).getMessages();
+        String sent = null;
+        for (Msg m : sentMessages) {
+            if (m.getRole() == MessageRole.USER) {
+                sent = m.getContent();
+            }
+        }
+        assertTrue("发给模型的请求里没有 user 行 ⇒ 上下文根本没注入", sent != null);
+        int sep = sent.indexOf(BotAgent.VOLATILE_CONTEXT_FOOTER);
+        assertTrue("请求里的 user 行应以运行时上下文头开头，实得:\n" + sent,
+                sent.startsWith(BotAgent.VOLATILE_CONTEXT_HEADER));
+        assertTrue("请求里的 user 行找不到上下文头与原文的分隔符，实得:\n" + sent, sep >= 0);
+        assertEquals("剥掉运行时上下文头之后，用户原文必须逐字相等",
+                "hello", sent.substring(sep + BotAgent.VOLATILE_CONTEXT_FOOTER.length()));
+
+        String system = agent.getMemory().getSystemPrompt();
+        assertFalse("运行时上下文抬头不许进 system prompt:\n" + system,
+                system.contains(BotAgent.VOLATILE_CONTEXT_HEADER));
+        assertFalse("运行时上下文（时钟）不许进 system prompt:\n" + system,
+                system.contains("当前时间"));
+        assertFalse("用户原文不许被搬进 system prompt:\n" + system, system.contains("hello"));
         assertEquals(oldSession, agent.currentSessionId());
     }
 

@@ -172,7 +172,19 @@ public class AgentCoreP1Test {
         });
 
         assertEquals("收到", reply);
-        assertTrue(containsUserText(llm.requests.get(1), "[User steer]: 改用中文"));
+        // P12 起 steer 是「追加到最后一条 tool 结果尾部」，不再新插 user 消息：
+        // assistant 的 tool_calls 与 tool 结果必须成对，中间塞 user 消息是非法消息形状。
+        assertFalse("插话不许以 user 消息注入",
+                containsUserText(llm.requests.get(1), "[User steer]: 改用中文"));
+        Msg toolMsg = null;
+        for (Msg m : llm.requests.get(1).getMessages()) {
+            if (m.getRole() == MessageRole.TOOL) {
+                toolMsg = m;
+            }
+        }
+        assertTrue("请求里应有一条 tool 结果", toolMsg != null);
+        assertTrue(toolMsg.getContent(), toolMsg.getContent().contains("echoed:work"));
+        assertTrue(toolMsg.getContent(), toolMsg.getContent().contains("[User steer]: 改用中文"));
         boolean steerEvent = false;
         for (StreamEvent e : events) {
             steerEvent |= e.kind() == StreamEvent.Kind.STEER;

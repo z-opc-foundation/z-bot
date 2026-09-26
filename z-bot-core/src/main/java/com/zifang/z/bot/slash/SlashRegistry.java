@@ -221,7 +221,7 @@ public final class SlashRegistry {
             @Override
             public String execute(BotAgent agent, String args) {
                 return "apiCalls=" + agent.context().budget().apiCalls()
-                        + "  tokens=" + agent.context().budget().tokensUsed()
+                        + "  tokens=" + agent.budgetLedger().effectiveTokensUsed()
                         + "  messages=" + agent.getMemory().size()
                         + "  running=" + agent.isRunning();
             }
@@ -284,7 +284,9 @@ public final class SlashRegistry {
                 if (args.isEmpty()) {
                     return "格式: /queue <text>";
                 }
-                agent.steer(args);
+                // /queue 是多条按序保留（一次排好几件事），/steer 是单槽后到盖先到 —— 
+                // 两者语义不同，不能都走 steer()，否则前一条排队消息会被后一条悄悄吃掉。
+                agent.enqueue(args);
                 return "已排队，将在下次对话开头并入";
             }
         });

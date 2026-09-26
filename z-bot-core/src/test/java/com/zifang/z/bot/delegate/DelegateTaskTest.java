@@ -113,6 +113,33 @@ public class DelegateTaskTest {
 
     // ===== helpers =====
 
+    /**
+     * P12：delegate 子循环的<b>入口</b>必须有中断检查点 —— 用户已经按了停止，就不该再把一个
+     * 子代理拉起来烧父预算（拉起来之后父这边"已中止"、子那边还在跑，是串台的另一种写法）。
+     */
+    @Test
+    public void delegateRefusesToSpawnAChildAfterStopWasRequested() throws Exception {
+        BotAgent agent = builder(null).delegateDepth(0)
+                .budget(new IterationBudget(8, 40_000L))
+                .build();
+        com.zifang.z.agent.kernel.agent.InterruptFlag flag =
+                new com.zifang.z.agent.kernel.agent.InterruptFlag();
+        flag.request("用户已按停止");
+        com.zifang.z.agent.kernel.agent.InterruptFlag previous =
+                com.zifang.z.bot.agent.InterruptScope.bind(flag);
+        boolean threw = false;
+        try {
+            agent.getDelegation().delegateTool().execute(
+                    java.util.Collections.<String, Object>singletonMap("task", "不该被拉起来"));
+        } catch (com.zifang.z.agent.kernel.agent.InterruptFlag.AgentInterruptedException expected) {
+            threw = true;
+        } finally {
+            com.zifang.z.bot.agent.InterruptScope.restore(previous);
+        }
+        assertTrue("delegate 入口检查点必须抛 kernel 的中断异常（实得 threw=" + threw + "）", threw);
+        assertEquals("置位之后不该有子代理被构建出来", null, agent.getDelegation().lastChild);
+    }
+
     private BotAgent.Builder builder(BotConfig config) {
         return BotAgent.builder(config)
                 .provider(llm)
