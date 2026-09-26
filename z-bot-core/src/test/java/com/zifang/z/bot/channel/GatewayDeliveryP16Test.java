@@ -375,13 +375,16 @@ public class GatewayDeliveryP16Test {
         waitFor(() -> chan.sent.size() + chanB.sent.size() >= 8, 20000);
         assertEquals(4, chan.sent.size());
         assertEquals(4, chanB.sent.size());
+        // 尺子自证：判据必须分辨得了一条 A 尾和一条 B 尾，否则下面两个循环是空跑。
+        assertTrue("判据本身要有牙（正控）", echoesRoute("echo: 前缀\n---\nA2", "A"));
+        assertFalse("判据本身要有牙（串味时它必须说不是）", echoesRoute("echo: 前缀\n---\nB2", "A"));
         for (OutboundMessage m : chan.sent) {
             assertFalse("串行化失败的症状就是 Error: BotAgent 正在运行中 —— 实测 " + m.text,
                     m.text.startsWith("Error:"));
-            assertTrue("回显对不上说明两条会话串味了: " + m.text, m.text.startsWith("echo: A"));
+            assertTrue("回显对不上说明两条会话串味了: " + m.text, echoesRoute(m.text, "A"));
         }
         for (OutboundMessage m : chanB.sent) {
-            assertTrue("回显对不上说明两条会话串味了: " + m.text, m.text.startsWith("echo: B"));
+            assertTrue("回显对不上说明两条会话串味了: " + m.text, echoesRoute(m.text, "B"));
         }
         assertEquals("一个 session_id 只该有一把租约", 1, gw.bus().turnLeases().size());
         assertEquals("正常网关不该出现 fail-open 放行", 0L, gw.bus().leaseTimeoutCount());
@@ -546,6 +549,20 @@ public class GatewayDeliveryP16Test {
     private static String relativeTo(String root, File f) throws IOException {
         String p = f.getCanonicalPath();
         return p.startsWith(root) ? p.substring(root.length() + 1).replace('\\', '/') : "<outside>";
+    }
+
+    /**
+     * 串味判据：这条回复 echo 的是不是<b>本路由</b>的消息。
+     *
+     * <p>只量尾巴，不量开头 —— P12 起动态上下文块是前置进请求的 user 消息的
+     * （{@code echo: <上下文块>\n---\nA0}），用户原话仍在结尾。老写法
+     * {@code startsWith("echo: A")} 钉的其实是"P12 之前 user 消息里没那块东西"这一条形态假设，
+     * 而这条测试要证的一直是"两条会话没交织"，不是"上下文块长在第几个字节"。</p>
+     *
+     * <p>顺序由 {@code assertAlternating} 与两条 {@code sent.size()==4} 钉，这里不再约束 A0/A1 先后。</p>
+     */
+    private static boolean echoesRoute(String text, String route) {
+        return text.startsWith("echo: ") && text.matches("(?s).*" + route + "\\d\\s*+");
     }
 
     private static String describe(List<OutboundMessage> ms) {
