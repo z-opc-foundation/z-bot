@@ -112,7 +112,7 @@ LEDGER 列（逐字）：`id	family	target	testcase	injection	expected_red_set	v
 | 跑 | 命令 | 汇总（逐字） |
 |---|---|---|
 | run1（13:56，`~/.cache/zbot-p18/bar2_run1.log`） | `python3 -u _doc/acceptance/p18/p18_mutation.py` | `#tally … RED-OK=27\|PARTIAL=0\|GREEN-BUT-MUTATED=1\|BROKEN=1\|NO-RUN=1`；`#mutants_injected 30`、`#baseline_total_full_tests 668`；6 行 `CTRL-*` 全 `OK`；30 行逐条尾部 `还原=True`；跑完 `git diff --name-only` 为空 |
-| run3（run1 之后我只动过 C2 的注入串和杠③ 的量具，预期红集一字未动） | 同一命令 | 见下（跑完即贴） |
+| run3（run1 之后我只动过 C2 的注入串和杠③ 的量具，预期红集一字未动） | 同一命令，14:19:54 生成（`14:13` 起跑，前 5 次尝试因 `p12e` 持有共用变异锁而 `rc=4` 退避；`tail -1 ~/.cache/zbot-p18/bar2_wait3.log`） | `#tally … RED-OK=28\|PARTIAL=0\|GREEN-BUT-MUTATED=1\|BROKEN=0\|NO-RUN=1`；`#mutants_injected 30`、`#baseline_total_full_tests 668`；`grep -c "还原=True" ~/.cache/zbot-p18/bar2_run3.log` = `30`；脚本尾行 `注入后 src 有差异的文件: 无`、`git diff --name-only` 只剩 LEDGER 自己 |
 
 `wc -l _doc/acceptance/p18/LEDGER.tsv` = `41` = 1 表头 + 30 变异体 + 6 阳性对照 + 4 汇总行（`#tally`/`#mutants_injected`/`#baseline_total_full_tests`/`#generated_by`）。
 
@@ -122,9 +122,16 @@ LEDGER 列（逐字）：`id	family	target	testcase	injection	expected_red_set	v
 
 `LEDGER.tsv` 里 `CTRL-*` 六行：点名 testcase 在未注入时 **ran>0 且全绿** 才算该族有猎物，否则该族全部变异体记 `NO-RUN`。
 
-| 族 | 点名条数 | 未注入实跑 |
+| 族 | 点名条数 | 未注入实跑（run3，逐字） |
 |---|---|---|
-| A-后写覆盖 / B-惰性 / C-显式降级 / D-飞书协议 / E-钉钉签名 / F-web面 | 见 LEDGER `expected_red_set` 列 | `OK`（六族各自 ran 与耗时见 LEDGER 第 8 列，形如 `ran=6 rc=0 4.1s 红=-`） |
+| A-后写覆盖 | 5 | `ran=5 rc=0 1.8s 红=-` |
+| B-惰性 | 1 | `ran=1 rc=0 1.6s 红=-` |
+| C-显式降级 | 8 | `ran=8 rc=0 2.1s 红=-` |
+| D-飞书协议 | 10 | `ran=10 rc=0 3.1s 红=-` |
+| E-钉钉签名 | 7 | `ran=7 rc=0 2.8s 红=-` |
+| F-web面 | 2 | `ran=2 rc=0 6.0s 红=-` |
+
+合计 33 支阳性对照全绿（`awk -F'\t' '$1~/^CTRL/{print $8}' _doc/acceptance/p18/LEDGER.tsv`）⇒ 六族都"猎物真进得来"，没有一族是靠空跑充分的。
 
 ### "惰性"是数出来的，不是读注释
 
@@ -146,11 +153,11 @@ LEDGER 列（逐字）：`id	family	target	testcase	injection	expected_red_set	v
 | `kind` | 工厂表查表，查不到抛 | `unknownKindIsExplicitNotSilent` | A3 |
 | `config.<key>`（api-base / receive-id-type / app-id / app-secret / verification-token / webhook-url / secret / port / host） | `Context.value()` → 构造参数 → 真发出去的字节 | `FeishuOutboundTest` / `DingTalkOutboundTest` 全部按假端点收到的请求断言；杠③ A7/A11/A16 再按真进程断言一遍 | A2（config 后写不覆盖）、D1–D8、E1–E5 |
 
-### 两处不粉饰的账
+### 三处不粉饰的账
 
-1. **`C2` 第一跑判 `BROKEN`，是我的量具写坏了**：注入串漏了一个收尾引号（`+ "）缺配置键（未点名）` 少了 `"`），编译不过。已修 `p18_mutation.py` 的 `new` 字段，**预期红集一字未动**（`requiresMissingKeysAreNamedExplicitly` + `createAllCollectsFailuresInsteadOfSilentlyDegrading`），复算：`git log -1 --stat` 与 `python3 -u _doc/acceptance/p18/p18_mutation.py C2`。
+1. **`C2` 第一跑判 `BROKEN`，是我的量具写坏了**：注入串漏了一个收尾引号（`+ "）缺配置键（未点名）` 少了 `"`），编译不过。已修 `p18_mutation.py` 的 `new` 字段，**预期红集一字未动**（`requiresMissingKeysAreNamedExplicitly` + `createAllCollectsFailuresInsteadOfSilentlyDegrading`）。run3 复验：`C2 抛了但不点名缺哪个键` 判 `RED-OK`，两支点名 testcase 都红（`awk -F'\t' '$1~/^C2/ {print $7, $8}' _doc/acceptance/p18/LEDGER.tsv`），BROKEN 归零。复算：`git log --oneline -- _doc/acceptance/p18/p18_mutation.py`（`7823295` 是修串那一笔）。
 2. **`D10` 判 `GREEN-BUT-MUTATED`（真缺口，不是量具坏了）**：把 `verifySignature()` 改成恒真，没有任何测试变红 —— 因为没有任何一支测试断言"错签名必须被拒"（`signatureHelperAcceptsCorrectDigest` 只断言正例、`signatureHelperRejectsMismatchWithoutEncryptKey` 走的是"未配 encryptKey ⇒ 关闭校验"那条），且 `verifySignature` 在生产码里**没有调用方**：`git grep -c verifySignature -- 'z-bot-core/src'` = `FeishuChannel.java:1 / FeishuChannelTest.java:4`，main 里那一处命中就是它自己的定义（`:663`）。⇒ 这是一条"广告了但没接线的入站签名能力"，进 §未做 第 8 条，不在这里替它圆场。真被接线的那道门是 `verificationToken` 比对，它有自己的猎物（`D9` 判红：`postEventWithBadTokenReturns401`）。
-3. **`F2` 判 `NO-RUN`（单测层没有猎物）**：`HttpConsoleChannel.start()` 不委托 `inner.start()` 时，进程内没有任何一支测试真去 GET 过控制台 ⇒ 不硬凑一个点名集，改由杠③ 的 `A2`（真 JVM 起 gateway 后 `GET /index.html` 判状态码 + 形状）当杀手，并实测"注入 F2 ⇒ A2 判红"（见 §杠③ 末尾的 F2 对撞实验）。
+3. **`F2` 判 `NO-RUN`（单测层没有猎物）**：`HttpConsoleChannel.start()` 不委托 `inner.start()` 时，进程内没有任何一支测试真去 GET 过控制台（run3 里该行的 detail 就是 `全绿`，`ran=0 点名 0/0`）⇒ 不硬凑一个点名集，改由杠③ 的 `A1`/`A2`（真 JVM 起 gateway 后按 pid 复扫 `lsof` + `GET /index.html` 判状态码与形状）当杀手，并已实测"注入 F2 ⇒ A1、A2 双双判红、其余 23 支照旧"（读数与复算命令见 §杠③ 末尾的 F2 对撞实验）。
 
 ## 杠③ 真进程 E2E
 
@@ -224,7 +231,7 @@ T1 列出的 8 项：`.stty.bak`、`config.properties`、`cron`、`memories`、`
 4. **未做 ServiceLoader/内核侧 SPI**：`z-agent-kernel-app:0.2.1` 是空模块（§0-6），本期注册表完全落在 z-bot 侧，内核仓一个字节未动。
 5. **未接 `BotConfig`**：`config/BotConfig.java` 是禁改区（P21 在飞），通道配置入口只有 `<configDir>/channels.properties` + `--channel-manifest`；`rawProps` 无公开 getter，本期没有从 BotConfig 读通道键。
 6. **未做出站重试/退避**：飞书只做"token 被判废 ⇒ 作废缓存重取一次并重发一次"，其余失败按 P16 语义记 `failed`，没有新增定时器或队列。
-7. **杠② 台账里剩下的三笔**（`LEDGER.tsv` 里都在，不在这里圆场）：`D10` = `GREEN-BUT-MUTATED`（→ 第 8 条）；`F2` = `NO-RUN`（单测层配不到猎物，杀手改由杠③ 的 A1/A2 承担并做了对撞实验，见 §杠③ 末尾）；`C2` = 第一跑判 `BROKEN`（我的注入串漏了收尾引号 ⇒ 编译不过，属量具自坏，已修，由 run3 复验）。其余 27 笔 `RED-OK`、`PARTIAL` 0 笔。
+7. **杠② 台账里剩下的三笔**（`LEDGER.tsv` 里都在，不在这里圆场）：`D10` = `GREEN-BUT-MUTATED`（→ 第 8 条）；`F2` = `NO-RUN`（单测层配不到猎物，杀手改由杠③ 的 A1/A2 承担并做了对撞实验，见 §杠③ 末尾）；`C2` = 第一跑判 `BROKEN`（我的注入串漏了收尾引号 ⇒ 编译不过，属量具自坏，已修，run3 已复验为 `RED-OK`（BROKEN 归零））。其余 27 笔 `RED-OK`、`PARTIAL` 0 笔。
 8. **`FeishuChannel.verifySignature` 是"广告了但没接线"的入站签名能力**：生产码里没有调用方（`git grep -n verifySignature -- 'z-bot-core/src'` ⇒ main 侧唯一命中就是它自己的定义 `FeishuChannel.java:663`，test 侧 4 处），也没有一支断言"错签名必须被拒" ⇒ 把它改成恒真没有任何测试变红（LEDGER `D10` 行）。本期**未做**：把 `verifySignature` 接进 `handleEvent` 的入站鉴权路径并补负例断言；真被接线的那道门是 `verificationToken` 比对（`D9` 判红）。
 9. **杠③ 只跑单实例 gateway**：没有做"两个 gateway 抢同一 `state.db` 时的并发投递"验证（那是 P16 `DeliveryLedger` 的锁语义，本期只在其上重投，未另加断言）；也没有覆盖"飞书真返回业务错误码时的分类"端到端 —— `DeadTargets` 分类只在单测层由假端点返回码驱动（`FeishuOutboundTest#chatLevelNotFoundIsClassifiedAsDeadTarget`），杠③ 的假端点全部返回 200 形状。
 
