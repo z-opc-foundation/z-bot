@@ -152,11 +152,12 @@ LEDGER 列（逐字）：`id	family	target	testcase	injection	expected_red_set	v
 | `enabled` | `create()` 拒绝 + `createAll()` 记 skipped | `createOnDisabledSpecIsAnExplicitRefusal`、`loadingSpecsConstructsNothing` 的 `skipped` 断言 | C5（缺省档把 feishu 打开） |
 | `kind` | 工厂表查表，查不到抛 | `unknownKindIsExplicitNotSilent` | A3 |
 | `config.<key>`（api-base / receive-id-type / app-id / app-secret / verification-token / webhook-url / secret / port / host） | `Context.value()` → 构造参数 → 真发出去的字节 | `FeishuOutboundTest` / `DingTalkOutboundTest` 全部按假端点收到的请求断言；杠③ A7/A11/A16 再按真进程断言一遍 | A2（config 后写不覆盖）、D1–D8、E1–E5 |
+| `config.encrypt-key`（**p18c 才补上这一行**：上一版它是个"广告位"——manifest 认这个键、构造函数收这个值，但没有任何兑现路径） | `handleEvent` 在解析 body 前用 `sha1(timestamp+nonce+encryptKey+body)` 比 `X-Lark-Signature`（`FeishuChannel.java:398-406`） | `FeishuChannelTest` 那 4 支验签断言 + 杠③ A21/A21b/A22（真进程） | D10（算法恒真）、D11（守卫摘掉） |
 
 ### 三处不粉饰的账
 
 1. **`C2` 第一跑判 `BROKEN`，是我的量具写坏了**：注入串漏了一个收尾引号（`+ "）缺配置键（未点名）` 少了 `"`），编译不过。已修 `p18_mutation.py` 的 `new` 字段，**预期红集一字未动**（`requiresMissingKeysAreNamedExplicitly` + `createAllCollectsFailuresInsteadOfSilentlyDegrading`）。run3 复验：`C2 抛了但不点名缺哪个键` 判 `RED-OK`，两支点名 testcase 都红（`awk -F'\t' '$1~/^C2/ {print $7, $8}' _doc/acceptance/p18/LEDGER.tsv`），BROKEN 归零。复算：`git log --oneline -- _doc/acceptance/p18/p18_mutation.py`（`7823295` 是修串那一笔）。
-2. **`D10` 判 `GREEN-BUT-MUTATED`（真缺口，不是量具坏了）**：把 `verifySignature()` 改成恒真，没有任何测试变红 —— 因为没有任何一支测试断言"错签名必须被拒"（`signatureHelperAcceptsCorrectDigest` 只断言正例、`signatureHelperRejectsMismatchWithoutEncryptKey` 走的是"未配 encryptKey ⇒ 关闭校验"那条），且 `verifySignature` 在生产码里**没有调用方**：`git grep -c verifySignature -- 'z-bot-core/src'` = `FeishuChannel.java:1 / FeishuChannelTest.java:4`，main 里那一处命中就是它自己的定义（`:663`）。⇒ 这是一条"广告了但没接线的入站签名能力"，进 §未做 第 8 条，不在这里替它圆场。真被接线的那道门是 `verificationToken` 比对，它有自己的猎物（`D9` 判红：`postEventWithBadTokenReturns401`）。
+2. **`D10` 判 `GREEN-BUT-MUTATED`（真缺口，不是量具坏了）**：把 `verifySignature()` 改成恒真，没有任何测试变红 —— 因为没有任何一支测试断言"错签名必须被拒"（`signatureHelperAcceptsCorrectDigest` 只断言正例、`signatureHelperRejectsMismatchWithoutEncryptKey` 走的是"未配 encryptKey ⇒ 关闭校验"那条），且 `verifySignature` 在生产码里**没有调用方**：`git grep -c verifySignature -- 'z-bot-core/src'` = `FeishuChannel.java:1 / FeishuChannelTest.java:4`，main 里那一处命中就是它自己的定义（`:663`）。⇒ 这是一条"广告了但没接线的入站签名能力"，进 §未做 第 8 条，不在这里替它圆场。真被接线的那道门是 `verificationToken` 比对，它有自己的猎物（`D9` 判红：`postEventWithBadTokenReturns401`）。**〔p18c 已闭合，本节按上一版字节点原样保留、不改史〕**：`verifySignature` 已接进 `handleEvent`，D10 期望集重声明后 `点名 3/3 RED-OK`，并补了专打接线层的 D11 ⇒ 读数与理由见 §p18c 主编亲测。
 3. **`F2` 判 `NO-RUN`（单测层没有猎物）**：`HttpConsoleChannel.start()` 不委托 `inner.start()` 时，进程内没有任何一支测试真去 GET 过控制台（run3 里该行的 detail 就是 `全绿`，`ran=0 点名 0/0`）⇒ 不硬凑一个点名集，改由杠③ 的 `A1`/`A2`（真 JVM 起 gateway 后按 pid 复扫 `lsof` + `GET /index.html` 判状态码与形状）当杀手，并已实测"注入 F2 ⇒ A1、A2 双双判红、其余 23 支照旧"（读数与复算命令见 §杠③ 末尾的 F2 对撞实验）。
 
 ## 杠③ 真进程 E2E
@@ -219,19 +220,91 @@ md5 -q ~/.zbot/state.db | cut -c1-8
 |---|---|---|---|
 | T1 开工（13:40:10） | `8` | `2dadaed0` | `690ddbc0` |
 | T2 杠② 在飞（14:13 前后，含杠③ 全程与 F2 对撞） | `8` | `2dadaed0` | `690ddbc0` |
-| T3 收尾 | （待填） | （待填） | （待填） |
+| T3 收尾 | `8`（p18c 于 14:40:14 打，测法同 T1/T2） | `2dadaed0` | `690ddbc0` |
 
 T1 列出的 8 项：`.stty.bak`、`config.properties`、`cron`、`memories`、`models-cache.json`、`sessions`、`state.db`、`workspace` —— `cron` 是空目录、`.stty.bak` 均**未删**（工单红线）。
+
+## p18c 主编亲测：把 `verifySignature` 真接进入站鉴权，四杠在 `beb8959` 上重打
+
+### 这一版改了什么
+
+- **产品码 1 处**（`FeishuChannel.handleEvent`）：解析 body **之前**按飞书事件订阅口径比对 `sha1(timestamp + nonce + encryptKey + body)` 与 `X-Lark-Signature`，三个头名常量在 `FeishuChannel.java:90-93`；配了 `encrypt-key` 而缺任一头 ⇒ 同样 401（fail-closed，不许靠『不带头』绕过去）。于是 `verifySignature` 从"广告了零调用方"变成有真调用方（`FeishuChannel.java:402`，`git grep -n verifySignature -- 'z-bot-core/src'` 的 main 侧命中数 1→2：定义 + 调用）。
+- **测试 1 个文件**（`FeishuChannelTest` @Test 7 → **11**）：新增
+  `tamperedSignatureIsRejectedWith401AndNeverReachesBus`（错签名 ⇒ 401 且总线零收货）、
+  `missingSignatureHeadersAreRejectedWhenEncryptKeyConfigured`（缺头 ⇒ 401）、
+  `unsignedEventIsStillAcceptedWhenEncryptKeyAbsent`（防过度修：没配 key 就不许验，否则这一支会红）、
+  `signatureHelperRejectsWrongDigest`（算法层四种猎物：错摘要 / 别人 key / body 多一个字节 / `signature=null`）。
+  `postEventWithBadTokenReturns401` 现在自己带**正确签名**并断言 401 体含 `token mismatch` ⇒ 它的 401 不能被签名门顺手满足（否则 D9 会挂在 D10 的功劳上）。
+- **量具 2 个文件**：`p18_mutation.py`（D10 期望集重声明 + 新增 D11 + suite 总数改机械量）、`p18_e2e.py`（新增 A21/A21b/A22，38 → **41** 支）。
+
+### 杠① 672 ×3（串行三跑，日志 `~/.cache/zbot-p18-lead/lead_bar1_run{1,2,3}.log`）
+
+| 跑 | mvn 汇总行（扳机，逐字） | socket 计数 | BUILD |
+|---|---|---|---|
+| run1 | `Tests run: 672, Failures: 0, Errors: 0, Skipped: 0` | `0` | SUCCESS |
+| run2 | `Tests run: 672, Failures: 0, Errors: 0, Skipped: 0` | `0` | SUCCESS |
+| run3 | `Tests run: 672, Failures: 0, Errors: 0, Skipped: 0` | `0` | SUCCESS |
+
+- `git grep -c '@Test' HEAD -- 'z-bot-core/src/test'` 求和 = **672**，与 mvn 汇总行**逐字相等**；main `926b8b5` = 619 ⇒ 本系列净增 53（其中本棒 +4，668→672）。
+- 三跑跑在 14:32–14:33、`beb8959` 提交于 14:34：`git diff HEAD --stat -- z-bot-core/src` 为空 ⇒ 杠① 量的 src 字节就是提交树字节。
+
+### 杠② 31 支变异体（`python3 -u _doc/acceptance/p18/p18_mutation.py`，LEDGER 只由脚本生成）
+
+`~/.cache/zbot-p18-lead/lead_bar2_run2.log` + `LEDGER.tsv`（`wc -l` = 42 = 1 表头 + 31 变异体 + 6 阳性对照 + 4 汇总行）：
+
+```
+#tally					RED-OK=30|PARTIAL=0|GREEN-BUT-MUTATED=0|BROKEN=0|NO-RUN=1
+#mutants_injected						31
+#suite_total_full_tests_measured						672
+```
+
+- 6 族阳性对照全绿：`ran=5 / 1 / 8 / **12** / 7 / 2`（D 族从 10 涨到 12 就是本棒那两支 HTTP 负例）；`grep -c "还原=True"` = **31**。
+- 收尾还原取证：`注入后 src 有差异的文件: 无`；本棒另独立复核四支 `channel/*.java` 的 `md5 -q` 与 `git show HEAD:…  | md5 -q` **逐支同值**（`ChannelRegistry / FeishuChannel / DingTalkChannel / HttpConsoleChannel` 全「同」）。
+- **D10 期望集重声明**（理由写在脚本注释里、随码同提交，不是事后凑）：p18b 两跑这一支都是 `GREEN-BUT-MUTATED`，因为当时 `verifySignature` 在 main 里零调用方、也没有一支"错签名必须被拒"的断言 ⇒ 恒真实现无处显形。接线并补负例之后期望集改为**算法层 1 支 + 接线层 2 支**，实测 `点名 3/3 RED-OK`（`ran=3 rc=1 4.6s`）。
+- **D11 新增**（`handleEvent` 摘掉验签守卫：`if (encryptKey != null && !encryptKey.isEmpty()) {` → `if (false) {`）：`点名 2/2 RED-OK`。D10 与 D11 互补 —— D11 把签名函数原样留着，helper 层那几支结构上看不见 ⇒ 少任何一层就是空档。
+- 唯一 `NO-RUN` 仍是 `F2`，与上一节同因（杀手在杠③ A1/A2，对撞实验已做）。
+
+### 量具自坏一笔（记账，不粉饰）
+
+`p18_mutation.py:42` 的 `BASELINE_TOTAL = 668` 是上一棒手敲的常量；杠① 涨到 672 之后没人回来改它 ⇒ LEDGER 印出一个**树里根本不存在的数**，而且没有任何尺会去读它，所以它永远不红。已改成 `measure_suite_total()`：`git grep -c '@Test' HEAD` 求和，git 非 0 / 输出行形状不对 / 数 ≤ 0 一律 **FATAL 不收读数**（空输入必 FATAL），LEDGER 行随之改名 `#suite_total_full_tests_measured`。复算：`python3 -c "import importlib.util as u;s=u.spec_from_file_location('m','_doc/acceptance/p18/p18_mutation.py');m=u.module_from_spec(s);s.loader.exec_module(m);print(m.SUITE_TOTAL)"` ⇒ `672`。
+
+### 杠③ 真进程 E2E 41 支，**6 次整跑**（重打 jar 前后各 3 次）
+
+| 跑 | jar | 汇总行（逐字） |
+|---|---|---|
+| r5/r6/r7 | 14:37 那版（`beb8959` 之后） | `PASS=41 FAIL=0 用时 6.2s` / `5.7s` / `5.6s` |
+| r8/r9/r10 | 14:44:51 重打（`mvn -o -q package -DskipTests -pl z-bot-core`，`PKG_RC=0`） | `PASS=41 FAIL=0 用时 5.6s` / `5.9s` / `5.6s` |
+
+- 重打 jar 的因：杠② 会按字节还原 `channel/*.java`，**mtime 被推到 14:43** ⇒ `find z-bot-core/src/main/java -name '*.java' -newer z-bot-core/target/z-bot-core.jar` 假报 4 个文件（mtime 新 ≠ 内容新，4 支 md5 其实与 HEAD 同值）。重打之后该 `find` = **0 行**，jar 与源码同批字节，不再依赖 mtime 论证。
+- 光凭 `find` 不算证据 ⇒ 直接从 jar 里读字节：`zipfile` 取 `com/zifang/z/bot/channel/FeishuChannel.class` 常量，`X-Lark-Signature` / `X-Lark-Request-Timestamp` / `X-Lark-Request-Nonce` / `signature mismatch` **四个都在** ⇒ 杠③ 打的确实是有验签的那版产品码。
+- 新增三支逐字（r8）：
+  `PASS A21 配了 encrypt-key 后，签错的入站被拒 401 且不产生任何出站            status=401 body={"error":"signature mismatch"} 假端点新增请求=0（应为 0）`
+  `PASS A21b 缺签名头同样拒（fail-closed：不许靠『不带头』绕过去）                status=401 body={"error":"signature mismatch"}`
+  `PASS A22 阳性对照：签名正确就真进得来（不多这一步，A21 只是空跑）                   status=200 body={"ok":true} send 累计=3`
+- 一处量具账（本棒自己的）：A21 第一版判 `FAIL`（期望 401 拿到 200）—— 我忘了给它换 key，`feishu_inbound` 用**同一个** encrypt-key 签 ⇒ 签名是对的，门自然放行。A21b/A22 当时的读数已经证明门本身是好的，所以红的是猎物没进得来，不是产品坏；补 `key="someone-elses-key"` 后才拿到 401。**没有放松任何断言**。另外 `FAKE_ENCRYPT_KEY` 这个常量在上一版 E2E 里**没有任何消费者**（manifest 根本没写 `channel.feishu.config.encrypt-key`），这版才真配进去。
+- H4（6 跑同读数）：`n=8 config=2dadaed0 state=690ddbc0`，脚本自身再报 `数据根条目 before/after=8/8`。
+
+### 杠④ `~/.zbot` 三条读数（本棒补 T3/T4）
+
+| 时点 | 条目数 | config md5 前 8 | state.db md5 前 8 |
+|---|---|---|---|
+| T3 14:40:14（杠① 三跑 + 杠② 首轮 + 杠③ 前 3 跑之后） | `8` | `2dadaed0` | `690ddbc0` |
+| T4 14:45:17（杠② 重跑 + jar 重打 + 杠③ 后 3 跑收尾） | `8` | `2dadaed0` | `690ddbc0` |
+| T5 14:47:41（EVIDENCE 落盘前复测） | `8` | `2dadaed0` | `690ddbc0` |
+
+### p18c 四杠小结
+
+杠① 672 ×3 绿（socket 计数 0）／杠② 31 支 `RED-OK=30·NO-RUN=1·GBM=0·PARTIAL=0·BROKEN=0`，6 族对照全绿，按字节还原干净／杠③ 41 支 ×6 整跑绿，jar 字节自证／杠④ T1–T5 三条读数不变 ⇒ **`beb8959` 这一版达到并入门禁**（并入时仍要在合并树上把四杠重打一遍）。
 
 ## §未做
 
 1. **未做真发（飞书/钉钉真实域名零请求）** —— 原因：本机没有任何 IM 凭据。复算命令 `grep -o '^[a-zA-Z0-9._-]*=' ~/.zbot/config.properties` 只列键名，实测只有 `minimax.api.key / minimax.base.url / minimax.model` 三行（`minimax.api.key` 值长 125，本棒**未读取值/未打印/未复制/未入日志**）。所以本期所有出站正确性证据都是"对 127.0.0.1 假端点发出的字节"，**不得**读成"已在真飞书/真钉钉送达"；真域名只以构造出的 URL 字符串断言（`outgoingUrlDefaultsToRealFeishuDomainButNeverSendsThere`、`realDomainUrlIsKeptVerbatimButIsNeverDialed`）。
-2. **未做飞书事件解密的完整实现**：`handleEvent` 里 `encryptKey` 只用于签名（代码注释 `// 简化 — 真接入时按 encryptKey 解密` 仍在），入站事件体按明文 JSON 解析 ⇒ 真接入加密模式时入站面不可用，本期没有对它写断言。
+2. **未做飞书事件加密（解密）模式的入站**：p18c 之后 `encryptKey` 已经真被消费（只用于**验签**，见 §p18c），但 `{"encrypt": "<AES-CBC base64>"}` 形态的事件体仍然没有解密实现 —— `handleEvent` 拿到验签通过的 body 后照旧按明文 JSON 解析 ⇒ 真接入"加密模式"的飞书应用时入站面不可用，本期没有对它写任何断言，也没有对应的变异体。
 3. **未做 webhook 之外的入站回调鉴权端到端**（飞书 URL 校验 `echostr` 有实现与断言，钉钉入站签名未做，`handleInbound` 不校验 `sign`/`timestamp` 头）。
 4. **未做 ServiceLoader/内核侧 SPI**：`z-agent-kernel-app:0.2.1` 是空模块（§0-6），本期注册表完全落在 z-bot 侧，内核仓一个字节未动。
 5. **未接 `BotConfig`**：`config/BotConfig.java` 是禁改区（P21 在飞），通道配置入口只有 `<configDir>/channels.properties` + `--channel-manifest`；`rawProps` 无公开 getter，本期没有从 BotConfig 读通道键。
 6. **未做出站重试/退避**：飞书只做"token 被判废 ⇒ 作废缓存重取一次并重发一次"，其余失败按 P16 语义记 `failed`，没有新增定时器或队列。
-7. **杠② 台账里剩下的三笔**（`LEDGER.tsv` 里都在，不在这里圆场）：`D10` = `GREEN-BUT-MUTATED`（→ 第 8 条）；`F2` = `NO-RUN`（单测层配不到猎物，杀手改由杠③ 的 A1/A2 承担并做了对撞实验，见 §杠③ 末尾）；`C2` = 第一跑判 `BROKEN`（我的注入串漏了收尾引号 ⇒ 编译不过，属量具自坏，已修，run3 已复验为 `RED-OK`（BROKEN 归零））。其余 27 笔 `RED-OK`、`PARTIAL` 0 笔。
-8. **`FeishuChannel.verifySignature` 是"广告了但没接线"的入站签名能力**：生产码里没有调用方（`git grep -n verifySignature -- 'z-bot-core/src'` ⇒ main 侧唯一命中就是它自己的定义 `FeishuChannel.java:663`，test 侧 4 处），也没有一支断言"错签名必须被拒" ⇒ 把它改成恒真没有任何测试变红（LEDGER `D10` 行）。本期**未做**：把 `verifySignature` 接进 `handleEvent` 的入站鉴权路径并补负例断言；真被接线的那道门是 `verificationToken` 比对（`D9` 判红）。
+7. **杠② 台账里剩下的两笔**（`LEDGER.tsv` 里都在，不在这里圆场）：`F2` = `NO-RUN`（单测层配不到猎物，杀手改由杠③ 的 A1/A2 承担并做了对撞实验，见 §杠③ 末尾）；`C2` = 第一跑判 `BROKEN`（我的注入串漏了收尾引号 ⇒ 编译不过，属量具自坏，已修，run3 已复验为 `RED-OK`（BROKEN 归零））。第三笔 `D10` 原本也是 `GREEN-BUT-MUTATED`，**p18c 已闭合**（→ 第 8 条）。p18c 重跑后的分档：**31 支变异体 = `RED-OK` 30 笔、`NO-RUN` 1 笔、`PARTIAL` 0、`GREEN-BUT-MUTATED` 0、`BROKEN` 0**。
+8. ~~**`FeishuChannel.verifySignature` 是"广告了但没接线"的入站签名能力**~~ —— **p18c 已闭合**：`git grep -n verifySignature` 现在 main 侧有两处命中（定义 `:682` + 调用 `:402`），错签名/缺头各有负例，LEDGER 的 `D10` 从 `GREEN-BUT-MUTATED` 变 `RED-OK`，并新增专打接线层的 `D11`；跨进程一层由杠③ 的 A21/A21b/A22 钉住。**仍未做**的是加密（解密）模式与钉钉入站验签（→ 第 2、3 条）。
 9. **杠③ 只跑单实例 gateway**：没有做"两个 gateway 抢同一 `state.db` 时的并发投递"验证（那是 P16 `DeliveryLedger` 的锁语义，本期只在其上重投，未另加断言）；也没有覆盖"飞书真返回业务错误码时的分类"端到端 —— `DeadTargets` 分类只在单测层由假端点返回码驱动（`FeishuOutboundTest#chatLevelNotFoundIsClassifiedAsDeadTarget`），杠③ 的假端点全部返回 200 形状。
 

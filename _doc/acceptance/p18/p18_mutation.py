@@ -39,7 +39,26 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
-BASELINE_TOTAL = 668          # 杠① 三跑的起点（fbb5f86 原树，本棒未改产品码）
+def measure_suite_total():
+    """全量-suite 用例总数只认机械量：`git grep -c '@Test' HEAD` 求和。
+    原先这里是手敲常量 668，加测后没人改它 ⇒ LEDGER 印出一个树里不存在的数，
+    而且没有任何尺会去读它（永远不红）。空输入/解析不出来一律 FATAL，不收读数。"""
+    proc = subprocess.run(["git", "-C", ZBOT, "grep", "-c", "@Test", "HEAD", "--",
+                           "z-bot-core/src/test"], stdout=subprocess.PIPE)
+    if proc.returncode != 0:
+        raise SystemExit("FATAL: git grep 量具本身失败 rc=%d，不收读数" % proc.returncode)
+    total, files = 0, 0
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        try:
+            total += int(line.rsplit(":", 1)[1]); files += 1
+        except ValueError:
+            raise SystemExit("FATAL: git grep 输出行形状不对: %r" % line)
+    if files == 0 or total <= 0:
+        raise SystemExit("FATAL: 量到 suite 总数 %d（文件 %d 个）= 空输入，不收读数" % (total, files))
+    return total
+
+
+SUITE_TOTAL = measure_suite_total()
 PER_RUN_TIMEOUT = 900         # 单支变异体的 mvn 上限（秒）
 
 SRC = {
@@ -413,8 +432,8 @@ def main():
                                 "", ""]) + "\n")
             fh.write("\t".join(["#mutants_injected", "", "", "", "", "",
                                 str(len([r for r in rows if not r[0].startswith("CTRL-")])), ""]) + "\n")
-            fh.write("\t".join(["#baseline_total_full_tests", "", "", "", "", "",
-                                str(BASELINE_TOTAL), ""]) + "\n")
+            fh.write("\t".join(["#suite_total_full_tests_measured", "", "", "", "", "",
+                                str(SUITE_TOTAL), ""]) + "\n")
             fh.write("\t".join(["#generated_by", "", "", "", "", "", "p18_mutation.py",
                                 time.strftime("%Y-%m-%dT%H:%M:%S%z")]) + "\n")
 

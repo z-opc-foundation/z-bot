@@ -658,7 +658,8 @@ def section_a(base_url, fake_base):
             check(n, False, "没有钉钉请求可断")
     # A21/A22：入站签名门的跨进程实据（单测层已经有 D10/D11 两条，这一层证的是"真 JVM + manifest 配的 key"）
     before = len(im_records())
-    st, body = feishu_inbound(fp, "p2p:oc_bad", "签名是拿别人的 key 算的")
+    st, body = feishu_inbound(fp, "p2p:oc_bad", "签名是拿别人的 key 算的",
+                              key="someone-elses-key")
     rec401 = im_records()
     check("A21 配了 encrypt-key 后，签错的入站被拒 401 且不产生任何出站",
           st == 401 and "signature mismatch" in body and len(rec401) == before,
