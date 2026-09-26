@@ -7,9 +7,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
@@ -173,6 +171,12 @@ public final class WebhookChannel implements Channel {
                 postBackLater(callbackUrl, conversationId, text);
             }
             text(ex, 200, "{\"ok\":true}");
+        } catch (BodyTooLargeException e) {
+            LOG.warn("[webhook] 入站超限: {}", e.getMessage());
+            try {
+                text(ex, 413, "{\"ok\":false,\"error\":\"request body too large\"}");
+            } catch (IOException ignored) {
+            }
         } catch (Exception e) {
             LOG.warn("[webhook] 入站处理失败: {}", e.getMessage());
             try {
@@ -259,15 +263,7 @@ public final class WebhookChannel implements Channel {
     }
 
     private static String readBody(HttpExchange ex) throws IOException {
-        try (InputStream is = ex.getRequestBody()) {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int len;
-            while ((len = is.read(buf)) != -1) {
-                baos.write(buf, 0, len);
-            }
-            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
-        }
+        return InboundLimits.readBody(ex);
     }
 
     private static Map<String, Object> parseObject(String body) {

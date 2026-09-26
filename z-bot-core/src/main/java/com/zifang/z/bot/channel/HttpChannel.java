@@ -430,6 +430,12 @@ public final class HttpChannel {
             } else {
                 json(ex, 404, error("not found: " + path));
             }
+        } catch (BodyTooLargeException e) {
+            LOG.warn("{} {} body 超限: {}", method, path, e.getMessage());
+            try {
+                json(ex, 413, error("请求体超过上限 " + InboundLimits.MAX_BODY_BYTES + " 字节"));
+            } catch (IOException ignored) {
+            }
         } catch (Exception e) {
             LOG.warn("{} {} 处理失败: {}", method, path, e.getMessage());
             try {
@@ -947,9 +953,7 @@ public final class HttpChannel {
     }
 
     private static String readBody(HttpExchange ex) throws IOException {
-        try (InputStream is = ex.getRequestBody()) {
-            return new String(readAll(is), StandardCharsets.UTF_8);
-        }
+        return InboundLimits.readBody(ex);
     }
 
     private static byte[] readAll(InputStream is) throws IOException {

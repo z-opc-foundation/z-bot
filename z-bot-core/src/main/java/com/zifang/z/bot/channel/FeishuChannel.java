@@ -13,9 +13,7 @@ import okhttp3.ResponseBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -465,6 +463,9 @@ public final class FeishuChannel implements Channel {
                 }
             }
             text(ex, 200, "{\"ok\":true}");
+        } catch (BodyTooLargeException e) {
+            LOG.warn("[feishu] 入站超限: {}", e.getMessage());
+            text(ex, 413, "{\"ok\":false,\"error\":\"request body too large\"}");
         } catch (Exception e) {
             LOG.warn("[feishu] 处理失败: {}", e.getMessage());
             text(ex, 500, "{\"ok\":false,\"error\":\"" + e.getMessage() + "\"}");
@@ -631,15 +632,7 @@ public final class FeishuChannel implements Channel {
 
     /** 原始请求体字节：验签必须用这份，任何"先转字符串再转回去"的中间步都可能改动字节。 */
     private static byte[] readBodyBytes(HttpExchange ex) throws IOException {
-        try (InputStream is = ex.getRequestBody()) {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int len;
-            while ((len = is.read(buf)) != -1) {
-                baos.write(buf, 0, len);
-            }
-            return baos.toByteArray();
-        }
+        return InboundLimits.readBodyBytes(ex);
     }
 
     private static Map<String, Object> parseObject(String body) {

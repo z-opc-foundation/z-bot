@@ -13,9 +13,7 @@ import okhttp3.ResponseBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -368,6 +366,9 @@ public final class DingTalkChannel implements Channel {
             }
             bus.deliver(new ChannelMessage(name(), conversationId, senderId, text));
             text(ex, 200, "{\"ok\":true}");
+        } catch (BodyTooLargeException e) {
+            LOG.warn("[dingtalk] 入站超限: {}", e.getMessage());
+            text(ex, 413, "{\"ok\":false,\"error\":\"request body too large\"}");
         } catch (Exception e) {
             LOG.warn("[dingtalk] 入站失败: {}", e.getMessage());
             text(ex, 500, "{\"ok\":false,\"error\":\"" + e.getMessage() + "\"}");
@@ -487,15 +488,7 @@ public final class DingTalkChannel implements Channel {
     }
 
     private static String readBody(HttpExchange ex) throws IOException {
-        try (InputStream is = ex.getRequestBody()) {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int len;
-            while ((len = is.read(buf)) != -1) {
-                baos.write(buf, 0, len);
-            }
-            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
-        }
+        return InboundLimits.readBody(ex);
     }
 
     private static Map<String, Object> parseObject(String body) {
