@@ -110,7 +110,8 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
     }
 
     private final Options options;
-    private final AtomicLong nextId = new AtomicLong();
+    /** transport 内部（握手）用的 id 段：从高位起，避开 client 从 1 开始的 id。 */
+    private final AtomicLong nextId = new AtomicLong(1000000000L);
     private final Map<Long, CompletableFuture<String>> pending =
             new ConcurrentHashMap<Long, CompletableFuture<String>>();
     private final Map<Long, String> inflightMethod = new ConcurrentHashMap<Long, String>();
@@ -131,6 +132,7 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
     private volatile Thread readerThread;
     private volatile McpNotificationListener listener;
     private volatile String serverProtocolVersion;
+    private volatile boolean peerAdvertisesListChanged;
     private volatile String serverName;
     private volatile String serverVersion;
     /** 收到的 notification 条数 —— 这是"通知通道真的通了"的硬读数，不看日志。 */
@@ -194,6 +196,10 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         }
         JsonNode pv = result.get("protocolVersion");
         serverProtocolVersion = pv == null ? null : pv.asText();
+        JsonNode caps = result.get("capabilities");
+        JsonNode toolsCap = caps == null ? null : caps.get("tools");
+        JsonNode lc = toolsCap == null ? null : toolsCap.get("listChanged");
+        peerAdvertisesListChanged = lc != null && lc.asBoolean(false);
         JsonNode si = result.get("serverInfo");
         if (si != null && si.isObject()) {
             serverName = text(si.get("name"));
@@ -292,6 +298,11 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
     }
 
     /** 对端在 initialize 里回的协议版本（null ⇒ 没回）。 */
+    /** 对端在 initialize 里广告的能力位（注意：官方 FastMCP 默认报 false 但仍会推）。 */
+    public boolean peerAdvertisesListChanged() {
+        return peerAdvertisesListChanged;
+    }
+
     public String serverProtocolVersion() {
         return serverProtocolVersion;
     }
@@ -346,22 +357,18 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
             return new ArrayList<String>(cmd);
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("cpid=0\n");
-        sb.append("trap 'if [ $cpid -ne 0 ]; then kill -9 $cpid 2>/dev/null; fi' TERM INT HUP EXIT\n");
+        sb.append("me=$$").append('\n');
+        sb.append("( while :; do").append('\n');
+        sb.append("  pp=`ps -o ppid= -p $me 2>/dev/null | tr -d ' '`").append('\n');
+        sb.append("  [ -z \"$pp\" ] && exit 0").append('\n');
+        sb.append("  [ \"$pp\" != \"").append(jvmPid()).append("\" ] && kill -9 $me 2>/dev/null && exit 0").append('\n');
+        sb.append("  sleep 0.2").append('\n');
+        sb.append("done ) &").append('\n');
+        sb.append("exec");
         for (int i = 0; i < cmd.size(); i++) {
-            if (i > 0) {
-                sb.append(' ');
-            }
-            sb.append(McpWire.shellQuote(cmd.get(i)));
+            sb.append(' ').append(McpWire.shellQuote(cmd.get(i)));
         }
-        sb.append(" &\ncpid=$!\n");
-        sb.append("while [ \"`ps -o ppid= -p $$ 2>/dev/null | tr -d ' '`\" = \"")
-                .append(jvmPid()).append("\" ]; do\n");
-        sb.append("  kill -0 $cpid 2>/dev/null || exit 0\n");
-        sb.append("  sleep 0.2\n");
-        sb.append("done\n");
-        sb.append("kill -9 $cpid 2>/dev/null\n");
-        sb.append("exit 0\n");
+        sb.append('\n');
         List<String> argv = new ArrayList<String>();
         argv.add("/bin/sh");
         argv.add("-c");
@@ -389,6 +396,7 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         if (!isOpen()) {
             throw new IllegalStateException("transport not open");
         }
+        inflightMethod.put(Long.valueOf(id), describeCall(McpWire.read(requestJson)));
         final CompletableFuture<String> future = new CompletableFuture<String>();
         CompletableFuture<String> previous = pending.put(Long.valueOf(id), future);
         if (previous != null) {
@@ -405,8 +413,9 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
             return future.get(options.timeoutMillis, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             pending.remove(Long.valueOf(id));
+            String method = inflightMethod.get(Long.valueOf(id));
             throw new TimeoutException("mcp 请求超时（" + options.timeoutMillis
-                    + "ms，method=" + inflightMethod.remove(Long.valueOf(id)) + "）");
+                    + "ms，method=" + method + "）");
         } catch (java.util.concurrent.ExecutionException e) {
             pending.remove(Long.valueOf(id));
             Throwable cause = e.getCause();
@@ -417,6 +426,20 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         } finally {
             inflightMethod.remove(Long.valueOf(id));
         }
+    }
+
+    /**
+     * 超时报错里"是哪个调用卡住了"的口径：只带 method，tools/call 这类把目标名放在
+     * {@code params.name} 的再带上目标名。<b>刻意不带 arguments/params 的值</b> ——
+     * 参数值可能含密钥，超时信息是要进日志的。
+     */
+    private static String describeCall(JsonNode request) {
+        String method = McpWire.methodOf(request);
+        if (method == null) {
+            return "unknown";
+        }
+        JsonNode target = request.path("params").path("name");
+        return target.isTextual() ? method + ":" + target.asText() : method;
     }
 
     private void writeLine(String json) throws IOException {

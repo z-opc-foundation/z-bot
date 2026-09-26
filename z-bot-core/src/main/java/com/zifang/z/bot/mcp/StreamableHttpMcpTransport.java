@@ -123,6 +123,7 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
     private volatile boolean getStreamRunning;
 
     private volatile String serverProtocolVersion;
+    private volatile boolean peerAdvertisesListChanged;
     private volatile String serverInfoName;
     private volatile String serverInfoVersion;
     private final AtomicLong notificationCount = new AtomicLong();
@@ -183,6 +184,10 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
         serverProtocolVersion = pv == null ? null : pv.asText();
         negotiatedProtocolVersion = serverProtocolVersion == null
                 ? McpWire.PROTOCOL_VERSION : serverProtocolVersion;
+        JsonNode caps = result.get("capabilities");
+        JsonNode toolsCap = caps == null ? null : caps.get("tools");
+        JsonNode lc = toolsCap == null ? null : toolsCap.get("listChanged");
+        peerAdvertisesListChanged = lc != null && lc.asBoolean(false);
         JsonNode si = result.get("serverInfo");
         if (si != null && si.isObject()) {
             serverInfoName = text(si.get("name"));
@@ -299,6 +304,11 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
 
     public String sessionId() {
         return sessionId;
+    }
+
+    /** 对端在 initialize 里广告的能力位（注意：官方 FastMCP 默认报 false 但仍会推）。 */
+    public boolean peerAdvertisesListChanged() {
+        return peerAdvertisesListChanged;
     }
 
     public String serverProtocolVersion() {
