@@ -848,3 +848,51 @@ $ git grep -n 'refundTokens' -- z-bot-core/src/main/java
 BotAgent.java:407  long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, compressed));
 BotAgent.java:979  long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, out));
 ```
+
+---
+
+# §10 p12d 棒：合并树四杠收口（本节起为本棒产出）
+
+> 本节由写手棒 p12d 产出。被测对象＝**合并树** `f56724d5b9ed6f1aa9f05065db34ac1f3b368910`
+> （= `git merge-tree --write-tree 926b8b5 e74f49c` 的单行输出，单行⇒无冲突）。
+> 上一棒（§0–§9）的读数全部跑在 `e74f49c` 基线上，`@Test` 面只有 483；本棒把四杠重跑到 637 面上。
+> 骨架先落盘再逐杠填数——每杠填完即 commit。
+
+## 10.0 第 0 步实测（证伪主编假设）
+
+| 假设 | 复算命令 | 实测 |
+|---|---|---|
+| （待填） | （待填） | （待填） |
+
+## 10.1 杠① 全量单测串行三跑
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| 三跑 `Tests run:` | `grep -h '^\[INFO\] Tests run:.*Skipped:' ~/.cache/zbot-p17/p12d_bar1_r{1,2,3}.log \| tail -1` | （待填） |
+| 三跑一致 | | （待填） |
+| socket 类错误计数 | `grep -c 'java.net.BindException\|Connection refused\|SocketTimeout' ~/.cache/zbot-p17/p12d_bar1_rN.log` | （待填） |
+| `@Test`(git grep) 与 surefire 对账 | | （待填） |
+
+## 10.2 杠② 变异注入（合并树重跑 + LEDGER 脚本重算）
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| LEDGER 各档计数 | `awk -F'\t' 'NR>1{c[$2]+=1} END{for(k in c) print k,c[k]}' LEDGER.tsv` | （待填） |
+
+## 10.3 杠③ 真进程 E2E 三整跑 + K2 双向探针
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| E2E 三跑条数 | | （待填） |
+| K2 三 case 原文 | `python3 _doc/acceptance/p12/p12_k2_probe.py` | （待填） |
+
+## 10.4 杠④ `~/.zbot` 一字未动
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| 条目数 | `ls -A ~/.zbot \| wc -l` | （待填，须=8） |
+| md5 前缀 | `md5 ~/.zbot/config.properties ~/.zbot/state.db` | （待填，须 2dadaed0 / 690ddbc0） |
+
+## 10.5 §未做（本棒）
+
+（待填）
