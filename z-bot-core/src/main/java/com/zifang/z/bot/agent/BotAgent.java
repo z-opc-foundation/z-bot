@@ -16,6 +16,7 @@ import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
 import com.zifang.z.bot.checkpoint.CheckpointManager;
+import com.zifang.z.bot.context.CompressionLedger;
 import com.zifang.z.bot.context.CompressorEngine;
 import com.zifang.z.bot.cron.CronJob;
 import com.zifang.z.bot.cron.CronScheduler;
@@ -52,6 +53,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -149,6 +151,13 @@ public class BotAgent {
     /** 上下文压缩引擎（null = 未启用，如纯测试桩）；摘要走主 provider。 */
     private final CompressorEngine compressor;
     private final ContextEngine.Summarizer summarizer;
+    /**
+     * 压缩的落盘侧（P14）：{@code compression_locks} 抢锁、失败冷却入库、防抖计数、
+     * 血统分叉。null = 还没有可用的 store（纯测试桩），此时引擎退化为内存锁。
+     */
+    private volatile CompressionLedger compressionLedger;
+    /** 分叉时派到的 {@code base #N} 标题：{@code SessionManager.saveMessages} 会用内存标题盖库，每次落盘后按这张表回填。 */
+    private final Map<String, String> lineageTitles = new ConcurrentHashMap<String, String>();
     /** 影子 git checkpoint（null = 未启用）；破坏性工具执行前打快照。 */
     private final CheckpointManager checkpoints;
     /** 最近一次生效的快照 id，/rollback 不带参数时回滚到它。 */
@@ -193,7 +202,7 @@ public class BotAgent {
             this.compressor = b.contextEngine;
             this.summarizer = b.summarizer;
         } else if (b.config != null && !b.noCompress) {
-            this.compressor = new CompressorEngine(b.tokenBudget);
+            this.compressor = newCompressorFromConfig(b);
             this.summarizer = this::summarizeWithProvider;
         } else {
             this.compressor = null;
@@ -307,11 +316,18 @@ public class BotAgent {
             listener.onEvent(new StreamEvent.StepStart(step));
             context.interrupt().checkpoint();
             injectSteer(listener);
-            applyCompression(listener);
+            // 位点 1：轮首。上一轮真实 usage（或压缩后的回落值）留在这里判一次。
+            applyCompressionAtSite(CompressorEngine.SITE_TURN_START, 0L, listener);
             ChatCompletionsResponse response;
             try {
                 ChatCompletionsRequest request = buildRequest();
                 lastRequestChars = requestCharsOf(request);
+                // 位点 2：请求已经拼好、还没发出去 —— 只有字符数可估，但越线就得先压，
+                // 压完必须重拼（否则这次粗估拦下的 oversized 请求照样发出去了）。
+                if (applyCompressionAtSite(CompressorEngine.SITE_BEFORE_API_CALL, 0L, listener)) {
+                    request = buildRequest();
+                    lastRequestChars = requestCharsOf(request);
+                }
                 response = provider.chat(request);
             } catch (Exception e) {
                 LOG.warn("[BotAgent] step {} LLM 调用失败: {}", step, e.getMessage());
@@ -335,7 +351,13 @@ public class BotAgent {
                         return terminal;
                     }
                 }
+                // 位点 3：工具批之后。这批工具往上下文里灌了多少字符是量得出来的，
+                // 把它加到最近一次真实 usage 上就是「本批之后上下文有多大」的最优可用观测。
+                long charsBeforeToolBatch = charsOf(memory.getMessages());
                 executeBatch(assistant.getToolCalls(), listener);
+                long addedToolTokens = Math.max(0L,
+                        (charsOf(memory.getMessages()) - charsBeforeToolBatch) / 2);
+                applyCompressionAtSite(CompressorEngine.SITE_AFTER_TOOL_BATCH, addedToolTokens, listener);
                 continue;
             }
 
@@ -407,27 +429,111 @@ public class BotAgent {
     }
 
     /**
-     * 达到阈值就把中段历史压成一条摘要消息（保最近 N 条原文），压缩结果回灌记忆。
-     * 压缩锁在 {@link CompressorEngine} 里，这里只负责回写与事件。
+     * 三个评估位点共用的落地点（P14）。位点自己负责「判」（并在引擎里计数，好让单测钉住它真被调到了），
+     * 这里只负责「判到之后做什么」：压一次、回灌记忆、把这次压缩登记成一次会话分叉、发事件、落盘。
+     *
+     * @param site            {@link CompressorEngine#SITE_TURN_START} /
+     *                        {@link CompressorEngine#SITE_BEFORE_API_CALL} /
+     *                        {@link CompressorEngine#SITE_AFTER_TOOL_BATCH}
+     * @param addedTokens     仅位点 3 用：本批工具新灌进上下文的 token 估算
+     * @return true = 这次真的压成功了（调用方据此决定是否重拼请求）
      */
-    private void applyCompression(StreamListener listener) {
-        if (compressor == null || !compressor.shouldCompress()) {
-            return;
+    private boolean applyCompressionAtSite(int site, long addedTokens, StreamListener listener) {
+        if (compressor == null) {
+            return false;
+        }
+        ensureCompressionLedger();
+        boolean triggered;
+        if (site == CompressorEngine.SITE_BEFORE_API_CALL) {
+            triggered = compressor.evaluateBeforeApiCall(lastRequestChars);
+        } else if (site == CompressorEngine.SITE_AFTER_TOOL_BATCH) {
+            long base = compressor.getContextTokens();
+            long merged = Math.min(Integer.MAX_VALUE, base + addedTokens);
+            triggered = compressor.evaluateAfterToolBatch((int) merged, 0);
+        } else {
+            triggered = compressor.evaluateAtTurnStart();
+        }
+        return triggered && applyCompression(listener);
+    }
+
+    /**
+     * 达到阈值就把中段历史压成一条摘要消息（保最近 N 条原文），压缩结果回灌记忆。
+     * 抢锁/冷却/防抖在 {@link CompressorEngine} + {@link CompressionLedger} 里，
+     * 这里只负责回写、血统登记与事件。
+     */
+    private boolean applyCompression(StreamListener listener) {
+        if (compressor == null) {
+            return false;
         }
         List<Msg> history = memory.getMessages();
         List<Msg> compressed = compressor.compress(history, summarizer);
         if (compressed == history || compressed.size() >= history.size()) {
-            return;
+            return false;
         }
         // 省下来的空间必须当场还回预算，否则「压缩」只是把消息换短、账面上却一秒都没回本
         long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, compressed));
+        // 分叉之前先把「压缩前的完整原文」落到父会话那一行 —— 父会话留着原文，
+        // 检索沿血统回溯才有东西可回溯（先落子会话的话父行会是空的）。
+        persistSession();
         memory.load(compressed);
+        // 压缩 = 会话分叉：原文留在父会话里，压缩后的这条历史开一个新会话并挂 parent_session_id
+        String forkTitle = forkSessionForCompression();
         listener.onEvent(new StreamEvent.Compacted(compressor.getLastSummary(),
                 compressor.getLastFromCount(), compressor.getLastToCount()));
-        LOG.info("[BotAgent] 上下文压缩: {} -> {} 条 (累计 {} 次, 本次退还预算 {} tokens)",
+        LOG.info("[BotAgent] 上下文压缩: {} -> {} 条 (累计 {} 次, 本次退还预算 {} tokens, 分叉 {})",
                 compressor.getLastFromCount(), compressor.getLastToCount(),
-                compressor.getCompressCount(), refunded);
+                compressor.getCompressCount(), refunded,
+                forkTitle == null ? "未登记" : forkTitle + " @ " + sessionManager.getCurrentSessionId());
         persistSession();
+        return true;
+    }
+
+    /**
+     * 压缩之后建血统：新建子会话（当前会话即切到它上面）、挂父、派 {@code base #N} 标题。
+     *
+     * @return 派到的标题；store 不可用时 null（退化成「只压不分叉」，内存桩场景）
+     */
+    private String forkSessionForCompression() {
+        CompressionLedger ledger = ensureCompressionLedger();
+        if (ledger == null || sessionManager == null) {
+            return null;
+        }
+        String parent = sessionManager.getCurrentSessionId();
+        if (parent == null) {
+            return null;
+        }
+        String child = sessionManager.createSession();
+        String title = ledger.forkForCompression(parent, child);
+        if (title != null) {
+            lineageTitles.put(child, title);
+        }
+        return title;
+    }
+
+    /** 压缩引擎的配置口径全部来自 BotConfig（P14）：窗口 / 输出额度 / pct / keepRecent / 冷却 / 防抖 / 锁 TTL。 */
+    private static CompressorEngine newCompressorFromConfig(Builder b) {
+        BotConfig c = b.config;
+        CompressorEngine e = new CompressorEngine(c.getContextWindow(), c.getContextMaxOutputTokens(),
+                c.getContextCompressPct(), c.getContextCompressKeepRecent(),
+                c.getContextCompressCooldownMillis(), c.getContextCompressMaxIneffective(),
+                c.getContextCompressLockTtlMillis());
+        return e.withEnabled(c.isContextCompressEnabled());
+    }
+
+    /** store 到手之后才挂得上（Builder 里 sessionManager 可能是 build() 中途才造的）。 */
+    private CompressionLedger ensureCompressionLedger() {
+        CompressionLedger ledger = compressionLedger;
+        if (ledger != null || sessionManager == null || compressor == null) {
+            return ledger;
+        }
+        StateStore store = sessionManager.getStore();
+        if (store == null) {
+            return null;
+        }
+        ledger = new CompressionLedger(store);
+        compressionLedger = ledger;
+        compressor.withGate(ledger, this::currentSessionId);
+        return ledger;
     }
 
     /**
@@ -804,7 +910,44 @@ public class BotAgent {
         String sid = sessionManager.getCurrentSessionId();
         if (sid != null) {
             sessionManager.saveMessages(sid, memory.getConversationMessages());
+            reassertLineageTitle(sid);
         }
+    }
+
+    /**
+     * 分叉出来的会话标题（{@code base #N}）必须压过 {@code SessionManager} 那条
+     * 「标题还是『新会话』就拿首条用户消息猜一个」的默认路径 —— 它每次 saveMessages 都会
+     * 用猜出来的标题覆盖库里那行，所以每次落盘之后都要回填一次。
+     */
+    private void reassertLineageTitle(String sessionId) {
+        String title = lineageTitles.get(sessionId);
+        CompressionLedger ledger = compressionLedger;
+        if (title == null || ledger == null) {
+            return;
+        }
+        ledger.retitle(sessionId, title);
+    }
+
+    /** 压缩引擎（P14 自证面：位点计数、阈值口径、锁后端、冷却与防抖状态）。 */
+    public CompressorEngine compressor() {
+        return compressor;
+    }
+
+    /** 血统落盘侧（无 store 时为 null）。 */
+    public CompressionLedger compressionLedger() {
+        return compressionLedger;
+    }
+
+    /**
+     * 沿血统回溯并去重的会话检索（P14）。
+     *
+     * <p>生产消费者在 {@code cli/SessionsCommand}（不在本棒写域），先把口径落在 core 里，
+     * 并由 {@code CompressionLineageTest} 钉住「子会话摘要 + 父会话原文各命中一次 ⇒ 只回父会话一条」。</p>
+     */
+    public List<CompressionLedger.SearchHit> searchSessionsAlongLineage(String keyword, int limit) {
+        CompressionLedger ledger = ensureCompressionLedger();
+        return ledger == null ? new ArrayList<CompressionLedger.SearchHit>()
+                : ledger.searchAlongLineage(keyword, limit);
     }
 
     // ===== center 集成 =====
@@ -981,10 +1124,30 @@ public class BotAgent {
         }
         boolean preview = args != null && args.toLowerCase().contains("preview");
         if (preview) {
-            return "context tokens=" + compressor.getContextTokens() + "/" + compressor.getMaxTokens()
-                    + " shouldCompress=" + compressor.shouldCompress()
-                    + " 已压缩次数=" + compressor.getCompressCount()
-                    + "（输入 /compress 执行压缩）";
+            ensureCompressionLedger();
+            StringBuilder sb = new StringBuilder();
+            sb.append("context observed=").append(compressor.observedTokens())
+                    .append("/limit=").append(compressor.compressionLimit())
+                    .append(" shouldCompress=").append(compressor.shouldCompress())
+                    .append(" 已压缩次数=").append(compressor.getCompressCount())
+                    .append("（输入 /compress 执行压缩）\n");
+            // 产品里没有 /config 斜杠命令（SlashRegistry 未注册），压缩口径就在这儿自证
+            sb.append("位点调用次数 轮首/粗估/工具批 = ")
+                    .append(compressor.siteHits(CompressorEngine.SITE_TURN_START)).append('/')
+                    .append(compressor.siteHits(CompressorEngine.SITE_BEFORE_API_CALL)).append('/')
+                    .append(compressor.siteHits(CompressorEngine.SITE_AFTER_TOOL_BATCH)).append('\n');
+            sb.append(compressor.describe()).append('\n');
+            if (config != null) {
+                for (String line : config.contextCompressConfigLines()) {
+                    sb.append(line).append('\n');
+                }
+            }
+            String sid = sessionManager == null ? null : sessionManager.getCurrentSessionId();
+            CompressionLedger ledger = compressionLedger;
+            sb.append("session=").append(sid)
+                    .append(" 压缩锁持有者=").append(ledger == null ? "无库" : String.valueOf(ledger.lockHolder(sid)))
+                    .append(" 血统深度=").append(ledger == null ? -1 : ledger.lineageDepth(sid));
+            return sb.toString().trim();
         }
         List<Msg> history = memory.getMessages();
         List<Msg> out = compressor.forceCompress(history, summarizer);
@@ -993,9 +1156,12 @@ public class BotAgent {
         }
         memory.load(out);
         long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, out));
+        String forkTitle = forkSessionForCompression();
         persistSession();
         return "已压缩: " + history.size() + " -> " + out.size() + " 条 (累计 "
-                + compressor.getCompressCount() + " 次，本次退还预算 " + refunded + " tokens)";
+                + compressor.getCompressCount() + " 次，本次退还预算 " + refunded + " tokens，"
+                + (forkTitle == null ? "未分叉（无 state.db）"
+                : "分叉为 " + forkTitle + " @ " + sessionManager.getCurrentSessionId()) + ")";
     }
 
     /**

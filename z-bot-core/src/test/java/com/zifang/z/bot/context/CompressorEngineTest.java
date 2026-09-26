@@ -30,7 +30,12 @@ public class CompressorEngineTest {
     private static List<Msg> history(int n) {
         List<Msg> out = new ArrayList<Msg>();
         for (int i = 1; i <= n; i++) {
-            out.add(user("历史消息 " + i));
+            // P14 起「省不到下限的压缩」会被判无效并原样退回，所以这里的填充要真有点体量
+            StringBuilder body = new StringBuilder("历史消息 " + i + "：");
+            while (body.length() < 200) {
+                body.append("填充填充填充填充填充填充填充填充。");
+            }
+            out.add(user(body.toString()));
         }
         return out;
     }
@@ -66,8 +71,8 @@ public class CompressorEngineTest {
         assertEquals("1 条摘要 + 4 条最近原文", 5, out.size());
         assertTrue(out.get(0).getContent().startsWith("[context summary]"));
         assertTrue(out.get(0).getContent().contains("这是中段摘要"));
-        assertEquals("最近 4 条原样保留", "历史消息 7", out.get(1).getContent());
-        assertEquals("历史消息 10", out.get(4).getContent());
+        assertTrue("最近 4 条原样保留", out.get(1).getContent().startsWith("历史消息 7"));
+        assertTrue(out.get(4).getContent().startsWith("历史消息 10"));
         assertEquals(1, e.getCompressCount());
         assertEquals(10, e.getLastFromCount());
         assertEquals(5, e.getLastToCount());
