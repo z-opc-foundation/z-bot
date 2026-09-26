@@ -22,8 +22,10 @@ P30 真进程 E2E（杠③）：起**真 JVM** gateway，用真 HTTP 打飞书/�
   A8      飞书：token 不对的 challenge ⇒ 不回显（先鉴权后回显）
   B1..B5 钉钉：正确入站签名 / 拿 webhook secret 签（配了 inbound-secret）/ 两小时前的旧时间戳
               / 缺头 ⇒ 依次 200+出站、401、401、401；B5 = B2..B4 三条零出站
-  C1..C3 反向对照：**另起一个不配 encrypt-key / inbound-secret 的 JVM** ⇒ 未签名入站照样 200
-              （门是配了密钥才关的；这一族防的是"改成恒验"那种过头修法）
+  C1      飞书：**不配 encrypt-key** 的 JVM ⇒ 未签名入站照样 200（门不是恒关的）
+  C2      钉钉：**一把密钥都不配** 的 JVM ⇒ 未签名入站照样 200
+  C3      钉钉：**只配 secret** 的 JVM ⇒ 按 secret 验签必须收（inbound-secret 的回退半轴）
+              （C 族整体防的是"改成恒验"那种过头修法）
   H1..H5 卫生：JVM 收尸、端口 lsof 复扫、`ps -o lstart` 复核、真数据根 ~/.zbot 不变（杠④ 口径）、
               现场文件递归扫 100+ 字符类 key 长串（带 125 字符合成串的阳性对照）
 
@@ -368,7 +370,7 @@ def write_profile(root):
     return root
 
 
-def manifest_lines(fake_base, feishu_port, ding_port, with_keys=True):
+def manifest_lines(fake_base, feishu_port, ding_port, with_keys=True, with_ding_secret=True):
     lines = ["channel.http.kind=http", "channel.http.enabled=true", "channel.http.outbound=false",
              "channel.webhook.kind=webhook", "channel.webhook.enabled=false",
              "channel.feishu.kind=feishu", "channel.feishu.enabled=true",
@@ -385,8 +387,11 @@ def manifest_lines(fake_base, feishu_port, ding_port, with_keys=True):
              "channel.dingtalk.default-port=%d" % ding_port,
              "channel.dingtalk.requires=webhook-url",
              "channel.dingtalk.config.webhook-url=%s/robot/send?access_token=%s"
-             % (fake_base, DING_TOKEN),
-             "channel.dingtalk.config.secret=%s" % DING_WEBHOOK_SECRET]
+             % (fake_base, DING_TOKEN)]
+    if with_ding_secret:
+        # 自定义机器人的加签密钥**同时**是入站验签的回退密钥（钉钉《接收消息》口径）⇒
+        # 配了它，未签名入站就该拒；C2 要的"一把密钥都没配"必须把它也摘掉。
+        lines.append("channel.dingtalk.config.secret=%s" % DING_WEBHOOK_SECRET)
     if with_keys:
         # 这两行就是本期新接的键：配了才关，工厂不传的话这里就是空话（p30_mutation I5 打的就是它）
         lines.append("channel.feishu.config.encrypt-key=%s" % FAKE_ENCRYPT_KEY)
@@ -394,7 +399,7 @@ def manifest_lines(fake_base, feishu_port, ding_port, with_keys=True):
     return "\n".join(lines) + "\n"
 
 
-def start_gateway(tag, fake_base, base_url, with_keys=True):
+def start_gateway(tag, fake_base, base_url, with_keys=True, with_ding_secret=True):
     if not base_url:
         # 挂上假 LLM 的地址是"reply 能出栈"的前提；带 None 起 JVM 会打出一条与本期无关的红，
         # 与其让它去猜，不如当场判量具坏。
@@ -403,7 +408,7 @@ def start_gateway(tag, fake_base, base_url, with_keys=True):
     feishu_port, ding_port, console = free_port(), free_port(), free_port()
     mpath = os.path.join(root, "channels-%s.properties" % tag)
     with io.open(mpath, "w", encoding="utf-8") as fh:
-        fh.write(manifest_lines(fake_base, feishu_port, ding_port, with_keys))
+        fh.write(manifest_lines(fake_base, feishu_port, ding_port, with_keys, with_ding_secret))
     gw = Gateway(tag, root, base_url, mpath, console)
     gw.ports = {"feishu": feishu_port, "dingtalk": ding_port, "console": console}
     gw.start()
@@ -516,10 +521,12 @@ def run_round(n, fake_base, base_url):
         im_clear()
         raw_env, plain = feishu_v2_encrypted_body("oc_a5", "p30a5decryptedmarker")
         st, body = post_feishu(fp, raw_env)
+        ok5 = st == 200 and outbound_contains("p30a5decryptedmarker")
+        # 出站条数必须**等完之后**再数：在 check(...) 的参数里数会把"还在飞"的那条读成 0，
+        # 判据是 PASS 而详情写着"出站=0" —— 读起来像空跑（第一跑实测就是这样）。
         sent = [r["body"] for r in im_records("/im/v1/messages")]
         check(pfx + "A5 加密 v2 事件：验签→AES 解开→header.token→投递，正文字符级出现在出站字节里",
-              st == 200 and outbound_contains("p30a5decryptedmarker"),
-              "status=%d body=%s 出站=%d 明文前 60=%s" % (st, body[:40], len(sent), plain[:60]))
+              ok5, "status=%d body=%s 出站=%d 明文前 60=%s" % (st, body[:40], len(sent), plain[:60]))
 
         im_clear()
         raw_env, _p = feishu_v2_encrypted_body("oc_bad", "p30-a-should-not-enter", bad_key=True)
@@ -536,9 +543,16 @@ def run_round(n, fake_base, base_url):
                                  "type": "url_verification", "challenge": "p30-chal-777"})
         raw_env = json.dumps({"encrypt": aes_encrypt(chal_plain, FAKE_ENCRYPT_KEY)})
         st, body = post_feishu(fp, raw_env)
+        # 钉的是"回显的是**解出来**的那个 challenge"这个语义，不是 Jackson 的分隔符：
+        # 第一跑拿 `json.dumps(...)`（冒号后带空格）去逐字比 Java 写出的 `{"challenge":"…"}`，
+        # 于是产品给对了 200 + 正确 challenge 却判 FAIL —— 那是量具过定，不是缺陷。
+        try:
+            echoed = json.loads(body).get("challenge")
+        except Exception:
+            echoed = "<非 JSON: %s>" % body[:40]
         check(pfx + "A7 加密的 url_verification ⇒ 回显**解出来**的那个 challenge",
-              st == 200 and body.strip() == json.dumps({"challenge": "p30-chal-777"}),
-              "status=%d body=%s" % (st, body[:80]))
+              st == 200 and echoed == "p30-chal-777",
+              "status=%d challenge=%r" % (st, echoed))
 
         st, body = http_post("http://127.0.0.1:%d/feishu/event" % fp,
                              json.dumps({"type": "url_verification", "token": "wrong",
@@ -591,13 +605,7 @@ def run_round(n, fake_base, base_url):
         check(pfx + "C1 未配 encrypt-key：未签名的飞书事件照样进得来（门不是恒关的）",
               ok_c1, "status=%d body=%s" % (st, body[:40]))
         im_clear()
-        st, body = http_post("http://127.0.0.1:%d/dingtalk/in" % gw2.ports["dingtalk"],
-                             json.dumps({"conversationId": "cid_c2", "senderId": "u",
-                                         "text": "p30c2marker"}))
-        check(pfx + "C2 未配 inbound-secret：钉钉未签名入站照样进得来",
-              st == 200 and outbound_contains("p30c2marker"), "status=%d body=%s" % (st, body[:40]))
         # 同一把密钥的回退：只配 secret 时，用 secret 签必须收
-        im_clear()
         ts = str(int(time.time() * 1000))
         st, body = http_post("http://127.0.0.1:%d/dingtalk/in" % gw2.ports["dingtalk"],
                              json.dumps({"conversationId": "cid_c3", "senderId": "u",
@@ -608,6 +616,22 @@ def run_round(n, fake_base, base_url):
     finally:
         gw2.terminate()
         gw2.close()
+
+    # ---- C2 再单独起一台：钉钉**一把密钥都没配**。
+    # 自定义机器人的 `secret` 同时是入站验签的回退密钥（钉钉《接收消息》口径，见
+    # DingTalkChannel.inboundKey），所以只摘 `inbound-secret` 的那台（gw2）照样会验 ⇒
+    # 第一跑把 C2 记成 401，坏的是我"摘 inbound-secret == 没配密钥"这个假设，不是产品。
+    gw3 = start_gateway("r%cn" % n, fake_base, base_url, with_keys=False, with_ding_secret=False)
+    try:
+        im_clear()
+        st, body = http_post("http://127.0.0.1:%d/dingtalk/in" % gw3.ports["dingtalk"],
+                             json.dumps({"conversationId": "cid_c2", "senderId": "u",
+                                         "text": "p30c2marker"}))
+        check(pfx + "C2 未配任何钉钉密钥：未签名入站照样进得来（门是配了密钥才关的，不是恒关）",
+              st == 200 and outbound_contains("p30c2marker"), "status=%d body=%s" % (st, body[:40]))
+    finally:
+        gw3.terminate()
+        gw3.close()
 
 
 # ===== 卫生 / 杠④ 口径 =====
