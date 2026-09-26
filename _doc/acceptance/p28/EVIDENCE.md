@@ -166,3 +166,210 @@ $ awk '/private void dispatch\(HttpExchange/,/^    \}$/' \
   `row_count_from` 记真实来源 `ModelCatalogCache#catalog()`，改缓存归口留给主编。
 
 （§2 起边做边补。）
+
+---
+
+# P28b —— 收口棒四杠实测 + 前棒在途断点定位
+
+工作树 `/private/tmp/zbot-wt-p28`，分支 `w13-p28`，收口 HEAD 见 P28b-8。
+本节只写 p28b 亲量到的东西；上文 §0/§1（p28a 的台账与 D-P28-1..3）未改一字。
+
+## P28b-0 开工实测 vs 工单"已知"（不符处以实测为准）
+
+工单 §0 的开工命令真跑了，逐条对账：
+
+| 工单"已知" | 实测 | 处理 |
+|---|---|---|
+| 前棒未提交 **3** 个路径 | `git status --porcelain` 出 **8** 行：`channel/HttpChannel.java`、`ui/RawTerminalReader.java`、`_doc/acceptance/p28/{EVIDENCE.md,ROUTES.tsv,HttpRouteLedgerTest.java,HttpRouteShapeTest.java,HttpSseContractTest.java,P28HttpFixture.java}` | 8 个全按显式路径提交：`311b970`（7 个）+ `406a542`（`web/index.html` 单独封存，P19 的地盘） |
+| @Test **1060 / 97** | 收口树 `grep -rho "@Test" --include='*.java' \| wc -l` = **1090**，文件 **101**；全仓 == `z-bot-core`（其余模块无测试源）；surefire 实跑 **1087 / 99 类** | 报告用实测量；差额（1090 标注 vs 1087 执行）是 `*Test` 之外的类里的注解，不计入分母 |
+| minimax key | 只允许量长度：`awk -F= '/^minimax\.api\.key=/{print length($2)}'` ⇒ **125**，值全程未读未印未拷 | — |
+| 杠④ 三格 `8 / 2dadaed0 / 690ddbc0` | 三时点各量一次，三次都是这三格（P28b-5） | 未动、未"调" |
+
+一处**量尺错误当场纠掉**：`ls ~/.zbot | wc -l` = **7**（`ls` 缺省不列点文件），而杠④ 的尺是
+`len(os.listdir())` = **8**（隐藏的 `.stty.bak` 计一项）。拿 7 那把尺去对 8 就会凭空造一条
+"少了 1 项"的假缺陷。`.stty.bak` 是不变量的一部分，**不许删**（删了才是动杠④）。
+
+## P28b-1 前棒死于 150 轮留下的两处硬断点（都定位到行）
+
+1. **全 reactor 编译不过**（工单说基线可编译，是过期读数）。`~/.cache/zbot-p28-lead/bar1_a0_prefix_fail_raw.log:66,68` 逐字：
+
+   ```
+   [ERROR] COMPILATION ERROR :
+   [ERROR] /private/tmp/zbot-wt-p28/z-bot-core/src/test/java/com/zifang/z/bot/channel/HttpSseContractTest.java:[377,23] constructor SseStream in class com.zifang.z.bot.channel.HttpSseContractTest.SseStream cannot be applied to given types;
+   ```
+
+   p28a 改 `HttpSseContractTest` 改到一半轮次用尽，`SseStream(HttpURLConnection)` 没写 ⇒ testCompile 直接挂，
+   四杠一条都跑不了。补回构造器：`c0b693a`。
+2. **一条恒红断言在结构上不可能绿**，而且红因在测试自己身上。HEAD=`c0b693a` 的三跑（`bar1_pre_ssefix_{a,b,c}.log`）
+   每次都红在同一条，`bar1_pre_ssefix_b.log:919` 逐字：
+
+   ```
+   [ERROR]   HttpSseContractTest.frameGrammarHoldsForEveryFrameOfARun:100 SSE 帧必须逐字节等于 "event: X\ndata: Y\n\n"，实到 event: step\ndata: Step 1\n
+   ```
+
+   服务端 `HttpChannel#frame()`（`HttpChannel.java:581`）写上线的是 `"event: X\ndata: Y\n\n"`，
+   而测试自己的切帧器 `next()` 写的是 `new String(b, 0, b.length - 1, ...)` —— 把帧分隔符的最后一个 `\n`
+   当"切分开销"砍掉了。砍掉之后 `:100` 的逐字节等式**恒不成立**，恒红的恰好是
+   "帧到底有没有以空行结束"这件最该被测的事。修完 `HttpSseContractTest` 9/9 绿（`e449dc6`，
+   收口三跑逐字见 P28b-2）。
+   这一条留给下一支写手：判"生产有缺陷"之前，先确认**断言自己的分帧没吃掉被测的那个字节**。
+3. 附带一处负载抖动，不是本棒引入的：`bar1_pre_ssefix_c.log:310-313`
+
+   ```
+   [ERROR] com.zifang.z.bot.mcp.McpRealStdioServerTest.zbotTransportHonoursItsOwnDeadlineWhileKernelBlocksInReadLine -- Time elapsed: 2.053 s <<< ERROR!
+       at ...McpRealStdioServerTest.java:366
+   ```
+
+   单独复跑 3/3 绿 ⇒ 判为负载相关的 900ms 档 deadline（P21 地盘，本棒不动）。
+   收口三跑该类 **3/3 全绿**（20.90 / 19.46 / 21.38 s），两次读数都留在这里。
+
+## P28b-2 杠①：全 reactor `mvn -o test` ×3（收口树 `e449dc6`）
+
+尺：`bash ~/.cache/zbot-p28-lead/bar1_run.sh <a|b|c>`，内部就是工单那一条
+`rm -rf z-bot-core/target/surefire-reports && mvn -o test`；判据 `python3 ~/.cache/zbot-integrate/b1parse.py`。
+三跑逐字：
+
+```
+BAR1PARSE .../bar1_a.log module_lines=1 class_lines=99 module_sum=1087 class_sum=1087 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+BAR1PARSE .../bar1_b.log module_lines=1 class_lines=99 module_sum=1087 class_sum=1087 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+BAR1PARSE .../bar1_c.log module_lines=1 class_lines=99 module_sum=1087 class_sum=1087 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+```
+
+`BAR1_HEAD=e449dc690aa4b888e84d3ff7e19de23885e0fe5f` ×3，`BAR1_MVN_RC=0` ×3，
+`[INFO] Tests run: 1087, Failures: 0, Errors: 0, Skipped: 0` ×3；
+`HttpSseContractTest` `Tests run: 9, Failures: 0` ×3（就是 P28b-1(2) 那条，修完三跑都绿）。
+时间片：a 19:28:27→19:29:31，b 19:29:31→19:30:31，c 19:30:31→19:31:37。
+
+## P28b-3 杠②：`LEDGER.tsv` 10 条，记号分布 **RED-OK 6 / SURVIVED 4**
+
+harness `~/.cache/zbot-p28-lead/p28b_mutation.py`（mtime 19:24:20）机器生成
+`_doc/acceptance/p28/LEDGER.tsv`（mtime **19:26:38**，晚于 harness）；台账字段
+`id/name/file/gate/marker/evidence/bytecode_proof`，记号只用了允许集里的两种。闸门逐字：
+
+```
+LOCK_ACQUIRED /Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock
+BACKUP _doc/acceptance/p28/ROUTES.tsv md5=1ceb6af8 -> .../mutbak/_doc__acceptance__p28__ROUTES.tsv
+BACKUP z-bot-core/src/main/java/com/zifang/z/bot/channel/HttpChannel.java md5=e4bd2a3a -> ...
+BACKUP z-bot-core/src/main/java/com/zifang/z/bot/ui/RawTerminalReader.java md5=9c6683ff -> ...
+RESTORED_ALL {'ROUTES.tsv': '1ceb6af8', 'HttpChannel.java': 'e4bd2a3a', 'RawTerminalReader.java': '9c6683ff'}
+LEDGER=/private/tmp/zbot-wt-p28/_doc/acceptance/p28/LEDGER.tsv mtime=19:26:38 harness_mtime=19:24:20
+TALLY {'RED-OK': 6, 'SURVIVED': 4} TOTAL=10
+```
+
+- **注入进了字节码**：9 条源码级变异每条带 `class_md5` "前值->后值"，前值取的是**上一次构建出的那个 class**
+  （M1 `68a621bf->26d6a60d`，M2 `26d6a60d->65219b43`，M3 `65219b43->80ebb1c3`，M4 `80ebb1c3->c123a988`，
+  M5 `c123a988->70c7e768`；HttpChannel 一支 M6 `2358ca09->ef33842d`→M8 `43d3b31e->fac00b66`）——
+  相邻两值必不相同 ⇒ 每次注入都真的重新编译并换了字节，不是"改了源码没进 class"那种假注入。
+  另一侧的自证是 **M10 的前值回落到 `68a621bf`（= M1 的前值 = 基线）**：说明 M1..M5 之后源码确实被还原回了基线，
+  否则 M10 量不到同一个前值。M9 注的是台账文件本身，不涉及字节码 ⇒ 老实记 `file_md5=8af6e08c`，不冒充 class_md5。
+- **还原**：三处 BACKUP md5 与 RESTORED_ALL md5 逐格相同；本棒另用 `git diff --stat HEAD` 对这三个文件
+  **独立复算**了一次为空（不只信 harness 自报）。全程没有用 `checkout/restore/reset`。
+- **负向断言带阳性对照，两支**：
+  M2 把 `EXTERNAL_WAIT_TIMEOUT_MS`（`RawTerminalReader.java:79`）抬成 `Long.MAX` 并在 PATH 前面摆一个
+  永不退出的假 `stty` ⇒ `verdict raw=None rc=KILLED wall=40.00`（被 harness 的墙钟砍掉），
+  证明"有界等待"这支尺真有牙；M5 是**故意做的等价变异**（`isSttyAvailable()` 直接 `return true`，
+  macOS 上恒真 ⇒ 等价）判 `SURVIVED`，用来钉住"全绿不等于杀得掉"。
+- **4 个 SURVIVED 的成色分三类，如实写、不糊**：
+  - **M5**：设计上就该活（等价变异阳性对照）。
+  - **M6 摘掉台账的 404 门 / M7 摘掉 405 的 `Allow` 头**：`mvn` 仍 `rc=0` ⇒ **真覆盖缺口**。
+    本期新增的 `HttpRouteLedgerTest`/`HttpSseContractTest` 钉住了台账同源与帧语法，没钉 404/405 的响应形状。
+    进 P28b-7 未做清单，不写成"已过"。
+  - **M10 终端私有表（`RawTerminalReader.java:36` 那 9 条）里删 `/theme`**：唯一能抓它的是杠③ S4c
+    （真 REPL 帮助表，走 shaded jar），本棒没把 `mvn -o package` 接进变异回路 ⇒ 记"未覆盖"，不记"杀不掉"。
+
+## P28b-4 杠③：真进程 / 真 PTY，3 次独立跑，每次 **27/27**
+
+尺：`python3 ~/.cache/zbot-p28-lead/p28b_pty_e2e.py <tag>`。七支各自测一件事：
+S1 真 PTY（`os.openpty()`，子进程 stdin 接 sfd，探针主体 `src/test/java/com/zifang/z/bot/ui/RawTerminalVerdictProbe.java`
+放在同包里以吃 package-private），S2 无 tty（管道），S3 PATH 下摆挂死的假 `stty`，S4 真 REPL（shaded jar），
+S5 `z-bot serve` 真进程 HTTP（只绑 `127.0.0.1` 空闲口 + `--config-dir` 临时 profile + `stub-key-not-real`），
+S6 杠④ 跑前跑后，S7 key 卫生。三跑读数：
+
+```
+CHECKS=27 FAILED=0 TAG=b
+CHECKS=27 FAILED=0 TAG=c
+CHECKS=27 FAILED=0 TAG=f
+```
+
+run `f` 是在收口树（`E2E_HEAD=e449dc6…`，`E2E_DIRTY_ROWS=0`，先 `mvn -o package -DskipTests` 且
+`PREFLIGHT jar_mtime=19:32:26 stale_src=0`）重跑的，b/c 是同一棵生产树上的前两跑；跑完 `git status --porcelain` 仍为空。
+关键几条逐字（run f，run b/c 同判）：
+
+```
+PASS   S1b stty raw 真切过去（判词 DONE 且 rawMode=true） | raw_verdict=DONE raw_mode=true
+PASS   S1c 真 stdin 字节往返：Tab 把 /stat 补成 /status | PROBE_LINE=/status\n
+PASS   S2a 无 tty 时判词是 NONZERO_EXIT（而不是 DONE/超时） | raw=NONZERO_EXIT raw_mode=true
+PASS   S3a 阳性对照：假 stty 真被子进程用到（构造耗时贴着 5s 档） | construct_ms=5025
+PASS   S3b 有界等待起作用：整跑 60s 内回来（旧无参 waitFor 会挂满 60s） | rc=0 wall=5.27
+PASS   S3c 超时后仍把真字节读回来（不挂、不吞输入） | raw_mode=true line=/after-poison\n raw_verdict=TIMED_OUT
+PASS   S4b 注册表派生命令真出现在 TUI 帮助里（7 个抽样全到） | hit=7/7 missing=[]
+PASS   S5b 接缝如实记账：/api/commands 现在还不存在（404） | code=404 body=b'{"ok":false,"error":"not found: /api/commands"}'
+```
+
+**可测性边界（NO-RUN，不当 passed）**：本环境是无终端的后台会话，脚本能给判据的只到
+"raw 真切过去 + 真 stdin 字节往返 + 有界等待 + 帮助表可见"这一层。真 tty 下的人机行为
+——光标/选择区重绘、Ctrl-R 历史、SIGWINCH 自适应、肉眼比对回显是否单份—— **NO-RUN**，
+理由：这些行为没有可信的机读判据（要人在环），硬凑断言只会造出一条永远绿的假尺。
+另有一处读法教训记在这里以免被误读：S4 抽样第一版报"7 条只中 4 条"，追下去是**我的读法
+在表格中段提前 break**，不是命令表缺项；改成 `drain_quiet()` 整表读完 ⇒ 7/7。
+
+## P28b-5 杠④：三时点各量一次，三格未动
+
+| 时点 | entries | `config.properties` md5[:8] | `state.db` md5[:8] | 是否落盘 |
+|---|---|---|---|---|
+| 开工 T1 | 8 | 2dadaed0 | 690ddbc0 | 只打在会话控制台，**未 tee** ⇒ 本节里它是最弱的一格，只作参考 |
+| E2E 在飞 T2 | 8 | 2dadaed0 | 690ddbc0 | `bar3_run_{b,c}.log:2,38` 各打 BEFORE/AFTER 一对，run f 再一对（共 3 对 6 行） |
+| 收尾 T3 | 8 | 2dadaed0 | 690ddbc0 | `~/.cache/zbot-p28-lead/bar4_t3_final.log`（19:29:09） |
+
+逐字（T3）：
+
+```
+BAR4_T3 entries=8 md5={"config.properties": "2dadaed0", "state.db": "690ddbc0"}
+BAR4_T3 names=[".stty.bak", "config.properties", "cron", "memories", "models-cache.json", "sessions", "state.db", "workspace"]
+```
+
+即：E2E（真 PTY + 真 serve + 真 REPL）跑完不新增项（S1e），`stty` 备份落在本次私有路径
+`/var/folders/.../zbot-stty-*.bak` 且 close 后 `PROBE_BACKUP_EXISTS=false`（S1d），
+`~/.zbot` 那 8 项一个字节都没被这期的改动动过（S6 断言 + T2/T3 六个读数互证）。
+
+## P28b-6 本棒新增缺陷与观察（p28a 的 D-P28-1..3 在上文）
+
+- **D-P28b-1（生产缺陷，已修 `5e3b6e1`）：raw 模式在真终端上其实从没切成功过。**
+  `runBounded` 用 `ProcessBuilder` 起 `stty`，缺省 stdin 是**管道**；BSD `stty` 拿 **fd 0 这个对象**
+  做切换 ⇒ 真终端上也永远 `not a tty`，判词恒 `NONZERO_EXIT`。可观测证据（改前的真 PTY 探针）：
+  父端同时收到 tty 回显 **与应用回显的双份字节**（raw 没切走的指纹），且 `PROBE_RAW_VERDICT=NONZERO_EXIT`。
+  加 `.redirectInput(ProcessBuilder.Redirect.INHERIT)`（`RawTerminalReader.java:121`）之后判词 `DONE`、
+  `PROBE_RAW_MODE=true`、回显单份（S1a/S1b）。
+  为什么全绿的旧基线看不见它：单测只测字符串方法，够不到 **fd 继承语义** ⇒ 必须真 PTY（杠③）。
+  这条也是杠② M1 的靶子：把这一行摘掉，M1 立刻 `NONZERO_EXIT` 判红（`RED-OK`）。
+- **D-P28b-2（观察，本棒未改）：判词说"没切成"时 `rawMode` 仍是 `true`。**
+  S3c 实测：假 `stty` 挂死 ⇒ `raw_verdict=TIMED_OUT` 而 `raw_mode=true`，字节照样读回来（不挂不吞）。
+  也就是上层可见的标志位说的是"我以为切了"，判词说的是"它到底切没切"，两者不一致。
+  未改的理由：要在超时分支补回滚，回滚本身就得再叫一次正挂死的那支 `stty`；
+  "不回滚更安全"还是"必须回滚"要主编裁，本棒不猜着改。
+- **P28b-W1（web 侧，归 P19，本棒按约未碰 `index.html`）**：`newSession()` 在 `web/index.html`
+  里**声明了两次**（`:911` 与 `:1243`；JS 函数声明提升 ⇒ 后一个覆盖前一个，生效的是 `:1243`，
+  已用 node 单独实证"后声明赢"）。真进程侧从服务端吐出的字节再量一次同样 `dups=['newSession']`（S5g），
+  两个口径各成立一次。连带 web 的 `/new`、`/clear` 是否真在服务端建/清会话未裁（见 `WIRING.md` §3.6）。
+
+## P28b-7 未做 / 未覆盖（点名，不留白）
+
+1. **M6/M7 是真缺口**：`HttpChannel` 的 404 门与 405 `Allow` 头没有任何断言钉着 —— 杠② 那 2/10 杀不掉就是它俩。
+2. **M10 未接进变异回路**：终端私有 9 条命令表要能被杀，得把 `mvn -o package` 塞进 harness（本棒没做，代价已写明）。
+3. `/status`、`/confirm` 的跨端字段口径未对账（`WIRING.md` §5 已把问题原样交给 P19）。
+4. `/api/commands` 本棒**只记接缝不实现**：真进程 404（S5b 逐字）+ 全仓字符串双口径零命中（`WIRING.md` §2）。
+5. 真 tty 人机体验类行为：NO-RUN，理由见 P28b-4 末段。
+6. `McpRealStdioServerTest:366` 的 900ms 抖动：P21 地盘，本棒只留两次读数（改前 1/3 红、收口 3/3 绿）。
+
+## P28b-8 现场保全与红线自证
+
+- **第一动作是保存现场**：`311b970`（7 个显式路径）→ `406a542`（`web/index.html` 单独封存给 P19），
+  之后才有第二次动作。此后全程**未用** `checkout/clean/restore/stash/reset --hard`。
+- 注入还原只用本次运行前 cp 的副本 + md5 对账，并独立复算（P28b-3）。
+- 未 push；未把本分支往 main 上并（`114b37f` 只把 `main`=`f237a25` 并进来，反向零操作）；
+  未改 `_doc/hermes-roadmap.md`；未改 `slash/SlashRegistry.java`、`web/index.html`。
+- 持久产物全在 `~/.cache/zbot-p28-lead/`（`.log` 被 `.gitignore` ⇒ 决定性读数原样贴进本文件），未写 `/tmp`。
+- 假 HTTP 走自写 `ServerSocket`+`bind(0)`+`Connection: close`，未用 `com.sun.net.httpserver`；
+  无 `pip install`/`npm i`，无守护进程，未打真厂商 API。
+- 收口提交序列（自旧到新）：`311b970` → `406a542` → `114b37f`(merge main) → `c0b693a` → `5e3b6e1` →
+  `d8f914e`(WIRING.md) → `e449dc6`(SSE 帧切分修 + LEDGER.tsv)。
