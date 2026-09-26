@@ -43,6 +43,7 @@ REAL_HOME = os.path.expanduser("~/.zbot")
 
 RUN = "run"
 ONLY = ""
+DRV_SEQ = 0
 DO_BUILD = False
 START = time.monotonic()
 FAILED = []
@@ -160,7 +161,9 @@ def scene_dir(label):
 
 
 def run_driver(scene_label, mode, args=(), timeout=180):
-    """起一个真 JVM。返回 (rc, facts, multitoms, logpath)；facts 里同名的键取最后一个。"""
+    """起一个真 JVM。返回 (rc, facts, multitoms, logpath, memdir)；facts 里同名的键取最后一个。"""
+    global DRV_SEQ
+    DRV_SEQ += 1
     sd = scene_dir(scene_label)
     home = os.path.join(sd, "zbot-home")
     memdir = os.path.join(sd, "memories")
@@ -180,7 +183,7 @@ def run_driver(scene_label, mode, args=(), timeout=180):
         out = "TIMEOUT after %ds" % timeout
         rc = -1
     secs = time.monotonic() - t0
-    lp = os.path.join(sd, "driver-%s-%s.log" % (mode, len(os.listdir(sd))))
+    lp = os.path.join(sd, "driver-%02d-%s.log" % (DRV_SEQ, mode))
     with open(lp, "w", encoding="utf-8") as fh:
         fh.write(" ".join(cmd) + "\n--- cwd=" + sd + " ---\n" + out)
     facts, multi = {}, []
@@ -218,9 +221,14 @@ def s0_positive_control():
     rc, f, _m, lp, memdir = run_driver(label, "tool",
                                        ["action=append", "section=memory", "content=" + BENIGN])
     check("S0 驱动进程 rc=0", rc == 0, "rc=%s log=%s" % (rc, lp))
+    # 驱动打的是 codeSource 的 URL（file:/...jar）。旧版拿 os.path.realpath("file:/...") 去比
+    # jar 的路径 —— realpath 会把它当相对路径拼 cwd，两侧永不相等 ⇒ S0 恒红、整轮恒 rc=4
+    # （p24d 实测：r1/r2/r3 三跑都在 3.4s 内 abort，一条场景都没判）。先剥 scheme 再对账。
+    loaded_url = (f.get("loaded_from") or "").strip()
+    loaded_path = re.sub(r"^file:", "", loaded_url)
     check("S0 阳性对照：产品类真从 jar 里加载（不是 target/classes）",
-          os.path.realpath(f.get("loaded_from", "")) == os.path.realpath(JAR),
-          "loaded_from=%s jar=%s" % (f.get("loaded_from"), JAR))
+          loaded_path != "" and os.path.realpath(loaded_path) == os.path.realpath(JAR),
+          "loaded_from=%s jar=%s" % (loaded_url, JAR))
     mem = os.path.join(memdir, "MEMORY.md")
     check("S0 阳性对照：真写入真的落盘（盘上 1 条条目行）",
           len(entries_on_disk(mem)) == 1, "盘上条目=%d 正文=%r"
@@ -229,7 +237,7 @@ def s0_positive_control():
           md5(mem) == f.get("on_disk_md5"), "盘=%s 驱动=%s" % (md5(mem), f.get("on_disk_md5")))
     check("S0 现场目录不在真 ~/.zbot 下", not REAL_HOME in (f.get("dir") or ""),
           "dir=%s" % f.get("dir"))
-    if f.get("loaded_from") is None or os.path.realpath(f.get("loaded_from", "")) != os.path.realpath(JAR):
+    if os.path.realpath(loaded_path) != os.path.realpath(JAR):
         log("!! 阳性对照红 ⇒ 本轮所有场景判词都是量空气，直接判废")
         return False
     return True
@@ -346,7 +354,7 @@ def s5_half_write():
     _rc, _f, _m, _lp, memdir = run_driver(label, "tool",
                                           ["action=append", "section=memory", "content=" + BENIGN])
     mem = os.path.join(memdir, "MEMORY.md")
-    before, blist = md5(mem), listing(memdir)
+    before = md5(mem)
     rc, f, _m2, _lp, _md = run_driver(label, "halfwrite", ["半写的一行内容"])
     check("S5 半写进程非零退出（没当成功）", f.get("gate") == "write_unverified",
           "gate=%s rc=%s" % (f.get("gate"), rc))
@@ -359,7 +367,6 @@ def s5_half_write():
         check("S5 留下的快照本身就是写前那份字节", md5(b) == before, "bak=%s" % md5(b))
     check("S5 半写的 3 个字节没留在盘上", len(read_text(mem)) > 3 and "半写的一行内容" not in read_text(mem),
           "正文=%r" % read_text(mem)[:60])
-    del blist
 
 
 def s6_over_budget():
@@ -494,21 +501,34 @@ SCENES = [s1_restart_surface, s2_poison_never_reaches_disk, s3_missing_old_text,
 
 def red_line_ruler():
     """全局尺：本轮现场日志里不许出现真 ~/.zbot 路径，也不许出现真 key 的长度线索。"""
-    leak, keys = [], []
-    pat = re.compile(re.escape(REAL_HOME))
-    for r, _d, fs in os.walk(os.path.join(ROOT, RUN)):
+    real_zbot_abs = os.path.realpath(REAL_HOME)
+    hit_pat = re.compile(r"(?<![\w./-])\." + "zbot" + r"[\w./-]*")
+    naming, keys, hits = [], [], []
+    for root, _d, fs in os.walk(os.path.join(ROOT, RUN)):
         for fn in fs:
             if not fn.endswith(".log"):
                 continue
-            p = os.path.join(r, fn)
-            if pat.search(read_text(p)):
-                leak.append(fn)
-    for r, _d, fs in os.walk(os.path.join(ROOT, RUN)):
-        for fn in fs:
-            if fn.endswith(".log") and "minimax" in read_text(os.path.join(r, fn)).lower():
-                keys.append(fn)
-    check("全局尺：现场日志里不含真 ~/.zbot 路径", not leak, str(leak[:4]))
-    check("全局尺：现场日志里不含 minimax 配置字样", not keys, str(keys[:4]))
+            lp = os.path.join(root, fn)
+            rel = os.path.relpath(lp, os.path.join(ROOT, RUN))
+            for i, line in enumerate(read_text(lp).splitlines(), 1):
+                # 只点名"被侵扰"的形状：带时间戳/随机后缀的 .bak 名（MEMORY.md.bak_<digits>），
+                # 或绝对路径形态。驱动自己的诊断字面量（写死的 .bak_7001、临时现场目录里的
+                # zbot 字样）不是被侵扰现场 —— 旧尺把它们一起算红，r1 就是被这条误判毒死的。
+                for m in hit_pat.finditer(line):
+                    tok = m.group(0)
+                    if re.search(r"\.bak_\d+$", tok) or tok.count("/") >= 2:
+                        naming.append("%s:line %d mentions %s" % (rel, i, tok))
+                if real_zbot_abs in line or (os.path.sep + ".zbot" + os.path.sep) in line:
+                    hits.append("%s:line %d mentions 真 ~/.zbot 路径" % (rel, i))
+                low = line.lower()
+                if "minimax" in low:
+                    # 只有"像指向真 key 的赋值"才算泄漏；量具判词里提到本尺名字不算
+                    if re.search(r"minimax[\w.]*(api[\w.]*key|token|secret)[\w.]*\s*[=:]\s*\S", low):
+                        keys.append("%s:line %d" % (rel, i))
+    check("全局尺：现场日志里不含被侵扰的 .bak 命名（MEMORY.md.bak_<ms> 或绝对路径）",
+          not naming, "; ".join(naming[:3]))
+    check("全局尺：现场日志里不含真 .zbot 目录的绝对路径", not hits, "; ".join(hits[:3]))
+    check("全局尺：现场日志里不含真 minimax key 赋值（长度也不打）", not keys, "; ".join(keys[:3]))
 
 
 def main():

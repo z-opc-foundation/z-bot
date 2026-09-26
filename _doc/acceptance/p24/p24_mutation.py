@@ -222,9 +222,14 @@ MUTANTS = [
       "MemoryStoreContractTest#externalEditBlocksEntryWriteAndLeavesEvidence"],
      "手编的散文照样能往返，只判往返抓不到它 —— 而整页刷出去就会丢掉它"),
 
+    # p24d 修订：前棒这一支是把 `Files.copy(...)` 整条删掉，结果撞 javac 的
+    # "catch (IOException) 里的异常永不被抛"⇒ 编译不过，台账只能记 INJECTION_NOT_APPLIED（run1 实测）。
+    # 改成"包一层恒假条件"：copy 调用还在（catch 依旧可达、编得过），但真漂移时一枚快照都不落。
     ("D2 漂移拒写但不留取证", "D-漂移判定", "drift",
      "            Files.copy(target.toPath(), bak.toPath());",
-     "            // (mutant) 不落取证快照", 1,
+     "            if (Files.size(target.toPath()) < 0) {\n"
+     "                Files.copy(target.toPath(), bak.toPath());\n"
+     "            }", 1,
      ["MemoryDriftGuardTest#signalShapeCatchesManuallyAppendedProse",
       "MemoryStoreContractTest#externalEditBlocksEntryWriteAndLeavesEvidence",
       "MemoryToolsContractTest#driftBackupPathReachesTheCallerThroughTheTool"],
@@ -567,6 +572,16 @@ def run_named(named):
                 failing.add("%s#%s" % (tc.get("classname").split(".")[-1],
                                        tc.get("name").split("[")[0]))
     return rc, failing, ran, out, time.time() - t0, sel
+
+
+COMPILE_ERR = re.compile(r"COMPILATION ERROR|Compilation failure")
+
+
+def looks_like_compile_error(out):
+    """`mvn -q` 会把 [INFO] 级的 "COMPILATION ERROR:" 头压掉，但 [ERROR] …: Compilation failure
+    还在（-q 只留错误级）⇒ 用这两个字样判"编译不过"。刻意不收 `error:` 这种松字样：
+    surefire 的失败堆栈里也可能出现它，松字样会把真红的一支误翻成 INJECTION_NOT_APPLIED。"""
+    return bool(COMPILE_ERR.search(out or ""))
 
 
 def compile_only():

@@ -1,8 +1,75 @@
-# P24 记忆与身份面 —— 证据台账（写手：第 10 棒 / 分支 `w10-p24` / 基线 `main = 53222e1`）
+# P24 记忆与身份面 —— 证据台账（写手：第 10 棒 p24a 主体码 / 收口棒 p24d 四杠 / 分支 `w10-p24`）
 
-STATUS: 进行中（§0—§3 已实测）
+STATUS: p24a 已交 §0—§3（主体码 + 契约设计）；p24d 交 §0-b 开工复算与 §4—§8 四杠实测。
+基线变化：p24a 起笔时 `main = 53222e1`；p24d 开工时 `main = 9ade134`（已并 p22/p23/p14/p26），
+本棒 §2.2 已把 main 并进 `w10-p24`（见 §0-b），杠①②③④ 全部在合并后的树上量。
 
 约定：本节所有读数均为**本机当次命令的原始输出照抄**，非工单转述。工单头部读数与我实测冲突的，两行并列、以盘上为准。
+`.log` 被 `.gitignore` ⇒ 决定性读数一律原样贴进本文件（本文件是被跟踪的）。
+
+---
+
+## §0-b p24d 开工复算（工单 §0 那组命令的原始输出）
+
+工单写"HEAD=`3d7e58b`、父是 `53222e1`、两个未跟踪文件"。**开工第一件事照抄工单 §0 的命令跑了一遍**：
+
+```
+$ cd /private/tmp/zbot-wt-p24 && date && git log --oneline -1 && git rev-parse --short HEAD \
+  && git status --porcelain \
+  && git grep -c '@Test' HEAD -- z-bot-core/src/test | awk -F: '{s+=$NF} END{print "committed_at="s}' \
+  && git diff --numstat $(git merge-base HEAD main) HEAD | awk '{i+=$1;d+=$2} END{print "ins="i" del="d}' \
+  && find z-bot-core/src/main/java/com/zifang/z/bot/memory -name '*.java' | wc -l \
+  && wc -l z-bot-core/src/main/java/com/zifang/z/bot/memory/*.java | tail -1
+Sat Sep 26 17:51:12 CST 2026
+3d7e58b P24 记忆与身份面 第一档：memory/ 从 224 行/0 契约做成 1677 行/9 文件 + 91 支测试（新增 87）…
+3d7e58b
+?? _doc/acceptance/p24/p24_mutation.py
+?? z-bot-core/src/test/java/com/zifang/z/bot/memory/MemoryE2eDriver.java
+committed_at=822
+ins=3341 del=63
+       9
+    1677 total
+```
+
+与工单逐条对账：
+
+| 项 | 工单读数 | p24d 实测 | 判定 |
+|---|---|---|---|
+| HEAD | `3d7e58b` | `3d7e58b` | 一致 |
+| 未跟踪文件 | 两个（p24_mutation.py / MemoryE2eDriver.java） | 同两个，一字未多一字未少 | 一致 ⇒ 本棒第一步就是把它俩提交，之后不碰 `checkout/clean/restore` |
+| memory/ 体量 | 1677 行 / 9 文件 | `1677 total` / `9` | 一致 |
+
+**工单没写、而我量出来不一样的三条（都记在这里，不当场改口径）：**
+
+1. **`@Test` 总数在合并树上被工单那把尺高估 2 条**：工单 §0 的 `git grep -c '@Test'` 在
+   `53222e1..3d7e58b` 上给 822（与 p24a 记的 735→822 一致），但并完 main 之后给 **1006**，
+   而杠① 三跑真跑到的测试是 **1004** 条。差额不是漏跑，是那把尺把**注释里的 `@Test`** 也算了：
+   ```
+   loose=$(git grep -c '@Test' HEAD -- z-bot-core/src/test | awk …)            # 1006
+   strict=$(git grep -cE '^[[:space:]]*@Test' HEAD -- z-bot-core/src/test | awk …)   # 1004
+   files_with_diff: 2
+     z-bot-core/src/test/java/com/zifang/z/bot/llm/P26RetryPolicyTest.java  loose=34 strict=33
+     z-bot-core/src/test/java/com/zifang/z/bot/memory/MemoryE2eDriver.java  loose=1  strict=0
+   ```
+   `MemoryE2eDriver.java` 那一条是 javadoc 里的 `{@code @Test}`（它**不是测试**），
+   `P26RetryPolicyTest` 那条是注释。⇒ 本棒把"测试面真值"统一按 `strict=1004` 记，
+   并要求它等于杠① 的类级求和（确实相等，见 §4）。`p24_mutation.py` 的 `#suite_total` 用的还是
+   工单那把松尺（1006），差 2 条属已知口径差，见 §8。
+2. **`git merge --ff-only main` 在实测中不可行**（工单 §2.2 建议的那一步）：`w10-p24` 上有两枚
+   main 没有的提交（`3d7e58b` 主体码、`3f2b27b` 遗物提交），ff 只能往前不能往旁，实测
+   `fatal: Not possible to fast-forward, aborting.`（rc=128）。⇒ 改用两父合并
+   `git merge --no-edit main`（rc=0，`568903a`），**先验证两侧改动文件交集为空**才敢动：
+   ```
+   $ comm -12 <(git diff --name-only 53222e1 3d7e58b|sort) <(git diff --name-only 53222e1 main|sort)
+   （空输出 = 交集为空 ⇒ 无冲突）
+   ```
+3. **杠④ 三个不变量开工读数与工单一致**（T0，`date` = 2026-09-26 17:51:33 +0800）：
+   `ls -A ~/.zbot | wc -l` = **8**、`md5 -q ~/.zbot/config.properties|cut -c1-8` = **2dadaed0**、
+   `md5 -q ~/.zbot/state.db|cut -c1-8` = **690ddbc0**。清单：`.stty.bak config.properties cron
+   memories models-cache.json sessions state.db workspace`。三时点全表见 §7。
+
+ff 后的新尺（同一组命令，HEAD=`568903a`+量具修订 `f28326e`）：`committed_at=1006`（松尺）/
+`strict=1004`（等于真跑到的条数）、memory/ 仍 1677 行 9 文件。
 
 ---
 
@@ -14,37 +81,135 @@ STATUS: 进行中（§0—§3 已实测）
 
 ## §4 杠① 三跑（`rm -rf surefire-reports && mvn -o test`，全 reactor、无 `-pl`）
 
-STATUS: 未跑
+判绿用**双尺**（工单 §2.3）：模块级 `Tests run:` 求和与类级 `-- in ` 行求和必须同数。
+日志在 `~/.cache/zbot-p24-lead/bar1_{a,b,c}.log`（`.log` 不被跟踪 ⇒ 结论照抄在这里）。
+
+```
+$ cd /private/tmp/zbot-wt-p24 && for x in a b c; do rm -rf z-bot-core/target/surefire-reports; mvn -o test > ~/.cache/zbot-p24-lead/bar1_$x.log 2>&1; done
+$ python3 ~/.cache/zbot-integrate/b1parse.py ~/.cache/zbot-p24-lead/bar1_{a,b,c}.log; echo parse_rc=$?
+BAR1PARSE …/bar1_a.log module_lines=1 class_lines=91 module_sum=1004 class_sum=1004 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+BAR1PARSE …/bar1_b.log module_lines=1 class_lines=91 module_sum=1004 class_sum=1004 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+BAR1PARSE …/bar1_c.log module_lines=1 class_lines=91 module_sum=1004 class_sum=1004 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+parse_rc=0
+```
+
+三跑的起止与 rc（同一次命令里落的 meta 文件，`date` 现量）：
+
+```
+$ cat ~/.cache/zbot-p24-lead/bar1_a.meta ~/.cache/zbot-p24-lead/bar1_bc.meta
+start=2026-09-26 17:53:45 +0800
+rc=0
+end=2026-09-26 17:54:53 +0800
+start_17:55:32 run=b
+rc_b=0
+end_17:56:36
+start_17:56:36 run=c
+rc_c=0
+end_17:57:42
+```
+
+**不信 `b1parse.py` 一把尺，另用 grep 独立复算**（同一批日志）：
+
+```
+$ for x in a b c; do echo "run $x: module_tests=$(grep -cE '^\[[A-Z]+\] Tests run:' …) …"; done
+run a: module_tests=92 cls_lines=91 sum_mod=1
+run b: module_tests=92 cls_lines=91 sum_mod=1
+run c: module_tests=92 cls_lines=91 sum_mod=1
+$ grep -h "^\[INFO\] BUILD" bar1_{a,b,c}.log
+[INFO] BUILD SUCCESS     ×3
+$ grep -cE 'BindException|Connection refused|SocketTimeout|Broken pipe|Too many open files' bar1_a.log
+0
+```
+
+（`92 = 91 类级 + 1 模块级`，与工单 §2.3 说的"模块摘要行前缀会在失败时翻成 `[ERROR]`"同源：
+这里 `[A-Z]+` 通配，两把尺都对上。）
+
+本期新增的 7 个记忆测试类在三跑里的逐类读数（run a 的原始行照抄，未删一字）：
+
+```
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.013 s -- in com.zifang.z.bot.memory.MemoryDriftGuardTest
+[INFO] Tests run: 18, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.068 s -- in com.zifang.z.bot.memory.MemoryToolsContractTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.010 s -- in com.zifang.z.bot.memory.MemoryIdentityContractTest
+[INFO] Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.002 s -- in com.zifang.z.bot.memory.MemoryContentScanTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.011 s -- in com.zifang.z.bot.memory.MemoryStoreTest
+[INFO] Tests run: 22, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.035 s -- in com.zifang.z.bot.memory.MemoryStoreContractTest
+[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.001 s -- in com.zifang.z.bot.memory.MemoryWriteGateTest
+```
+合计 91 支（12+11+13+22+11+18+4），与 p24a §3 具名清单逐类对上，一字不差。
+`MemoryE2eDriver.java` 在 src/test 里、无 `@Test` ⇒ 被编译但不被 surefire 收（这是它该有的形状，
+杠③ 靠它起真 JVM）。
+
+**三跑是不是同一件事？** 把计时列剥掉之后对逐类行排序取 md5，三跑完全同一个指纹：
+
+```
+$ for x in a b c; do grep -E -- '-- in ' bar1_$x.log | sed -E 's/, Time elapsed: [0-9.]+ s//' | sort | md5 -q; done
+3e9093d24f7359da06eff65fd2c3a2d2
+3e9093d24f7359da06eff65fd2c3a2d2
+3e9093d24f7359da06eff65fd2c3a2d2
+$ for x in a b c; do …类级 Tests run 求和…; done
+run a 类级求和=1004
+run b 类级求和=1004
+run c 类级求和=1004
+```
+
+**杠① 判定：三跑全绿。** 1004 条 / 91 类 / F=0 E=0 S=0 / BUILD SUCCESS / 网络类异常 0 命中，
+且 1004 = §0-b 的 `strict @Test` 真值（松尺 1006 多的那 2 条是注释里的 `@Test`）。
+
 
 ---
 
 ## §5 杠② 变异注入（`p24_mutation.py`，五档 + 冻结预期红集 + 共享锁）
 
-STATUS: 未跑
+STATUS: 已跑（18:26:02→18:33:35 整轮，HEAD=f283614 树；台账由 `p24_mutation.py` 机生成，见 §9 全文）
+记号分布（台账 `#tally` 行原样）：KILLED=27 | RED-OK=0 | SURVIVED=1 | PARTIAL=1 | INJECTION_NOT_APPLIED=0
+注入证明：`#byte_proof_ok_rows=29` / `#mutants_injected=29`（每一支都在还原前先做 javap 反汇编指纹比对）
+D2（漂移拒写但不留取证）本轮由 run1 的 INJECTION_NOT_APPLIED 转为 **KILLED**，具名 3 条：
+MemoryDriftGuardTest#signalShapeCatchesManuallyAppendedProse, MemoryStoreContractTest#externalEditBlocksEntryWriteAndLeavesEvidence, MemoryToolsContractTest#driftBackupPathReachesTheCallerThroughTheTool
+两条未杀：I3=SURVIVED、D5=PARTIAL —— 逐条代码级判词见 §9 杠②。
 
 ---
 
+
 ## §6 杠③ 真进程 E2E（`p24_e2e.py` ≥3 整跑）
 
-STATUS: 未跑
+STATUS: 已跑（三整跑 r1/r2/r3，18:33:56→18:34:18，HEAD=f283614 树，全部 `--build` 现打包真构件）
+每跑逐字读数（`=== E2E SUMMARY ===` 行）：`scenes=11 failed_checks=0 []`，进程 rc=0
+每跑绿判词数=76，红判词数=0，全局红线尺 3 条判词全绿
+三跑判词集合指纹（场景名+判词名拼接取 md5）三跑相同：`f531249ae7df1d1bc4fb73a4b0fc0ba2`
+S0 阳性对照闸门三跑均真过（产品类确实从 `z-bot-core/target/z-bot-core.jar` 加载，不是 target/classes）
+场景清单与逐条判词见 §9 杠③。
 
 ---
 
 ## §7 杠④ `~/.zbot` 三时点对账
 
-STATUS: 未跑
+STATUS: 已跑（三时点，读数以 §9 杠④ 为准）
+T0 开工（17:5x）= 8 / 2dadaed0 / 690ddbc0；T1 跑完杠②（18:33:35 现测）= 8 / 2dadaed0 / 690ddbc0 / 夹具 0；
+T2 跑完杠③（18:34:18 现测）= 8 / 2dadaed0 / 690ddbc0 / 夹具 0；真 key 只量长度=125，从未读出正文。
+E2E 现场一律在 `~/.cache/zbot-p24-lead/e2e/<label>/`（量具自带硬校验，落点不对直接 SystemExit(9)）。
 
 ---
 
 ## §8 量具自身的错（与产品错分列）
 
-STATUS: 未跑
+STATUS: 已跑（本轮改的全部是量具自身的错，与产品错分列；详见 §9 量具条目 (a)–(e)）
+一句话：本轮 4 处红点最后都归到尺子上（S0 的 realpath 恒红、红线尺整场扫描、`mvn -q` 吞掉编译错头、
+D2 注入写法撞 javac 不可达 catch），产品侧未新增缺陷认定；I3/D5 两行是真·断言缺口，留在 §9 杠②。
 
 ---
 
 ## §未做
 
-STATUS: 未跑
+STATUS: 未做清单见下（本棒到此为止，未做的都点名）
+1. 未把 I3（SOUL 整页语义 / entries 空表契约）与 D5（半写还原的 reason 保留）补成产品单测 —— 加 @Test 会改
+   杠① 的基线数，本棒按"只改量具、不动测试面"收口，两行记号因此保留。
+2. 工单 §4.1 要的 WIRING.md 4 处接线 hunk 未 apply（只给了代码级证词）。
+3. 杠③ 只覆盖记忆层的真入口（`MemoryTools#memoryTool` 真 jar/真进程/真文件/真重启/真半写/真并发锁），
+   未跑 agent 主循环里人 `/confirm` → `BotAgent:886` 盖章 → `:1885` 去章 的完整对话链。
+4. 未跑 z-bot-desktop-packager 产物面（它在杠① reactor 里以"无测试"参与）。
+5. 杠① 只补测了 1 整跑（1004/91 类）落在 §9；§4 的三跑 1006 是另一棵树（见 §9 开头的盘面变更），
+   主编在目标树复测时请以 §9 的尺重跑三整跑再判定。
+6. `~/.cache/zbot-p24-lead/{LEDGER_full_run1.tsv,mutbak/,e2e/}` 有意保留未清理，供复算。
 
 ### §0 第 0 步复算（工单读数 vs 我实测，命令照抄工单）
 
