@@ -1,0 +1,36 @@
+id	verdict	named_expected_red	test_that_went_red	tests_ran	surefire_rc	restored
+M01 闸① send 里看不到 attempting	RED-OK	1/1	obligationIsOnTheLedgerBeforeTheSendSideEffectStarts	82	1	True
+M02 闸① 根本不落账	RED-OK	5/6	chatLevelNotFoundRegistersTheTargetAndShortCircuitsLaterSends,deliveredObligationConvergesAndASecondSweepDoesNotResend,obligationIsOnTheLedgerBeforeTheSendSideEffectStarts,statusExposesTheSelfHealingReadings,unregisteredSourceChannelIsRecordedFailedNotSilentlyDelivered	82	1	True
+M03 闸⑥ 来源通道不在册谎报 delivered	RED-OK	1/1	unregisteredSourceChannelIsRecordedFailedNotSilentlyDelivered	82	1	True
+M04 闸④ 发送失败不注册死目标	RED-OK	1/1	chatLevelNotFoundRegistersTheTargetAndShortCircuitsLaterSends	82	1	True
+M05 闸④ 判死了也不短路	RED-OK	1/1	chatLevelNotFoundRegistersTheTargetAndShortCircuitsLaterSends	82	1	True
+M06 闸④ 重投成功不清死标	RED-OK	1/1	bootRedeliveryIsTheSelfHealPathForADeadTarget	82	1	True
+M07 闸④ bus 侧发成功不清死标（探未覆盖）	GREEN-BUT-MUTATED	0/0	全绿（跑了 82 条）	82	0	True
+M08 闸⑦ 熔断了照样续跑	RED-OK	1/1	thirdInterruptedBootWithinTheWindowSkipsAutoContinuation	82	1	True
+M09 闸⑦ 干净启动也给熔断器攒账	PARTIAL	2/2	cleanBootWithNothingToResumeChargesNothing,markerIsNotStackedWhenARowIsClaimedTwice,thirdInterruptedBootWithinTheWindowSkipsAutoContinuation	82	1	True
+M10 闸⑧ 干净退出不删自己的锁	RED-OK	1/1	cleanStopRemovesOurOwnInstanceLock	82	1	True
+M11 闸⑧/台账 活着的 owner 的行也抢	RED-OK	2/2	rowsOwnedByALiveProcessAreLeftAlone,secondSweeperBacksOffOnceALiveOwnerHoldsTheRow	82	1	True
+M12 台账：发不出去的也认领	RED-OK	1/1	sweepOnlyClaimsRowsThisBootCanActuallyDeliver	82	1	True
+M13 闸② 歧义窗口不带「可能重复」标记	RED-OK	4/4	attemptingRowOwnedByADeadProcessIsRedeliveredWithDuplicateWarning,crashMidAttemptIsRedeliveredWithDuplicateWarning,failedObligationIsRedeliveredWithMarker,markerIsNotStackedWhenARowIsClaimedTwice	82	1	True
+M14 闸③ 标记叠两层	RED-OK	1/1	markerIsNotStackedOnReDelivery	82	1	True
+M15 尝试预算不封顶	RED-OK	2/2	exhaustedAttemptBudgetTurnsAbandonedInsteadOfSpinning,staleObligationIsAbandonedNotReplayed	82	1	True
+M16 delivered 的行还能被再认领	RED-OK	1/1	deliveredRowIsNeverClaimedAgain	82	1	True
+M17 闸⑤ 子会话级 404 判成整会话死	RED-OK	2/2	chatLevelNotFoundIsDeadButSubChatLevelIsNot,subChatLevelNotFoundNeverRegistersTheWholeChat	82	1	True
+M18 闸④ not_found 不再算死	RED-OK	2/2	chatLevelNotFoundRegistersTheTargetAndShortCircuitsLaterSends,unclassifiableFailuresAreUnknownAndNeverDead	82	1	True
+M19 闸④ 不读 cause 链	RED-OK	2/2	causeChainIsReadUpToADepthCapAndNeverLoops,classificationLooksAtExceptionMessageToo	82	1	True
+M20 闸⑦ 熔断阈值 off-by-one	RED-OK	2/2	thirdInterruptedBootInSixtySecondsTripsTheBreaker,thirdInterruptedBootWithinTheWindowSkipsAutoContinuation	82	1	True
+M21 闸⑦ 窗口长度失效	RED-OK	1/1	bootsOutsideTheWindowAreForgotten	82	1	True
+M22 闸⑧ 存活判定反了	RED-OK	2/2	liveInstanceLockRefusesADoubleBootAndOwnsWhatItWrote,staleLockIsTakenOverAndLiveLockRefusesADoubleBoot	82	1	True
+M23 闸⑧ release 误删别人的锁	RED-OK	2/2	liveInstanceLockRefusesADoubleBootAndOwnsWhatItWrote,releaseRemovesOnlyOurOwnLock	82	1	True
+M24 闸⑧ 无 profile 也把锁往盘上写	RED-OK	1/1	lockIsNotPersistedWithoutAProfile	82	1	True
+# tally	RED-OK=22	PARTIAL=1	GREEN-BUT-MUTATED=1	BROKEN=0	NO-RUN=0
+# mutants_injected	24
+# p16_tests_ran_per_round	82
+# p16_test_titles_pinned	82
+# SRC_MD5_STABLE	yes
+# md5	bus	before=7929741fc6206d82b62ad7f0f39c206e	after=7929741fc6206d82b62ad7f0f39c206e
+# md5	dead	before=f9f227fedd8bba6e8451736b63b4d7a6	after=f9f227fedd8bba6e8451736b63b4d7a6
+# md5	gw	before=cf258ce1496dccfa3a2039a42cb0fb02	after=cf258ce1496dccfa3a2039a42cb0fb02
+# md5	led	before=8318d1f95eff1342845917cda5c078f4	after=8318d1f95eff1342845917cda5c078f4
+# md5	sup	before=9edd95d3fc7ce1c070894668e3d53a93	after=9edd95d3fc7ce1c070894668e3d53a93
+# ledger_generated_by	p16_mutation.py	at	2026-09-26T04:00:38+0800
