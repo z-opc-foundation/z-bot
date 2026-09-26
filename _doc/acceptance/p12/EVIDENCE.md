@@ -906,29 +906,18 @@ A0
 - 断言挂在 `startsWith("echo: A")`，而 reply 现在是 `echo: <P12 的运行时上下文头>\n---\nA0` —— **不是串味，是 P12 把上下文头注进了 user 消息**，main 那条回显断言没按 P12 的协议剥头。
 - 判据"串味"本身没坏：同一次跑里 `assertEquals(4, chan.sent.size())`、`leaseTimeoutCount()=0` 等都过了，只有回显前缀这一条挂。
 
-## 10.2 杠② 变异注入（合并树重跑 + LEDGER 脚本重算）
+## 10.2–10.5 骨架小节的去处（主编 09-26 标注，避免"骨架未填"被读成"这一杠没跑"）
 
-| 项 | 复算命令 | 实测 |
-|---|---|---|
-| LEDGER 各档计数 | `awk -F'\t' 'NR>1{c[$2]+=1} END{for(k in c) print k,c[k]}' LEDGER.tsv` | （待填） |
+> 本棒按工单要求"骨架先落盘再逐杠填数"，填完的读数写在各小节号下（本节末尾的 §10.2 两层表、
+> §10.3.1、§10.3.2、§10.3.3、§10.4、§10.5、§10.6），上面这几张空骨架表因此一直留着 `（待填）` 没回收。
 
-## 10.3 杠③ 真进程 E2E 三整跑 + K2 双向探针
-
-| 项 | 复算命令 | 实测 |
-|---|---|---|
-| E2E 三跑条数 | | （待填） |
-| K2 三 case 原文 | `python3 _doc/acceptance/p12/p12_k2_probe.py` | （待填） |
-
-## 10.4 杠④ `~/.zbot` 一字未动
-
-| 项 | 复算命令 | 实测 |
-|---|---|---|
-| 条目数 | `ls -A ~/.zbot \| wc -l` | （待填，须=8） |
-| md5 前缀 | `md5 ~/.zbot/config.properties ~/.zbot/state.db` | （待填，须 2dadaed0 / 690ddbc0） |
-
-## 10.5 §未做（本棒）
-
-（待填）
+| 骨架行 | 实际读数在哪 |
+|---|---|
+| LEDGER 各档计数 | 本节末 §10.2（`--with-e2e` 两层，637 面）；**并入 main@dd0d9c5 之后（693 面）由主编重跑，见 §12.2** |
+| E2E 三跑条数 | §10.3.1（27 条 ×3；run2 那 1 条 FAIL 已在 §10.3.3 归因为量具自污染并修复）；693 面见 §12.3 |
+| K2 三 case 原文 | §10.3.2（7 支 case 逐字，含假红侧 F） |
+| 杠④ 条目数 / md5 | §10.4（merge 前 / bar② 在飞 / 收尾三时点 8 · 2dadaed0 · 690ddbc0）；693 面见 §12.4 |
+| §未做 | §10.5（10 条，一条未美化） |
 
 ### 10.3.1 杠③ 真进程 E2E 三整跑（合并树，`p12_e2e.py` 无 `--only`）
 
@@ -1612,3 +1601,140 @@ git worktree remove --force /private/tmp/zbot-p12e-p16check          # 已回收
    回到纯 `A_i`、P16 一字不改就绿 —— 但代价是改 P12d 那条「块与原话同一条 user、原话在最后」的守门断言、
    每轮 user 行翻倍、且不同 provider 对连续同 role 消息的处理不一致。本棒判断"改一句过期断言"比
    "改一次请求契约"小，选了前者；这个取舍写在 §11.4，等主编复核。
+
+---
+
+# §12 主编收口棒：P12 并入 main 之前的四杠（被测树 = `bf9099c`，`@Test` 面 693）
+
+> §10（p12d）与 §11（p12e）都停在同一个结论上：**杠②③④ 站住，杠① 差一条红**，
+> 而那条红需要动 `channel/GatewayDeliveryP16Test.java`（两棒的禁改域）。
+> 那一刀由我落（commit `f88c838`，判据改量尾巴 + 同条测试里补尺子自证），
+> 之后 `main` 又前进了两格（P18 并入 `066d766` + 文档 `dd0d9c5`）⇒ **§10/§11 的读数已经不在"真要并入的那版字节"上了**，
+> 所以本棒把四杠在 `main@dd0d9c5` × `w2-p12@f88c838` 的合并树上重打一遍。
+> 本节所有数字来自我这一轮亲自跑的命令，日志一律在仓外 `~/.cache/zbot-p12-lead/`（`.gitignore:5` 是 `*.log` ⇒ 决定性读数原样贴下面）。
+
+## 12.0 第 0 步实测（先证我自己这条链的前提）
+
+| 假设 | 复算命令 | 实测 |
+|---|---|---|
+| 合并干净、无冲突 | `git merge-tree --write-tree f88c838 dd0d9c5 \| wc -l` | **1 行**，树 `2202d95a6ef43d1803baa6902c2eb9864753f9fc` |
+| 我实际合出来的树 = 预览树 | `git rev-parse bf9099c^{tree}` | `2202d95a6ef43d1803baa6902c2eb9864753f9fc` ⇒ **与预览树逐字相同**（合并没夹带任何额外改动） |
+| 两父提交 | `git rev-parse bf9099c^1 bf9099c^2` | `f88c838`（w2-p12 顶端，含我那一刀）× `dd0d9c5`（main 顶端，含 P18） |
+| `@Test` 面可加 | `git grep -c '@Test' <rev> -- 'z-bot-core/src/test' \| awk -F: '{s+=$NF} END{print s}'` | main `dd0d9c5`=**672**（61 文件）／p12 顶端 `f88c838`=**640**（62 文件）／合并树=**693**（65 文件）⇒ **640 + 53（main 自 619 起的净增）= 693**，与"§11.4 的 640/1 红"面同一批 P12 用例 ⇒ 无互相吞并 |
+| 我那一刀只动判据、没动产品 | `git show f88c838 --stat` | 唯一文件 `channel/GatewayDeliveryP16Test.java`，**+19 −2**；`git branch --contains f88c838` 只回 `w2-p12` ⇒ 尚未进 main |
+| 新判据不是空跑（尺子自证） | 读 `f88c838` 的 diff 正文 | 同一条测试里前置两行：`assertTrue(echoesRoute("echo: 前缀\\n---\\nA2","A"))` 与 `assertFalse(echoesRoute("echo: 前缀\\n---\\nB2","A"))` ⇒ 判据必须分辨得了一条 A 尾、一条 B 尾，否则后面两个循环是空跑 |
+
+## 12.1 杠① 全量 reactor 串行三跑（`rm -rf surefire-reports` + `mvn -o test`，无 `-pl`）
+
+复算：`bash ~/.cache/zbot-p12-lead/bar1.sh`；日志 `~/.cache/zbot-p12-lead/merge_bar1_r{1,2,3}.log`。
+循环自打的三行（逐字）：
+
+```
+run1 MVN_RC=0 [INFO] Tests run: 693, Failures: 0, Errors: 0, Skipped: 0 socket=0 build=1
+run2 MVN_RC=0 [INFO] Tests run: 693, Failures: 0, Errors: 0, Skipped: 0 socket=0 build=1
+run3 MVN_RC=0 [INFO] Tests run: 693, Failures: 0, Errors: 0, Skipped: 0 socket=0 build=1
+BAR1_LOOP_DONE
+```
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| 三跑汇总行 | `grep -E 'Tests run: [0-9]+, Failures' <log> \| tail -1` | `Tests run: 693, Failures: 0, Errors: 0, Skipped: 0` ×3 ⇒ **§10.1/§11.4 那条唯一红（`GatewayDeliveryP16Test:381`）在这里消失** |
+| 逐类求和交叉核对 | `python3` 解析 `-- in <class>` 行 | 三跑各 **65 类 / tests=693 / failures=0 / errors=0 / skipped=0** ⇒ 与汇总行自洽；**surefire 693 = `git grep -c '@Test'` 693**（§10.1 那个 483-vs-481 的 2 条差在本面不存在） |
+| socket 类错误 | `grep -c 'BindException\|Connection refused\|SocketTimeout' <log>` | 三跑各 **0** |
+| BUILD SUCCESS | `grep -c 'BUILD SUCCESS' <log>` | 三跑各 **1** |
+| 每跑墙钟 | 日志内 `Total time` + `Finished at` | 28.831s / 26.678s / 26.666s（14:58:20 / 14:58:47 / 14:59:14）⇒ 三跑**串行**，不是并行凑数 |
+| 三模块都进了 reactor | `grep -n 'z-bot-desktop-packager' <log>` | `7:` `[pom]`、`713-719:` `Building z-bot-desktop-packager 0.2.0 [3/3]` + `flatten` ⇒ 该模块仍**贡献 0 个测试类**（65 类全在 `z-bot-core`），与 §10.1 同口径 |
+
+## 12.2 杠② 具名变异注入（合并树 19 支，跑了两遍：单层 + 两层）
+
+复算：
+`bash ~/.cache/zbot-p12-lead/bar2_e2e.sh`（先等单层那跑松手 ⇒ `SINGLE_CLEAN=0`，再打两层），
+日志 `~/.cache/zbot-p12-lead/merge_bar2.log`（单层）与 `merge_bar2_e2e.log`（`--with-e2e` 两层，`MUT_RC=0`）。
+两遍都独占同一把 flock：`LOCK-ACQUIRED mutator flock=LOCK_EX|LOCK_NB path=…/z-bot/.git/zbot-mutlock`。
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| 五档分布（两遍一致） | 脚本自打 `== 台账 ==` + `python3 csv.DictReader` 独立复算 | **RED-OK 15 / PARTIAL 1 / GREEN-BUT-MUTATED 3 / BROKEN 0 / NO-RUN 0**；单层层与两层遍**同分布**；LEDGER 行数 `awk -F'\t' 'END{print NR-1}'` = **19**，列数 11 |
+| 与 §10.2（p12d，637 面）的差额 | 同上比对 14/2/3/0 | **M1b 从 PARTIAL 收成 RED-OK**（点名 5/5）：p12e 把它第一遍跑里以 `extra` 出现的那支 `midRunMemoryWriteIsVisibleNextTurnWithoutTouchingThePrompt` 归入点名集（`p12_mutation.py:102` 写明了理由），**并入后判红能力没变**——本脚本的 RED-OK 规则是"点名有命中且无 extra"，那支测试在两遍里都真红了，变的只是记账口径不是检出力 |
+| 逐支还原 | 脚本自打 `还原=` / `vs_git=` 两列 + 我独立量 `git status --porcelain -- z-bot-core` | 19/19 `还原=True vs_git=ok/ok`；`SRC_MD5_STABLE=yes`；跑完我另量一次 **`WORKTREE_DIRTY_CORE=0`**（15:16:52）与 **15:17:57 再量仍 0** |
+| 两层（真进程层）是否真跑了 | `python3` 读 LEDGER 的 `e2e_rc` 列 | **M6 `e2e_rc=1`、M12 `e2e_rc=1`**，其余支 `e2e_rc=` 空（只有这两支是 `mvn+e2e` 型） |
+| 两层跑在变异体上而不是旧 jar | 同两行的 `e2e_detail` 里 `B0` | M6：`打包 rc=0；jar sha256=788d96a2b6f295da；git HEAD=bf9099c；z-bot-core/src 未提交改动=1 行`；M12：`jar sha256=b3f3b7f730781733 … 未提交改动=1 行`；**干净树那一跑**（§12.3）是 `96fc4a58ad0d0238 … 未提交改动=无` ⇒ 三个 sha 各不相同，"未提交改动=1 行"就是当支注入的字节 |
+| M6 摘掉看门狗之后真进程层的形状 | `python3` 读 `out/mutation-M6.json` 的非 PASS 行 | `S2 FAIL 复算 pgrep=['97773','97775']`（bash + sleep 两个 pid 停完之后还在进程表里）、`S3 FAIL elapsed_ms=-1`（waiter 的退出条件只有"pgrep 空集"一条 ⇒ 永远等不到）、`S4 FAIL chat 回包='(没回包)'` ⇒ **单测层那 1 支点名红不是唯一一层**，进程层同一条链也断 |
+| M12 解冻之后真进程层的形状 | `python3` 读 `out/mutation-M12.json` 的非 PASS 行 | `C1 FAIL len1=2345 len2=2372 sha256_1=8b38a41d… sha256_2=2b4de935…`（同一会话两轮的 system prompt 逐字节漂）、`C5 FAIL 两轮 system 含哨兵=False/True` ⇒ 冻结不变量在进程层可量 |
+| 未覆盖自述 | 脚本 `UNCOVERED_NOTE` | `exec 读输出循环的逐行检查点、mvn_build 入口检查点：摘掉之后看门狗仍在 50ms 内端掉进程树，从「多久断」这一面量不出差别，属于第二道保险；如实记未覆盖，不假装注入过。` ⇒ **§10.5 第 3 条那 5 支未完全判红项一支没被本棒补上**（M8/M9/M17 三支 GBM + M16 PARTIAL + M1 点名 2/3），补它们要加断言=加覆盖面，属于下一根棒 |
+
+## 12.3 杠③ 真进程 E2E 三整跑 + K2 双向探针（693 面）
+
+复算：`bash ~/.cache/zbot-p12-lead/bar3.sh`；日志 `merge_bar3_r{1,2,3}.log` + `merge_k2.log`。
+循环自打（逐字）：
+
+```
+PKG_RC=0 jar=20159727 src_newer=0
+run1 rc=0 段=all 检查条数=27 PASS=27 FAIL=0|
+run2 rc=0 段=all 检查条数=27 PASS=27 FAIL=0|
+run3 rc=0 段=all 检查条数=27 PASS=27 FAIL=0|
+K2_RC=0 14 行含 OK
+15:01:15
+bar4: 8 2dadaed0 690ddbc0
+BAR3_LOOP_DONE
+```
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| 三跑条数 | `grep -E '段=all 检查条数' <log> \| tail -1` | 三跑各 **27 条 / PASS=27 / FAIL=0**，rc 全 0；三份日志 md5 各不相同（`889010a7… / cbf54a5a… / dbc392cf…`）⇒ 不是同一份文件被读了三遍 |
+| 判据不是靠 mtime 混过去的 | `p12_e2e.py` 的 B0/B0b 两行自打 | `B0 … jar sha256=96fc4a58ad0d0238；git HEAD=bf9099c；z-bot-core/src 未提交改动=无` / `B0b 开跑前 sha256=96fc4a58ad0d0238 / 收工后 sha256=96fc4a58ad0d0238` ⇒ 认的是**字节哈希**（`src_newer=0` 只当辅助，本战役已经两次被 mtime 骗过） |
+| 段构成 | `grep -E '^\s+PASS' <log> \| wc -l` + 段标签计数 | 27 条：`[stop]` 5（G0/S1/S2/S3/S4）+ `[cache]` 8（C0/C0c/C1/C2/C3/C4/C5/C6）+ `[build]` 2（B0/B0b）+ `[home]` 3（H1/H2/H3）+ `[creds]` 3（K1/K2/K3）+ 其余 steer/R 族对照 |
+| **计划里那句"2s 内断"** | 读 S3 原文 | `PASS S3 发 /stop → 工具子进程真退出 ≤ 2000ms … elapsed_ms=54，waiter pid=69038 由本进程 spawn、退出条件只有 pgrep 空集这一条` ⇒ **判据是"≤2000 ms"而不是"很快"**，实测 54 ms |
+| pty 那条路能不能中断（反向对照） | 读 `R2b` 原文 | `PASS R2b 反面对照：chat 在飞时写进 pty 的 /stop 不会中断工具（进程还在） … 2s 后 pgrep 仍=['69082','69083'] ⇒ TerminalChannel.run() 在 agent.chat() 里同步阻塞、这段时间根本不读 stdin（实测出来的）` ⇒ **中断只走 `/bot/stop`**；roadmap 的验收措辞要改口径，见 §12.5 第 1 条 |
+| K2 双向探针 | `python3 _doc/acceptance/p12/p12_k2_probe.py; echo rc=$?` | `rc=0`，7 支 case × 工作树/封存两份字节 = **14 行 `OK`**；含假红侧 F（`api.key=not-configured` ⇒ 期望 FAIL 实测 FAIL）；结论行：`双向实测结论：全部符合期望 ⇒ (a) 两形态并存判绿 与 (b) 混入别的值判红 两边都成立，判据没有被调松` |
+
+## 12.4 杠④ `~/.zbot` 一字未动（本棒四个时点）
+
+| 时点 | 复算命令 | 条目数 | config.properties 前 8 | state.db 前 8 |
+|---|---|---|---|---|
+| 杠③ 收尾自打（15:01:15） | 同上（在 `bar3.sh` 最后一行） | **8** | **2dadaed0** | **690ddbc0** |
+| 杠② 两层跑完之后（15:16:52） | 同上（在 `bar2_e2e.sh` 倒数第二行） | **8** | **2dadaed0** | **690ddbc0** |
+| 我另起一次复核（15:17:57） | 同上 | **8** | **2dadaed0** | **690ddbc0** |
+
+**一处缺读，写在这里而不是编上**：杠① 起跑前（14:57）我这一轮**没有单独量过杠④** ——
+`bar1.sh` 里没带这一行，所以那一时点没有我的读数可贴。跨时点的连续性由 §10.4（p12d 在 merge 前量的
+同一组三时点）+ 本节 15:01:15 起三点接上；如果 14:57 那一刻被改过，本面量不出来。
+
+外加 E2E 量具在每一跑里自带的第三方读数（三跑同值）：
+`~/.zbot 跑前跑后: 项数 8→8, config md5 前缀 2dadaed0, state.db md5 前缀 690ddbc0`。
+真 key 全程未被读、未被打印、未被复制、未进任何日志：所有真进程跑都走 `p12_e2e.py` 自己的临时根 + `stub-key-not-real`。
+
+## 12.5 §未做（本棒，一条不许美化）
+
+1. **roadmap 里 P12 的验收措辞和实测量不是一件事，我按实测改口径**：计划写的是"真 pty/管道 REPL 跑一次
+   '长命令执行中 /stop 能在 2s 内断'"，而 S3 断的是**走 `/bot/stop` 这条路**；`R2b` 反过来实测出
+   **pty 里敲 /stop 根本不生效**（`TerminalChannel.run()` 同步阻塞在 `agent.chat()` 里，这段时间不读 stdin）。
+   ⇒ 中断能力本身站住了（工具侧检查点 9 处：`git grep -cF "InterruptScope.checkpoint()"` =
+   `BuiltinTools.java:7` + `DelegateManager.java:2`，达成计划里"≥6 处"），但**"在 REPL 里边跑边按停止"这条路仍未通**，
+   要做的是给 TUI 加一个能读的旁路（新能力，本棒没做，也没为它写断言）。
+2. **杠② 的 5 支未完全判红项一支没补**：M8/M9/M17 仍 GREEN-BUT-MUTATED、M16 仍 PARTIAL（点名 5/6）、
+   M1 仍点名 2/3（`soulStaysInSystemPromptAndMemoryGoesToUserMessage` 在 M1 下不红）。
+   这些账从 §10.5 第 3 条原样结转，本棒只重跑不补面。
+3. **`UNCOVERED` 那两处依旧没有量具**：`exec 读输出循环的逐行检查点`、`mvn_build 入口检查点`——
+   摘掉之后看门狗仍在 50ms 内端掉进程树，从"多久断"这一面量不出差别 ⇒ 属于第二道保险，
+   如实记未覆盖（不是"已经检不出问题"，是"这一面检不了"）。
+4. **§11.9 第 2 条那条历史包袱没治**：`86e7b83` 只保证"从现在起上下文块不再落进持久化转录"，
+   改动之前已经落盘的 transcript（含真 `~/.zbot/sessions/*.json`）里带抬头的 user 行**没被清洗**，
+   `switchSession()` 原样读回 ⇒ 老会话再跑一轮，请求里仍带着旧的那几块时钟。本棒**没做迁移、没写断言**（写了必红）。
+5. **§11.9 第 3 条"块挂在控制行还是原话行"没钉**：注入点是"最后一行 user"，收尾轮（grace）与
+   steer 退路轮里块挂在控制行上；只数"一次请求一块时钟"够，"必须挂在原话那一行"没测。
+6. `z-bot-desktop-packager` 仍贡献 **0 个测试类**（65 类全在 `z-bot-core`）⇒ 该模块的打包/构建不在证据面内。
+7. 本棒**没 push、没 merge 到 main、没 reset/clean/stash**；只在 `w2-p12` 上落文档一笔（本节）。
+   与 `w3-p21`（p21c 在飞）互不重叠：我这两跑全程独占 `zbot-mutlock`，p21c 若要打杠② 会拿 `rc=4` 退避。
+
+## 12.6 判词：P12 现在具备并入 main 的门禁面
+
+| 杠 | 一次跑齐了吗 | 关键读数 |
+|---|---|---|
+| ① 全量 reactor ×3 串行 | 是 | `Tests run: 693, Failures: 0, Errors: 0, Skipped: 0` ×3（MVN_RC=0 / BUILD SUCCESS=1 / socket 类 0）；surefire 693 = `git grep -c '@Test'` 693 = 65 类逐类求和 693 |
+| ② 具名变异 19 支 | 是（两遍：单层 + 两层） | RED-OK 15 / PARTIAL 1 / GBM 3 / BROKEN 0 / NO-RUN 0；`SRC_MD5_STABLE=yes`；`WORKTREE_DIRTY_CORE=0`；M6/M12 两层 `e2e_rc=1` 且变异体 jar sha 各不相同 |
+| ③ 真进程 E2E | 是（3/3 整跑） | `段=all 检查条数=27 PASS=27 FAIL=0` ×3；K2 双向探针 `rc=0` / 14 行 OK（含假红侧）；阳性对照见 §10.3.3 |
+| ④ `~/.zbot` | 是（四时点同读数） | 8 / `2dadaed0` / `690ddbc0` |
+
+§10.6 那句"P12 不具备并入 main 的门禁面，唯一拦路的是杠① 那条红"已经不再成立：
+那条红的判据由我在 `f88c838` 改量尾巴（带尺子自证），合并树 `bf9099c` 的杠① 三跑 **693/0 全绿**。
