@@ -329,19 +329,35 @@ public class BotAgentTest {
         assertEquals(0, agent.getMemory().size());
         agent.switchSession(oldSession);
         assertEquals(2, agent.getMemory().size());
-        // P12 起「运行时上下文」改道进 user 消息，所以这里不能整串相等，但也不能只写个
-        // contains 了事（那样把上下文搬回 system prompt 都能过）。两条腿都要钉住：
-        //  ① 用户原文仍在 USER 消息里，且按协议分隔符剥头之后**逐字**相等；
-        //  ② 这块运行时上下文（抬头 + 时钟行）不许出现在 system prompt 的任何位置。
+        // P12e：运行时上下文块<b>只在建 request 时注入</b>，记忆/transcript 只存用户原话。
+        // 四条腿都要钉住（少一条就退化成「上下文被整个摘掉也能过」）：
+        //  ① 落盘再读回的 user 行**逐字**等于用户原话，抬头与时钟一次都不许出现；
+        //  ② 但上下文必须真到得了模型：实际发出的那一行 user 是「块 + 分隔符 + 原话」，
+        //     且按协议分隔符剥头之后**逐字**相等（不是 contains）；
+        //  ③④ 这块东西不许出现在 system prompt 的任何位置（P12 缓存不变量的另一半）。
         Msg restored = agent.getMemory().getMessages().get(0);
         assertEquals(MessageRole.USER, restored.getRole());
         String stored = restored.getContent();
-        int sep = stored.indexOf(BotAgent.VOLATILE_CONTEXT_FOOTER);
-        assertTrue("user 消息应以运行时上下文头开头，实得:\n" + stored,
-                stored.startsWith(BotAgent.VOLATILE_CONTEXT_HEADER));
-        assertTrue("user 消息里找不到上下文头与原文的分隔符，实得:\n" + stored, sep >= 0);
+        assertEquals("P12e：记忆与 transcript 只许存用户原话，实得:\n" + stored, "hello", stored);
+        assertFalse("落盘的 user 行不许带运行时上下文抬头:\n" + stored,
+                stored.contains(BotAgent.VOLATILE_CONTEXT_HEADER));
+        assertFalse("落盘的 user 行不许带时钟:\n" + stored, stored.contains("当前时间"));
+
+        List<Msg> sentMessages = llm.requests.get(0).getMessages();
+        String sent = null;
+        for (Msg m : sentMessages) {
+            if (m.getRole() == MessageRole.USER) {
+                sent = m.getContent();
+            }
+        }
+        assertTrue("发给模型的请求里没有 user 行 ⇒ 上下文根本没注入", sent != null);
+        int sep = sent.indexOf(BotAgent.VOLATILE_CONTEXT_FOOTER);
+        assertTrue("请求里的 user 行应以运行时上下文头开头，实得:\n" + sent,
+                sent.startsWith(BotAgent.VOLATILE_CONTEXT_HEADER));
+        assertTrue("请求里的 user 行找不到上下文头与原文的分隔符，实得:\n" + sent, sep >= 0);
         assertEquals("剥掉运行时上下文头之后，用户原文必须逐字相等",
-                "hello", stored.substring(sep + BotAgent.VOLATILE_CONTEXT_FOOTER.length()));
+                "hello", sent.substring(sep + BotAgent.VOLATILE_CONTEXT_FOOTER.length()));
+
         String system = agent.getMemory().getSystemPrompt();
         assertFalse("运行时上下文抬头不许进 system prompt:\n" + system,
                 system.contains(BotAgent.VOLATILE_CONTEXT_HEADER));

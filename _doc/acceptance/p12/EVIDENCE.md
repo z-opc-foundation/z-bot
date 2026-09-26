@@ -1272,6 +1272,19 @@ req#3 user#3 len=163 >>>  同上抬头
 **都把模板原样吐给 web**，3 次命中。派单里那句"我在主代码 `git grep` 除 `BotAgent.java` 外 0 命中
 ⇒ 没有任何显示面剥它"**被实测坐实**（不是"读代码认为没事"，是打了真 HTTP 拿到的 3）。
 
+### 11.1.4 顺手量到的第 4 个面：`/sessions` 列表标题（派单点名的"sessions 列表"）
+
+`SessionManager.titleFrom()` 取首条 user 行的前 30 字当会话标题 ⇒ 污染前的标题就是从盘上那行算出来的：
+
+```
+python3（读 §11.1.2 抓到的 pre-fix transcript 原文，取 role==user 第 1 条 content 前 30 字）
+pre-fix 首条 user 行 len= 124
+pre-fix /sessions 标题 = '[z-bot 运行时上下文]（本轮动态注入，不属于 syst...'
+```
+
+⇒ 用户在下拉里看到的**会话名**就是模板字符串。修复后同一条断言（`VolatileContextPersistenceTest` 第 2 支）
+实测：`[p12e-forensic] /sessions title=第一句原话`。
+
 ## 11.2 判词：**是缺陷**（三条判据各自带猎物，非空跑）
 
 | # | 判据 | 实测（命令见 §11.1） | 猎物/阳性对照 |
@@ -1286,11 +1299,68 @@ req#3 user#3 len=163 >>>  同上抬头
 ⑤所有拿 `Msg.getContent()` 的渲染面（web `content`、终端回显、delegate 摘要、P16 transcript 断言）
 都看见模板。**结论：按派单唯一方向修**——见 §11.3。
 
-## 11.3 修法与双向断言（若 11.2 判是）
+## 11.3 修法（派单唯一方向）与双向断言
 
-- 正向断言（动态块真到请求）：测试名 + 结果
-- 负向断言（落盘不含抬头 / 第 3 次请求含时钟 user 行 = 1 / web content 不含抬头）：测试名 + 结果
-- 阳性对照（缺了猎物就是空跑，逐条注明猎物是谁）
+改的产品码只有一个文件、一个类：`z-bot-core/src/main/java/com/zifang/z/bot/agent/BotAgent.java`
+
+| 位置 | 改了什么 |
+|---|---|
+| `chat(String, StreamListener)`（原 `:247`） | `memory.add(Msg.user(withVolatileContext(mergeQueued(userMessage))))` ⇒ **`this.turnVolatileBlock = volatileContextBlock();` + `memory.add(Msg.user(mergeQueued(userMessage)));`**（记忆只存原话） |
+| `buildRequest()`（原 `:1252`） | `messages.addAll(memory.getMessages())` ⇒ **`messages.addAll(injectVolatileContext(memory.getMessages()))`**（缝在组装 `ChatCompletionsRequest` 的地方，不是 `memory.add` 的地方） |
+| 新增 `injectVolatileContext(List<Msg>)` | 唯一注入点：只贴到**本次请求最后一行 user** 的开头；找不到 user 行就原样返回；不改动入参列表 |
+| `withVolatileContext(String)` ⇒ `withVolatileContext(Msg, String)` | `Msg` 不可变 ⇒ 新建一条，除 `content` 外逐字段照抄（`name/type/toolCallId/toolCalls/metadata` 一个不丢） |
+| 新增字段 `turnVolatileBlock` | 块在 `chat()` 入口算**一次**、同一轮多步复用同一份字节 ⇒ step1/step2 不在该行分叉，P12 缓存前缀不退化 |
+
+为什么注入点选「最后一行 user」而不是「本轮那条原话」：同一轮里 `maybeAnnounceGrace()` 与 steer 退路
+`injectSteer()` 还会各补一条 user 控制行，它们才是尾部；贴尾部保证**一次请求至多一块时钟**（取证时
+第 3 次请求有 3 块，现在恒为 1 块），历史行逐字是用户原话。缓存不变量不受影响：块仍在请求尾部，
+`system` 那一条字节不变（`SystemPromptCacheFreezeTest` 4 条全绿，含逐字节 `assertArrayEquals` 那两支）。
+
+### 11.3.1 修复后读数（同一份取证件，一字未改判据）
+
+```
+mvn -o test -pl z-bot-core -Dtest=BotAgentTest,BotAgentMemoryTest,SystemPromptCacheFreezeTest,
+    P12RefundAndSteerGuardTest,ToolSideInterruptTest,AgentCoreP1Test,VolatileContextPersistenceTest
+# Tests run: 59, Failures: 0, Errors: 0, Skipped: 0  （日志 ~/.cache/zbot-p12e/agent_tests_post_fix.log）
+```
+
+| 面 | 修复前（§11.1） | 修复后（同一条 println） |
+|---|---|---|
+| 请求 1/2/3 的 `clockBearingUserRows` | 1 / 2 / **3** | 1 / 1 / **1** |
+| 请求 1/2/3 的 `headerBearingUserRows` | 1 / 2 / **3** | 1 / 1 / **1** |
+| req#3 `user#1` 内容 | 124 字符模板 + 原话 | **`第一句原话`（len=5）** |
+| transcript 抬头 / 时钟命中 | 3 / 3（1759 字节） | **0 / 0（934 字节）** |
+| 重新载入的 user 行 | 3 条带抬头 | **`[第一句原话, 第二句原话, 第三句原话]`** |
+| web `content`（按 id 读盘 / 读活记忆） | 3 / 3 | **0 / 0** |
+| `/sessions` 列表标题 | `[z-bot 运行时上下文]（本轮动态注入，不属于 syst...` | **`第一句原话`** |
+
+⇒ 落盘体积掉了 47%（1759→934 字节）就是"模板原本占着历史行"的量。
+
+### 11.3.2 双向断言各自的名字与结果（全部 `Tests run` 见上，逐条绿）
+
+| 方向 | 测试全名 | 钉住什么 | 猎物 / 阳性对照 |
+|---|---|---|---|
+| 正 | `VolatileContextPersistenceTest#thirdRequestInOneSessionStacksContradictoryClockBlocks` | 第 1 轮请求真看到 `当前时间` + 抬头；本轮 X2 记忆与 X3 技能指引真到得了模型；用户原话保持在最后 | 自身即对照：`assertTrue(first.contains("当前时间") && first.contains(抬头))` 排在负向断言**之前**，摘掉注入它先红 |
+| 负 | 同上 | 第 3 次请求 `userRows=3` 但含时钟 / 含抬头的 user 行**各 = 1**；含上一轮记忆 X1 的行 **= 0**；`users.get(0)` 逐字 `第一句原话` | M1b 型变异（上下文彻底不注入）会打中正向那支 ⇒ 不是空跑 |
+| 负 | `#persistedTranscriptHoldsPlainUserWordsNotTheRuntimeBlock` | 盘上抬头 0 命中、时钟 0 命中；`loadMessages` 后第 1 条逐字等于原话 | 先断言三句原话**真在盘上**（否则 0 命中只是没落盘） |
+| 负 | `#httpSessionMessagesSurfaceLeaksTheRuntimeBlock` | 真 HTTP 两支路径 `content` 抬头 0 命中 | 先断言 `byId` 里有原话与 `回合一`（否则 0 命中是没数据） |
+| 负+正 | `BotAgentTest#newSessionAndSwitchRestoreHistory`（P12d 原证件，本棒按新形状改写） | 落盘 user 行**逐字** `hello` 且无抬头无时钟；**同时**请求里那一行 `startsWith(抬头)` 且按分隔符剥头后逐字 `hello` | 这条是 M1b 的守门断言：把上下文从请求里摘掉 ⇒ 第 ② 腿红；搬回 system prompt ⇒ 第 ③④ 腿红 |
+| 正（缓存不变量） | `SystemPromptCacheFreezeTest`（4 条，未改一行） | system prompt 逐字节重放、易变内容不进 system、user 行剥头后仍是原话 | 未改判据仍绿 ⇒ 修法没退化 P12 的不变量 |
+
+`git grep` 复算「渲染面清单」（本棒**不**走"每个面剥一次"那条路，只需证明源头干净 + 四个外面量过）：
+
+```
+git grep -c "getContent()" -- 'z-bot-core/src/main/java'
+  BotAgent.java 12 / Toolkit.java 2 / SessionManager.java 2 / MsgCodec.java 1 / HttpChannel.java 1 / ConversationMemory.java 1
+git grep -n "getConversationMessages()\|loadMessages(" -- 'z-bot-core/src/main/java' | wc -l   # 8
+git grep -n "getContent()" -- '.../cli' '.../delegate'                                          # 0 命中
+```
+
+⇒ 把**对话历史 content** 交给外部的一共四处，全部量过：`HttpChannel.java:413`（web，两支路径）、
+`session/MsgCodec.java:62`（落盘编码）、`session/SessionManager.java:262-263 titleFrom`（`/sessions` 标题
+⇒ `cli/SessionsCommand.java:99,333` 打印的就是这个 title）。`cli/`、`delegate/` 对 `getContent()` **0 命中**，
+终端回显打的是回复文本与 title，不 dump 历史行。**这就是选"请求侧注入"而不是"渲染侧剥"的理由**：
+后者要数得清所有面（上面这张表就是数得清但会漏的那种活），前者只需要一个注入点 + 一处源头。
 
 ## 11.4 杠①：全量单测串行三跑
 

@@ -174,6 +174,16 @@ public class VolatileContextPersistenceTest {
                     0, hits(onDisk, "当前时间"));
             assertEquals("重载后第 1 条 user 行仍是原话", "第一句原话",
                     textsOf(reloaded, MessageRole.USER).get(0));
+
+            // 第 4 个面：/sessions 列表的标题（SessionManager.titleFrom 取首条 user 行前 30 字）
+            String title = null;
+            for (SessionManager.SessionSummary s : new SessionManager(sessionDir).listSessions()) {
+                if (run.sessionId.equals(s.id)) {
+                    title = s.title;
+                }
+            }
+            System.out.println("[p12e-forensic] /sessions title=" + title);
+            assertEquals("会话列表标题必须是用户第一句原话，实测 " + title, "第一句原话", title);
         } finally {
             run.agent.shutdown();
         }

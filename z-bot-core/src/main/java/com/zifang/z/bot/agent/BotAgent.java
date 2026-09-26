@@ -83,6 +83,10 @@ public class BotAgent {
     /**
      * 动态上下文的抬头（P12 prompt 缓存不变量）：记忆 / 技能 / center 召回 / 时钟
      * 全部走 user 消息，标记必须显式，否则模型会把它当成用户原话的一部分。
+     *
+     * <p>P12e：这个标记同时是「不许落盘、不许进历史」的判据 —— 它只出现在<b>本次请求</b>
+     * 的最后一行 user 上（见 {@link #injectVolatileContext(List)}），
+     * {@code memory} / transcript / 任何渲染面都不该看到它。</p>
      */
     static final String VOLATILE_CONTEXT_HEADER = "[z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）";
 
@@ -130,6 +134,12 @@ public class BotAgent {
     /** 被 {@link ToolConfirmationNeeded} 暂停的那次调用；确认后要用它回灌 tool 结果。 */
     private volatile ToolCall pendingConfirmation;
     /**
+     * 本轮（{@code chat()} 入口处算好的）动态上下文块。P12e：它是<b>请求侧</b>的东西，
+     * 不进 {@code memory}、不进 transcript；同一轮的每一步复用同一份字节，
+     * 下一轮 {@code chat()} 重算。空串 = 本轮还没开（例如纯桩直接戳 {@code buildRequest}）。
+     */
+    private volatile String turnVolatileBlock = "";
+    /**
      * 每会话审批 FIFO（P11）。为 null 时退化为旧的"单槽 + 只有确认/不确认"行为
      * （纯测试桩、不带内置工具的 agent）。
      */
@@ -170,8 +180,9 @@ public class BotAgent {
         this.maxTokens = b.maxTokens;
         this.temperature = b.temperature;
         // prompt 缓存不变量（P12）：system prompt 只在这里算一次，此后每轮逐字节重放。
-        // 记忆 / 技能指引 / center 召回 / 时钟这些会变的-content 一律改道进 user 消息
-        // （见 volatileContextBlock），否则任何一次重算都是缓存击穿。
+        // 记忆 / 技能指引 / center 召回 / 时钟这些会变的 content 既不进 system prompt、
+        // P12e 起也不再进 memory —— 它们在 chat() 入口算成一块，只在建 request 时贴到
+        // 本轮最后一行 user 上（见 volatileContextBlock / injectVolatileContext）。
         this.memory = new ConversationMemory(buildSystemPrompt(b.systemPrompt, b.toolkit, b.memoryStore));
         this.context = AgentContext.root(b.budgetOverride != null
                 ? b.budgetOverride : new IterationBudget(b.maxSteps, b.tokenBudget));
@@ -244,7 +255,12 @@ public class BotAgent {
         StreamListener l = listener == null ? StreamListener.NOOP : listener;
         context.interrupt().reset();
         pendingConfirmation = null;
-        memory.add(Msg.user(withVolatileContext(mergeQueued(userMessage))));
+        // P12e：本轮的动态上下文块<b>在这里算一次</b>，但<b>不并进记忆</b>——它只在建 request 时
+        // 由 injectVolatileContext() 贴到本轮最后一行 user 上。算一次是为了同一轮的多步之间
+        // 逐字节稳定（否则 step2 与 step1 在该行分叉，P12 的 prompt 缓存前缀白留）。
+        // 记忆里存用户原话 ⇒ transcript 落盘干净、历史不堆时钟、渲染面天然无模板。
+        this.turnVolatileBlock = volatileContextBlock();
+        memory.add(Msg.user(mergeQueued(userMessage)));
         // 把本次会话的旗子绑到执行线程上：工具内部（exec / 文件 / mvn / delegate）
         // 从这里拿到它，才能在「工具正飞着」的时候断，而不是只在循环边界断。
         InterruptFlag boundBefore = InterruptScope.bind(context.interrupt());
@@ -1252,7 +1268,7 @@ public class BotAgent {
     private ChatCompletionsRequest buildRequest() {
         List<Msg> messages = new ArrayList<Msg>();
         messages.add(Msg.system(memory.getSystemPrompt()));
-        messages.addAll(memory.getMessages());
+        messages.addAll(injectVolatileContext(memory.getMessages()));
         // 工具 schema 按 name 字典序 — 保持请求前缀稳定，提高 provider 侧 prompt-cache 命中
         List<com.zifang.z.agent.kernel.tool.Tool> tools =
                 new ArrayList<com.zifang.z.agent.kernel.tool.Tool>(toolkit.getAllTools());
@@ -1303,10 +1319,14 @@ public class BotAgent {
     }
 
     /**
-     * 本轮 user 消息的运行时上下文头：记忆 / 技能指引 / center 召回 / 时钟。
+     * 本轮的运行时上下文块：记忆 / 技能指引 / center 召回 / 时钟。
      *
-     * <p>每轮重算（这正是它可以存在的前提：它在<b>请求尾部</b>，不在缓存前缀里）。
-     * 时钟始终在场，所以这个块永不为空；三条来源全空时只剩一行时间戳 + 分隔线。</p>
+     * <p>每轮在 {@code chat()} 入口算<b>一次</b>并存进 {@link #turnVolatileBlock}（同一轮多步之间
+     * 逐字节相同，缓存前缀才不被自己击穿）。时钟始终在场，所以这个块永不为空；
+     * 三条来源全空时只剩一行时间戳 + 分隔线。</p>
+     *
+     * <p>P12e：它的返回值<b>只</b>经 {@link #injectVolatileContext(List)} 贴到请求上，
+     * 不再进 {@code memory}，因此也不会进 transcript / web content。</p>
      */
     private String volatileContextBlock() {
         StringBuilder body = new StringBuilder();
@@ -1326,11 +1346,44 @@ public class BotAgent {
         return VOLATILE_CONTEXT_HEADER + "\n" + body.toString().trim() + "\n---\n";
     }
 
-    /** 动态上下文并入用户消息开头（用户原话保持在最后，别让模板盖过正事）。 */
-    private String withVolatileContext(String userMessage) {
-        String block = volatileContextBlock();
-        String plain = userMessage == null ? "" : userMessage;
-        return block + plain;
+    /**
+     * 动态上下文<b>唯一</b>的注入点（P12e）：只贴到本次请求<b>最后一行 user</b> 的开头，
+     * 用户原话保持在最后（别让模板盖过正事）。
+     *
+     * <p>为什么是「最后一行 user」而不是「本轮那条原话」：同一轮里
+     * {@link #maybeAnnounceGrace} 与 steer 退路（{@link #injectSteer}）还会各补一条 user 控制行，
+     * 它们才是请求尾部。贴尾部保证<b>一次请求至多一块时钟</b>，历史行逐字是用户原话，
+     * 于是 N 轮之后第 N 次请求里也只有 1 块「当前时间」（取证见 EVIDENCE §11.1）。</p>
+     *
+     * <p>不改入参：{@link ConversationMemory#getMessages()} 给的是快照，返回的是新列表。</p>
+     */
+    private List<Msg> injectVolatileContext(List<Msg> messages) {
+        String block = turnVolatileBlock;
+        if (block == null || block.isEmpty() || messages.isEmpty()) {
+            return messages;
+        }
+        int tail = -1;
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if (messages.get(i).getRole() == com.zifang.z.agent.kernel.types.MessageRole.USER) {
+                tail = i;
+                break;
+            }
+        }
+        if (tail < 0) {
+            return messages;
+        }
+        List<Msg> out = new ArrayList<Msg>(messages);
+        out.set(tail, withVolatileContext(out.get(tail), block));
+        return out;
+    }
+
+    /**
+     * 把上下文块并进某一行消息的开头，除 content 外逐字段照抄（{@link Msg} 不可变，只能新建）。
+     */
+    private static Msg withVolatileContext(Msg message, String block) {
+        String plain = message.getContent() == null ? "" : message.getContent();
+        return new Msg(message.getRole(), message.getName(), block + plain, message.getType(),
+                message.getToolCallId(), message.getToolCalls(), message.getMetadata());
     }
 
     /** 长期记忆两层（用户画像 + 记忆）；SOUL 不在这里（它在冻结的 system prompt 里）。 */
