@@ -988,3 +988,136 @@ C C 只有 stub 一种形态 期望=PASS 实测=PASS OK | 扫了 3 个运行期�
 F F api.key=not-configured（假红侧） 期望=FAIL 实测=FAIL OK | 扫了 4 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['not-configured', 'stub-key-not-real']
 ```
 
+
+### 10.3.3 判决：那条"间歇红"不是 K2，是 K3；不是产品坏，是量具坏（p12d 实测）
+
+工单让我证明"K2 间歇红是量具坏还是产品坏"。合并树上的实测把问题本身修正了一半——
+**K2 从来没红过**（三整跑 + 探针 14/14 全绿），红的是同一段里的 **K3**，且只在连续两跑的第二跑上出现：
+
+| 跑（`bash ~/.cache/zbot-p12d/bar3.sh`，`p12_e2e.py` 无 `--only`） | rc | 条数 | FAIL 的那条 |
+|---|---|---|---|
+| run1 13:08:53→13:09:24 | 0 | 27/27 | 无 |
+| run2 13:09:24→13:09:56 | 1 | 26/27 | **K3** 命中=`out/p12d_e2e_run1.json` |
+| run3 13:09:56→13:10:26 | 0 | 27/27 | 无 |
+
+取证三条，逐条可复算：
+
+1. **命中的是转述件、不是产品产物**（`python3` 解析 `out/p12d_e2e_run1.json`）：
+   全文 `minimax` 只出现 **1 次**，位置在 K3 自己那条 check 的 **`name` 字段**（标题字面量
+   "…grep minimax 或真 ~/.zbot 绝对路径"），紧随其后的 token **长度=0**；
+   `/Users/zifang/.zbot` 出现 **0 次**；`api.key=` 之后长度≥40 的 token **0 个**。
+   ⇒ 读数里没有任何真凭证痕迹，K3 是被自己的标题词钉红的。
+2. **撞秒机制（纳秒取证）**：判据 `st_mtime >= RUN_START - 0.5`。
+   `out/p12d_e2e_run1.json` mtime=`1790399364.273`（=13:09:24.273），run2 起跑同一秒 13:09:24
+   ⇒ 落进窗口；run3 起跑 13:09:56 对 `run2.json` mtime=`…395.733`（13:09:55.733）⇒ 差 0.27s 没进窗。
+   **同一支脚本、同一个判据，进不进窗全看两跑之间那半秒的抖动 ⇒ 这就是"间歇"二字的全部来源。**
+3. **全局面负向体检**（只报个数与长度，绝不打印值）：`out/` + `logs/` 下 150 个可扫文件里，
+   `minimax` 相邻 ≥40 字符 token 的个数 = **0**；`stub-key-not-real` 出现 **328** 次
+   ⇒ 负向钉住的一侧一直是实的（stub 真在产物里），泄漏侧零命中。
+
+量具修复（commit `b210ad7`，只动扫描面分类，不动任何判据）：按**结构**（顶层恰好
+`checks/home_after/home_before/llm_calls/only` 五键 + 每条恰好四字段）把 harness 自己的
+读数转述件请出扫描面，并在 K3 读数里显式列出被请出的文件。不按文件名猜（G12 的教训）。
+
+修复后三证（`bash ~/.cache/zbot-p12d/k3fix_check.sh` / `k3ctrl.sh`）：
+
+| 证 | 复算命令 | 实测 |
+|---|---|---|
+| 判据没被调松（双向探针） | `python3 -u _doc/acceptance/p12/p12_k2_probe.py` | `PROBE_RC_AFTER_FIX=0`，`cases_OK=14/14`（工作树字节 7 支 + 封存字节 809b927 7 支） |
+| 假红消失 | 连续三整跑 `p12_e2e.py --json out/p12d_e2e_afterfix_run$i.json` | run1/2/3 全部 `rc=0 段=all 检查条数=27 PASS=27 FAIL=0` |
+| **阳性对照：哨兵还会咬** | 第 6 秒往窗内的真产物落 `out/llm-requests/zz-poison-control.json`（含 `minimax` + 一把别 key），再全段跑 | `POISON2_RC=1`；`K2 FAIL 见到的 key 值=['poisoned-not-a-real-key-0123456789','stub-key-not-real']`；`K3 FAIL 命中=['…/zz-poison-control.json']`（投毒件被点名，扫后面已删除） |
+| 结构判定零误伤 | 对 `out/` 全量跑 `is_readings_dump` | 21 个读数件 **全 True**；`out/llm-requests` 下 20 个真产物 **全 False** |
+
+**结论**：量具坏（两处，同源于 `e74f49c` 那笔未复算的 +111/−15：① `main()` 里 `only` 先用后赋值
+⇒ 任何调用必崩；② 扫描面换成 mtime 窗口后，读数转述件会撞进下一跑的窗 ⇒ 假红）。
+P12 的凭证卫生本身在合并树上零泄漏证据。
+
+## 10.4 杠④：`~/.zbot` 一字未动（E2E/mutation 在飞时同测）
+
+| 时点 | 复算命令 | 条目数 | config.properties md5 前 8 | state.db md5 前 8 |
+|---|---|---|---|---|
+| merge 之前 | `ls -A ~/.zbot \| wc -l`; `md5 -q … \| cut -c1-8` | **8** | **2dadaed0** | **690ddbc0** |
+| bar② 注入+E2E 在飞 | 同上 | **8** | **2dadaed0** | **690ddbc0** |
+| 收尾（bar② 全部还原之后，13:27:45） | 同上 | **8** | **2dadaed0** | **690ddbc0** |
+
+E2E 量具自带的第三方读数（`p12_e2e.py` 每次跑后自打，三跑同值）：
+`~/.zbot 跑前跑后: 项数 8→8, config md5 前缀 2dadaed0, state.db md5 前缀 690ddbc0`。
+
+**真 key 全程未被读、未被打印、未被复制、未被提交、未进任何日志**：本棒所有 E2E 都走
+`p12_e2e.py` 自己的临时根（`--config-dir`/`ZBOT_HOME` + `stub-key-not-real`），
+日志一律落 `~/.cache/zbot-p17/`（仓外），负向断言由 K1 在同一条里钉住"stub 真到达产物"。
+
+## 10.2 杠② 变异注入（合并树全量 19 支，`--with-e2e` 两层）
+
+复算：`python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e`
+（日志 `~/.cache/zbot-p17/p12d_bar2_full.log`，`MUT_RC=0`；flock 独占
+`/Users/zifang/…/z-bot/.git/zbot-mutlock`，输出首行 `LOCK-ACQUIRED mutator flock=LOCK_EX|LOCK_NB`）。
+
+| 项 | 复算命令 | 实测 |
+|---|---|---|
+| LEDGER 由脚本机械写出 | `tail -3 ~/.cache/zbot-p17/p12d_bar2_full.log` | `台账已机械写出: _doc/acceptance/p12/LEDGER.tsv`；行数 `awk -F'\t' 'END{print NR-1}'` = **19** |
+| 表头列名与写出顺序逐字一致 | 比对 `head -1 LEDGER.tsv` 与 `p12_mutation.py:566` 的 `fh.write("\t".join([…]))` | **一致**（11 列：id/verdict/named_expected/named_hit/tests_that_went_red/mvn_rc/e2e_rc/e2e_detail/note/restored/restore_forensics_vs_git） |
+| **verdict 分档（脚本重算，不抄旧账）** | `python3` `csv.DictReader` 计数 | **RED-OK 14 / PARTIAL 2 / GREEN-BUT-MUTATED 3 / BROKEN 0 / NO-RUN 0**；五档之外取值 = **空集** |
+| 点名集是否事后凑 | `git diff --stat e74f49c HEAD -- _doc/acceptance/p12/p12_mutation.py` + 两版 md5 | **空 diff、md5 同为 `p12_mutation.py` 封存字节 ⇒ 本棒一字未动这支量具**，19 支的具名 testcase 全部出自 `MUTANTS` 表第 7 字段（跑前就钉死） |
+| 逐支还原对账 | `git diff --stat -- z-bot-core`（跑完立即量）+ `md5 -q BotAgent.java` vs `git show HEAD:… \| md5 -q` | 前者**空**；后者两侧同为 `8452fa16781dc0fa5ac546feac93cd0e`；脚本自身 `SRC_MD5_STABLE=yes`，19/19 `restored=ok`、`restore_forensics_vs_git=base=HEAD before=ok after=ok` |
+| 与 483 面旧账的关系 | 逐单元格对拍 `e74f49c:LEDGER.tsv` vs 本份 | 判定列 **19/19 同档**；全表只差 2 个单元格（M6/M12 的 `e2e_detail`，内容是耗时与 sha 读数）⇒ 合并 main 没有改变任何一支的判红档位 |
+| 真进程层是否真跑了 | `awk -F'\t' 'NR>1 && $7!=""{print $1,$7}' LEDGER.tsv` | M6 `e2e_rc=1`、M12 `e2e_rc=1`；两支 `e2e_detail` 里 `B0 …=PASS[打包 rc=0；jar sha256=9ab90def…；git HEAD=b210ad7；z-bot-core/src 未提交改动=1 行]` ⇒ **未提交改动=1 行就是当支注入的字节**，反向钉住真进程跑在变异体上，不是拿旧 jar 顶包 |
+| 未覆盖自述 | `grep UNCOVERED ~/.cache/zbot-p17/p12d_bar2_full.log` | `exec 读输出循环的逐行检查点、mvn_build 入口检查点：摘掉之后看门狗仍在 50ms 内端掉进程树，从「多久断」这一面量不出差别，属于第二道保险；如实` |
+
+**这一棒的合并树读数没有把 5 支未完全覆盖的变异体变好**：`M1b`/`M16` 仍是 PARTIAL（点名 3/3、5/6），
+`M8`/`M9`/`M17` 仍是 GREEN-BUT-MUTATED（注入后 67 条点名测试仍全绿）。补它们的具名 testcase 属于加覆盖面，
+工单明写这一棒不加能力 ⇒ 留给主编决策（见 §10.5）。
+
+## 10.5 §未做（本棒，一条不许美化）
+
+1. **杠① 没有绿**：合并树三跑 `Tests run: 637, Failures: 1` 三次一致地红在同一条
+   `channel/GatewayDeliveryP16Test.graftedChatsShareOneSessionAndSerializeWithoutWedging`。
+   我实测它 **在 main `926b8b5` 单类跑是 18/18 绿**（`~/.cache/zbot-p17/p12d_main_control_run1.log`
+   `BUILD SUCCESS`，靠 `git worktree add --detach ~/.cache/zbot-p12d/wt-main 926b8b5` 隔离出来的），
+   并把归属钉到字面量：`git grep -l 'z-bot 运行时上下文'` 在合并树只命中 `agent/BotAgent.java`、
+   在 main 上 **ABSENT** ⇒ **红由 P12 侧引入**。修法要动 `channel/GatewayDeliveryP16Test.java`
+   （禁改域，且 `zbot-wt-p18` 正写着 `channel/`）⇒ **我没动，也没在 P12 侧偷偷绕过**。
+   这条不解决就并入 main，等于把 main 的一条既有测试弄红。
+2. 该红的**根因分层没做完**：我只证明了"回显断言没按 P12 协议剥头"这一面（断言 `startsWith("echo: A")`
+   对上新产物 `echo: <上下文头>\n---\nA0`）。没验：多会话 graft 路径之外是否还有别处按"裸原文"假设写死。
+   复算缺口：`git grep -n 'startsWith("echo' -- 'z-bot-core/src/test'` 我没跑遍全部 channel 测试。
+3. **杠② 的 5 支未完全判红项没补测试**（M1b/M16 PARTIAL、M8/M9/M17 GREEN-BUT-MUTATED）。
+4. `NO-RUN` 这一档在本面 **0 条**，因此它是否真能产出没被验证过（没有量具跑到那一档）。
+5. `z-bot-desktop-packager` 模块 surefire `classes=0`（0 个测试类）⇒ 它的打包/构建完全不在本棒证据面内。
+6. **没为 P12 新增任何真进程断言**：杠③ 的 27 条是 `p12_e2e.py` 既有判据。条数差已实测归因：
+   上一棒 483 面那条日志（`logs/p12c_e2e_final_run1.log`）真计数 **25**，本棒 **27**，
+   多出的两条是 `B0 本跑真进程用的是现打的 jar（打包 rc=0）` 与 `B0b 跑的过程中那台 jar 的字节没被换过`
+   （`git show 9acc05a:… vs e74f49c:…` 的 `check("…")` 标题集合对拍同结论）⇒ **这两条来自 `e74f49c`
+   那笔未复算的量具改动，与合并 main 无关**。但我没审这两条新判据自身有没有别的路径能假绿。
+7. 两支量具的 bug 我只修了"量具自身坏"：`p12_e2e.py` 的 `only` 先用后赋值（commit `c90643a`）、
+   K3 扫描面把读数转述件请出（commit `b210ad7`）。**`p12_mutation.py` 一字未动**，
+   因此它 `--with-e2e` 路径里对 `p12_e2e.py` 退出码的解读是否还藏着同类自污染，未审。
+8. 我自建过一个对照用 worktree `~/.cache/zbot-p12d/wt-main`（detached @926b8b5），收尾已 `git worktree remove`；
+   `/private/tmp/zbot-wt-p20/z-agent-kernel` 那个嵌套 checkout 一字节未碰。
+9. 没跑 `mvn` 之外的构建入口（gradle/bazel 无），没 push、没 merge 到 main、没 reset/clean/stash。
+
+## 10.6 本棒落盘与"能不能并入 main"的判词
+
+| 杠 | 一次跑齐了吗 | 关键读数（带量具） |
+|---|---|---|
+| ① 全量单测 ×3 串行 | 三跑一致但**一致地不绿** | `Tests run: 637, Failures: 1, Errors: 0, Skipped: 0` ×3；socket 类命中 0；`@Test`(git grep)=637=surefire 637（61 类） |
+| ② 变异注入 | 是（19/19，独占 flock） | RED-OK 14 / PARTIAL 2 / GREEN-BUT-MUTATED 3 / BROKEN 0 / NO-RUN 0；`SRC_MD5_STABLE=yes`；19/19 `restored=ok`；点名集所在脚本 `p12_mutation.py` 与 `e74f49c` md5 同为 `f5fef78071815b0f100447176fce8e35`（一字未动） |
+| ③ 真进程 E2E | 修好量具后 3/3 整跑绿 | `段=all 检查条数=27 PASS=27 FAIL=0` ×3（rc=0）；**K2 3/3 绿**；`p12_k2_probe.py` rc=0、14/14 case 符合期望；阳性对照 `POISON2_RC=1`（K2/K3 双红并点名投毒件） |
+| ④ `~/.zbot` | 三个时点同读数 | 条目数 8；`2dadaed0`；`690ddbc0`（merge 前 / bar② 在飞 / 13:27:45 收尾） |
+
+**判词（写给主编，不替你决定）**：杠②③④ 与"眼睛可信"这三件事已经站住；**P12 现在不具备并入 main 的门禁面**，
+唯一拦路的是杠① 那条红——它需要动 `channel/GatewayDeliveryP16Test.java`（本棒禁改域、且 `zbot-wt-p18` 在飞），
+要么 P12 侧给出可关的上下文注入门。二者都得由能碰 `channel/` 的那支或本产品的owner 落手。
+
+复算顺序（从零开始，一条不漏）：
+
+```
+cd /private/tmp/zbot-wt-p12
+git merge-tree --write-tree 926b8b5 e74f49c | wc -l                                   # 1
+git grep -c '@Test' HEAD -- 'z-bot-core/src/test' | awk -F: '{s+=$NF} END{print s}'   # 637
+bash ~/.cache/zbot-p12d/bar1.sh                                                       # 三跑串行 → p12d_bar1.summary
+python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e                             # 杠②（要独占 flock）
+bash ~/.cache/zbot-p12d/bar3.sh ; bash ~/.cache/zbot-p12d/k3fix_check.sh ; bash ~/.cache/zbot-p12d/k3ctrl.sh
+awk -F'\t' 'NR>1{c[$2]+=1} END{for(k in c) print k,c[k]}' _doc/acceptance/p12/LEDGER.tsv
+ls -A ~/.zbot | wc -l; md5 -q ~/.zbot/config.properties | cut -c1-8; md5 -q ~/.zbot/state.db | cut -c1-8
+```
