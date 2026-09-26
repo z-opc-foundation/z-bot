@@ -1238,3 +1238,19 @@ DIFF|cells=0 ids=无
 **这一节证到哪一步为止**：它证的是"杠② 整跑期间真 profile 的**首尾**两个时刻读数完备且相同"。
 `same=YES` 不证明"中途一次都没被写过又改回来"—— 中途不变这条仍靠 `ZBOT_HOME` 临时根隔离与"杠② 不启动 serve"的结构保证，
 和 §13.6/杠① 用的是同一个口径，不把它说成比读数更强。锁的纪律这次也一样：打印 `== 锁已释放 ==`，只 `os.close(fd)`，未 `unlink`。
+
+**这笔量具改动之后在新提交树补量杠①**（`c38e276`，04:11:44→04:15:00，串行三轮，日志 `~/.cache/zbot-integrate/bar1_c38e276.log`）：
+
+```
+BAR1_SERIES|dir=/Users/zifang/.cache/zbot-integrate/bar1_270411 start=2026-09-27 04:11:44 HEAD=c38e276
+BAR1_TREE|dirty_total=2 dirty_tracked=0 src_md5_delegate=5abe755b
+ROUND|r=1 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 04:12:49
+ROUND|r=2 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 04:13:55
+ROUND|r=3 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 04:15:00
+BAR1_SRC_MD5_END|index.html=bb3ff2e6 p28_e2e.py=2e8134bb
+BAR1_CLASSES|src=bb3ff2e6 classes=bb3ff2e6 src_len=53093 cls_len=53093
+BAR1_DONE|end=2026-09-27 04:15:00 dir=/Users/zifang/.cache/zbot-integrate/bar1_270411 HEAD=c38e276 dirty_tracked=0 src_md5_delegate=5abe755b
+```
+
+`dirty_tracked` 起止都是 0 ⇒ 这三跑属于 `c38e276` 这个 commit；`1162 / files=109` 与 §13.6 同分母（这一节只动 Python 量具与文档）；
+杠④ 六个采样点（每轮首尾各一次）逐格 `8/2dadaed0/690ddbc0`。

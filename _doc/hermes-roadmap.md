@@ -1187,3 +1187,6 @@ $ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
 - **口径边界（别把话说满）**：首尾同字节只证"整跑开始与结束那两个时刻完备且相同"，**不**证"中途一次没被写过又改回来"；
   中途不变仍由 `ZBOT_HOME` 临时根隔离 + 杠② 不启动 serve 来保证，与杠①/杠③ 同口径。真 key 全程只量长度（125），值未进任何读数。
   逐字原文与六支对照输出见 `p27/EVIDENCE.md` §13.7。
+- **新提交树 `c38e276` 的杠① 补量成立**（04:11:44→04:15:00 串行三轮，`dirty_tracked` 起止 0）：
+  `1162 / F=E=S=0 / files=109 / socket_hits=0` ×3，杠④ 六个采样点逐格 `8/2dadaed0/690ddbc0`，
+  `BAR1_CLASSES|src=bb3ff2e6 classes=bb3ff2e6 src_len=53093 cls_len=53093`；原文见 `p27/EVIDENCE.md` §13.7 末块。
