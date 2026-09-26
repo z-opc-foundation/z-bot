@@ -109,6 +109,40 @@ LEDGER 列（逐字）：`id	family	target	testcase	injection	expected_red_set	v
 
 实测读数：（待填 —— 脚本跑完直接贴 LEDGER 汇总）
 
+### 阳性对照（每族先跑 `injection=NONE`，猎物进不来就不给分）
+
+`LEDGER.tsv` 里 `CTRL-*` 六行：点名 testcase 在未注入时 **ran>0 且全绿** 才算该族有猎物，否则该族全部变异体记 `NO-RUN`。
+
+| 族 | 点名条数 | 未注入实跑 |
+|---|---|---|
+| A-后写覆盖 / B-惰性 / C-显式降级 / D-飞书协议 / E-钉钉签名 / F-web面 | 见 LEDGER `expected_red_set` 列 | `OK`（六族各自 ran 与耗时见 LEDGER 第 8 列，形如 `ran=6 rc=0 4.1s 红=-`） |
+
+### "惰性"是数出来的，不是读注释
+
+两支变异体都靠**构造计数器**判，不靠 javadoc：
+
+- `B1 registerFactory 时预热该 kind 的全部声明` —— 在工厂注册处真调 `create()`，猎物 `ChannelRegistryTest#loadingSpecsConstructsNothing` 里的 `built[0]`（工厂自增计数）与 `registry.createCount()` 当场从 `0` 变非零 ⇒ 判红。
+- `B2 读声明（specs()）就顺手构造` —— 把构造挂到只读接口 `specs()` 上，同一支猎物按同样的两个计数判红。
+- 未注入时该 testcase 的读数：`built[0]=0`、`createCount()=0`、`materializedNames()` 为空，且 `createAll` 之后才变成 `2`（阳性对照，见 `CTRL-B-惰性`）。
+- 复算命令：`python3 -u _doc/acceptance/p18/p18_mutation.py B1 B2`
+
+### manifest 每个声明位 ↔ 它的兑现路径（不许广告没兑现路径的能力）
+
+| 声明位 | 兑现代码 | 读它的断言 | 杀掉它的变异体 |
+|---|---|---|---|
+| `requires` | `ChannelRegistry.create()` 逐键检查后抛 `ChannelConfigException` | `requiresMissingKeysAreNamedExplicitly`、`createAllCollectsFailuresInsteadOfSilentlyDegrading` | C1（摘掉抛点）、C2（抛了但不点名） |
+| `default-port` | `Context.port()` 在 CLI/config 都没给时用它 | `defaultPortIsHonoredWhenNobodyGivesPort`（起真 `DingTalkChannel` 后读 `getPort()`）、`builtinManifestDeclaresFourKindsWithExpectedFlags` | A3（不读缺省档 ⇒ 端口形状消失） |
+| `outbound` | `ChannelRegistry.isOutbound()`，消费者在 `cli/GatewayCommand.java:126`（cron 投递口筛掉拉模式控制台） | `outboundFlagIsRecordedForCreatedChannels`（产出前 TRUE / 产出后 FALSE 双向）、`builtinManifestDeclaresFourKindsWithExpectedFlags` | F3（代码不读声明）、F4（声明本身写错） |
+| `enabled` | `create()` 拒绝 + `createAll()` 记 skipped | `createOnDisabledSpecIsAnExplicitRefusal`、`loadingSpecsConstructsNothing` 的 `skipped` 断言 | C5（缺省档把 feishu 打开） |
+| `kind` | 工厂表查表，查不到抛 | `unknownKindIsExplicitNotSilent` | A3 |
+| `config.<key>`（api-base / receive-id-type / app-id / app-secret / verification-token / webhook-url / secret / port / host） | `Context.value()` → 构造参数 → 真发出去的字节 | `FeishuOutboundTest` / `DingTalkOutboundTest` 全部按假端点收到的请求断言；杠③ A7/A11/A16 再按真进程断言一遍 | A2（config 后写不覆盖）、D1–D8、E1–E5 |
+
+### 两处不粉饰的账
+
+1. **`C2` 第一跑判 `BROKEN`，是我的量具写坏了**：注入串漏了一个收尾引号（`+ "）缺配置键（未点名）` 少了 `"`），编译不过。已修 `p18_mutation.py` 的 `new` 字段，**预期红集一字未动**（`requiresMissingKeysAreNamedExplicitly` + `createAllCollectsFailuresInsteadOfSilentlyDegrading`），复算：`git log -1 --stat` 与 `python3 -u _doc/acceptance/p18/p18_mutation.py C2`。
+2. **`D10` 判 `GREEN-BUT-MUTATED`（真缺口，不是量具坏了）**：把 `verifySignature()` 改成恒真，没有任何测试变红 —— 因为没有任何一支测试断言"错签名必须被拒"（`signatureHelperAcceptsCorrectDigest` 只断言正例、`signatureHelperRejectsMismatchWithoutEncryptKey` 走的是"未配 encryptKey ⇒ 关闭校验"那条），且 `verifySignature` 在生产码里**没有调用方**：`git grep -c verifySignature -- 'z-bot-core/src'` = `FeishuChannel.java:1 / FeishuChannelTest.java:4`，main 里那一处命中就是它自己的定义（`:663`）。⇒ 这是一条"广告了但没接线的入站签名能力"，进 §未做 第 8 条，不在这里替它圆场。真被接线的那道门是 `verificationToken` 比对，它有自己的猎物（`D9` 判红：`postEventWithBadTokenReturns401`）。
+3. **`F2` 判 `NO-RUN`（单测层没有猎物）**：`HttpConsoleChannel.start()` 不委托 `inner.start()` 时，进程内没有任何一支测试真去 GET 过控制台 ⇒ 不硬凑一个点名集，改由杠③ 的 `A2`（真 JVM 起 gateway 后 `GET /index.html` 判状态码 + 形状）当杀手，并实测"注入 F2 ⇒ A2 判红"（见 §杠③ 末尾的 F2 对撞实验）。
+
 ## 杠③ 真进程 E2E
 
 量具：`python3 -u _doc/acceptance/p18/p18_e2e.py`，整跑 ×3。
