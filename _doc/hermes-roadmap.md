@@ -1232,3 +1232,54 @@ $ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
 被真注册表调用 `toolkit.deregisterToolset(toolset(), owner())` 取代。⇒ **P20 的产物已通过 `w2-p20b`（`7a5f125`）在 main 里，
 `w2-p20` 只剩历史价值**；删分支/删工作树属不可撤销动作，等点头，不做。
 至此"集成收口 = 四期分支并入 main 并在目标树复测四杠"这一条的**分支侧全部结清**，目标树四杠读数见 §8.13.7–§8.13.9。
+
+### 8.13.11 P29 的 README×3 落了：三仓原来一篇都没有，现在每条主张带复算命令（09-27 04:26–04:47，主编亲测）
+
+起手先量而不是先写：三仓 `README=MISSING`、工作树 `clean=0`、HEAD 分别 `b08b74c` / `cb90416` / `e4ab193`
+（`for d in z-agent z-agent-kernel z-agent-proxy; do … done`，04:26:07）。写完各提交一笔，
+**只本地提交不 push**（§8.13.9 之后那条记账仍然成立：推送授权只覆盖 z-bot）：
+
+| 仓 | 新 HEAD | 篇幅 | 清树实测（我这一遍跑的） |
+|---|---|---|---|
+| `z-agent-proxy` | `861e0fb` | 75 行 | `Tests run: 3, F=E=S=0` + `BUILD SUCCESS`（1 个测试类） |
+| `z-agent-kernel` | `48c9a2c` | 136 行 | 类级 8 类求和 **47** == 模块级 6 条汇总 `28+8+2+4+3+2` **47**，`F=E=S=0`，`BUILD SUCCESS` |
+| `z-agent` | `2a4da07` | 133 行 | 类级 4 类求和 **37** == 汇总行 **37**，`F=E=S=0`，`BUILD SUCCESS` |
+
+`@Test` 文本尺与 surefire 在两仓**逐字相等**（47/47、37/37、3/3），这三仓没有 z-bot 那种"注释里写 `@Test`"的干扰源
+（复算：`grep -rho '@Test' --include='*.java' . | wc -l`）。三仓构建期间 `~/.zbot` 三读数不变：
+`bar4=8/2dadaed0/690ddbc0`，`minimax.api.key` 只量长度 = **125**（04:47:03 采样）。
+
+- **一次差点被我读成"绿"的空跑**（记下来，因为它是本档第 N 次同一个形状）：清树命令 `rm -rf target */target`
+  在**单模块仓** `z-agent-proxy` 上因 `*/target` 无匹配被 zsh 整条中止 ⇒ `rc=1`、`mvn` 根本没起、
+  日志文件不存在（`grep: …_clean.log: No such file or directory`）。暴露它的不是我的判断而是 `###END` 行的 `rc=1`。
+  ⇒ 判"这一遍跑过"的读数必须是 **`Tests run:` 那一行本身**，`BUILD SUCCESS` 缺席时"没有红"不等于"跑过"；
+  单模块仓的清树一律写 `mvn -o clean test`（这条已经写进 proxy 的 README 正文）。
+- **三篇的写法口径**：仿 z-bot 那篇（`ReadmeClaimsTest` 钉住的那篇）——首表给"坐标 / `<revision>` / **Central 实际有什么** /
+  JDK / pin / 规模 / 测试数"，每行右列是一条能贴进终端的命令；数字全部现量（不是从旧文档抄），
+  并写明"清单会变，信命令别信这一行"+ 读数日期。内核那篇的 25 模块表**是从各模块 `package-info.java` 第 2 行现读的**，
+  命令贴在表上方，所以表不会漂。
+- **写 README 时量出来的新缺口（都是产品侧，之前没有台账记它们）**：
+  1. `z-agent` 的 `POST /agent/{name}/stream` 是**占位**：不进 runner，直接回
+     `{status:"sse-ready", note:"SSE streaming endpoint placeholder; production wires runner.stream() to SseEmitter"}`
+     （`AgentController.java:65-74`）；而 `AgentRunner.stream(...)` 在生产里**零调用方**（全仓只有那句 note 提到它），
+     `StreamChunk` 这个 DTO 因此没有生产出口。类注释"POST /agent/{name}/stream — SSE 流式"这句当前不成立。
+  2. `z-agent` 的 HTTP 层与自动装配**零测试**：`grep -rn 'SpringBootTest\|MockMvc\|WebMvcTest'` ⇒ 空，
+     `AgentController` / `AdminController` / `ZAgentAutoConfiguration` 在测试里一次都没被引用 ⇒ 那 7 个端点的真实返回形态无验收。
+     另：`z.agent.enabled` 是 `matchIfMissing=false`（缺省不装），而 6 个 `LlmProvider` **不是 starter 给的**
+     （内核全仓 0 个文件引用 `org.springframework`）⇒ 业务方不自己 `@Bean` provider 就必然 `providerCount()=0`。
+  3. `z-agent-proxy` 的 pom `<description>` 点名 5 家（Cursor/Operator/Aider/Codeium/Continue）**实现只有 2 家**；
+     `AiderAdapter.capabilities()` 报 `git-commit` 而它自己的命令行带 `--no-auto-commits`（自相矛盾）；
+     两个 `isHealthy()` 都不探底层（一个只看目录在不在，一个只看 `!closed`）；`streamRun()` 是"跑完一次性回调"不是流式；
+     `CursorAdapter` 零测试；`z-boot-agent-proxy-starter` **没有 `src/`**（"一行 import 集成"没兑现成 bean）。
+  4. `z-agent-kernel`：**5 个模块只有 `package-info.java`**（`app`/`classifier`/`console`/`exception`/`tui`）、
+     **19 个模块零测试**（含 13 个文件的 `llm` ⇒ 6 个 provider 实现一支没测）、
+     **7 个模块在 foundation 内无任何仓外 pom 引用**（`pipeline`/`state` 属"有实现无消费者"；这条差集尺的第一版
+     忘了排掉内核仓自己 ⇒ 每个模块都被自己的 `<artifactId>` 算成"被引用"、差集恒空假绿；两支独立量具对过，
+     对出的都是同一 7 个）。还有 `pom.xml` 那句"1:1 对齐 agentScope"**没有任何机器检查**。
+  5. `StdioMcpTransport`（内核那份，不是 z-bot 里的——z-bot 没有同名文件，`find z-bot -name StdioMcpTransport.java` ⇒ 空）
+     两处会挂住的定位到行了：响应配对 `line.trim().contains("\"id\":" + id)`（`:80`）遇非紧凑 JSON 永不命中，
+     而 `deadline`（`:74`）只在两次阻塞 `readLine()`（`:75`）之间检查；`:60` 的 `clientInfo.version` 写死 `0.2.0`
+     而本仓 `<revision>` 是 `0.2.1`。本模块那 3 支测试（拿 `/bin/cat` 当回声 server）都不覆盖这三条。
+- **P29 还欠的**：`<revision>` `0.2.0→0.3.0` 抬号、发 Central、外部工程真 pull 验证 —— 三件都在 z-bot 的推送授权之外，
+  **等点头**；另外这三篇 README 目前只有"复算命令"而**没有守卫测试**（z-bot 那篇有 `ReadmeClaimsTest` 4 支 + M15/M16 两支注入证明牙口）。
+  要不要给三仓各补一篇 claims 守卫，属新写域（要在各仓 `src/test` 落文件），一并等点头。
