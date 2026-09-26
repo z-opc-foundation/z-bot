@@ -440,6 +440,10 @@ def table_D(html):
                 continue
             continue
         if "`)" in line:
+            # 最后一条广告和收尾的 `) 在同一行（index.html:1197 的 /exit）。
+            # 先收进行再停：早停一个字符，3.4 桶就会从 1 掉成 0（lead_r1 实测假红，
+            # 而 WIRING.md 里那条 `/exit 广告了没分支` 其实是对的）。
+            seg.append(line)
             break
         seg.append(line)
     body = "\n".join(seg)
@@ -511,7 +515,7 @@ def main():
     os.makedirs(CFG)
     print("E2E|run=%s repo=%s out=%s" % (RUN_TAG, REPO, OUT), flush=True)
 
-    home_names0 = bar4("t0_before_build")[1]
+    home_line0, home_names0, home_st0 = bar4("t0_before_build")
 
     t0 = time.time()
     rc_build, build_out = sh(["mvn", "-o", "-pl", "z-bot-core", "test-compile"],
@@ -652,8 +656,11 @@ def main():
     chk("S0 serve_up_on_loopback_free_port", bool(up) and srv.poll() is None,
         "端口/通道没接线（拿不到 200 就什么都量不到）",
         "port=%d /bot/status=%r" % (port_s, up[:80]))
+    # `-a` 是把 -p 与 -i 两个选择器**求交**的开关。少了它 lsof 取并集：
+    # lead_r1 实测 sockets=31、offenders 里是 rapportd 的 *:49236（macOS 自己的守护进程），
+    # 一条与 z-bot 无关的监听把这条"只绑回环"的守卫判成了红。
     rc_ls, ls_out = sh(["zsh", "-c",
-                        "lsof -nP -p %d -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2" % srv.pid],
+                        "lsof -nP -a -p %d -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2" % srv.pid],
                        timeout=40)
     listen_lines = [l for l in ls_out.splitlines() if "LISTEN" in l]
     nonloop = [l for l in listen_lines
@@ -707,7 +714,11 @@ def main():
     grammar_ok = True
     grammar_bad = ""
     for f in frames:
-        m = re.match(rb"^event: ([a-z_]+)\ndata: ([^\n]*)\n$", f, re.S)
+        # frames 是 sse_body.split(b"\\n\\n") 去掉末段得来的 ⇒ 帧**自带**的那个 \n 已被当成分隔符吃掉，
+        # 帧内不存在收尾 \n。原先的 `\\n$` 让三帧全部判"语法坏"，parsed 空 ⇒ S5/S6/S7 一起空跑红。
+        # 用 \\Z 而不是 $：`$` 会放过"帧尾多一个 \\n"的坏形状。
+        # 牙还在：data 里若漏出裸换行，帧里就多出第三行，[^\n]*$ 之后剩内容 ⇒ 整帧不匹配 ⇒ 红。
+        m = re.match(rb"^event: ([a-z_]+)\ndata: ([^\n]*)\Z", f, re.S)
         if not m:
             grammar_ok = False
             grammar_bad = f[:60].decode("utf-8", "replace")
@@ -723,23 +734,34 @@ def main():
         "服务端发出台账之外的新事件名（前端会静默丢帧，D-P28-3 的成因）",
         "vocabulary=%d seen=%s unknown=%s" % (len(vocabulary),
                                               sorted({e for e, _ in parsed}), unknown_events))
-    datas = "\n".join(d for _, d in parsed)
+    # 逐段判"没有裸换行"。原先写成 datas = "\n".join(...) 再问 datas 里有没有 \n ——
+    # 那个 \n 是 join 自己塞进去的，≥2 帧时恒假（lead_r1 实测 frames=3 恒红）。
+    final_data = [d for e, d in parsed if e == "final"]
     chk("S6_newline_inside_model_text_is_escaped",
-        "第一行" in datas and "\\n" in datas and "\n" not in [c for c in datas],
+        bool(parsed) and bool(final_data)
+        and all("\n" not in d for _, d in parsed)
+        and any("第一行" in d and "\\n" in d for d in final_data),
         "frame() 里去掉 .replace(\"\\n\", \"\\\\n\")（M8）⇒ 正文换行劈开帧",
-        "final=%r 帧数=%d" % ([d for e, d in parsed if e == "final"][:1], len(frames)))
+        "final=%r 帧数=%d 含裸换行的段=%d" % (final_data[:1], len(frames),
+                                             sum(1 for _, d in parsed if "\n" in d)))
     step_frames = len([1 for e, _ in parsed if e == "step"])
     finals = [unescape(d) for e, d in parsed if e == "final"]
     last_event = parsed[-1][0] if parsed else ""
     done_data = parsed[-1][1] if parsed else ""
     m_done = re.match(r"^\[DONE] steps=(\d+) replyLen=(\d+)$", done_data)
+    # replyLen 的真值只能取"供应商实际被请求答复的那串"，不能取帧里正文反解出来的长度：
+    # frame() 先 .replace("\r","") 再转义 \n，所以本跑（脚本里故意放了 \r\n）线上正文比原文短 1。
+    # 两个方向都钉：摘转义 ⇒ S6 红；数字随手写 / 归一化偷偷变 ⇒ 这两条红。
+    served_text = fake.hits[-1]["content"] if fake.hits else ""
     chk("S7_last_frame_is_done_and_its_numbers_are_real",
         m_done and last_event == "done"
         and int(m_done.group(1)) == step_frames
-        and int(m_done.group(2)) == sum(len(x) for x in finals),
+        and int(m_done.group(2)) == len(served_text)
+        and finals == [served_text.replace("\r", "")],
         "done 帧随手写数字（台账 count/total 谎报的同型）",
-        "done=%r step_frames=%d final_len=%d" % (done_data[:60], step_frames,
-                                                 sum(len(x) for x in finals)))
+        "done=%r step_frames=%d 原文长=%d 剥\\r后长=%d" % (done_data[:60], step_frames,
+                                                        len(served_text),
+                                                        sum(len(x) for x in finals)))
     chk("S8_headers_carry_event_stream_without_content_length",
         sse_status.startswith("HTTP/1.1 200")
         and (sse_headers.get("content-type") or "").startswith("text/event-stream")
@@ -775,9 +797,12 @@ def main():
     Cs, Ds = table_C(served_html), table_D(served_html)
     print("SERVED|status=%r bytes=%d C_from_served=%s D_from_served=%s"
           % (status_i, len(served_html), " ".join(Cs), " ".join(Ds)), flush=True)
-    chk("T1_web_tables_from_disk_equal_from_served_bytes", Cs == C and Ds == D and status_i.endswith("200"),
+    # 状态行是 "HTTP/1.1 200 OK"，endswith("200") 恒假（lead_r1：两份 html 的 C/D 逐条相同却判红）。
+    code_i = status_i.split(" ")[1] if len(status_i.split(" ")) > 1 else "?"
+    chk("T1_web_tables_from_disk_equal_from_served_bytes",
+        Cs == C and Ds == D and code_i == "200",
         "resources 里的 index.html 与 classpath 里被 serve 出去的那份分叉（文档派生尺读的是盘上文件）",
-        "disk C=%s D=%s served C=%s D=%s" % (C, D, Cs, Ds))
+        "status=%r disk C=%s D=%s served C=%s D=%s" % (status_i, C, D, Cs, Ds))
 
     diffs = {
         "3.1 只在服务端注册表": [x for x in A if x not in set(B) | set(C)],
@@ -858,18 +883,27 @@ def main():
     post_only = [r[1] for r in tsv_rows if r[0] == "POST" and
                  not any(x[0] == "GET" and x[1] == r[1] for x in tsv_rows)]
     wrong_method = []
+    opt_offenders = []
     for path in post_only:
         _r4, hs4, st4, _b4, _ = raw_http(port_s, "GET", path, hard_seconds=15)
         code4 = st4.split(" ")[1] if len(st4.split(" ")) > 1 else "?"
-        allow = (hs4.get("allow") or "").strip()
+        allow = sorted(x.strip() for x in (hs4.get("allow") or "").split(",") if x.strip())
         declared = sorted({r[0] for r in tsv_rows if r[1] == path})
-        ok = code4 == "405" and set(x.strip() for x in allow.split(",")) == set(declared)
-        if not ok:
+        # 服务端 ledgerMethods() 的构造是"登记方法 + 恒附 OPTIONS"（OPTIONS 在 404/405 那道门
+        # 之前就回 204），所以判据是 allow == declared ∪ {OPTIONS} 逐字相等。
+        # 写成"等于 declared"会把 9 条 POST-only 全判红（lead_r1 实测）；写成"是超集"就没牙。
+        if not (code4 == "405" and allow == sorted(set(declared) | {"OPTIONS"})):
             wrong_method.append("%s code=%s allow=%r declared=%s" % (path, code4, allow, declared))
+        # Allow 广告了 OPTIONS 就得真答它：摘掉 dispatch 开头那个 OPTIONS 分支 ⇒ 落进 405 ⇒ 这条红。
+        _r4o, _hs4o, st4o, _b4o, _ = raw_http(port_s, "OPTIONS", path, hard_seconds=15)
+        code4o = st4o.split(" ")[1] if len(st4o.split(" ")) > 1 else "?"
+        if code4o != "204":
+            opt_offenders.append("%s %s" % (path, code4o))
     chk("T7_wrong_method_is_405_with_ledger_allow_header",
-        post_only and not wrong_method,
-        "M7：摘掉 Allow 头（mvn 实测 SURVIVED）/ 或 Allow 与台账登记方法不一致",
-        "post_only=%d offenders=%s" % (len(post_only), wrong_method[:3]))
+        post_only and not wrong_method and not opt_offenders,
+        "M7：摘掉 Allow 头（mvn 实测 SURVIVED）/ Allow 与台账不一致 / 广告 OPTIONS 却不兑现",
+        "post_only=%d offenders=%s options_未兑现=%s"
+        % (len(post_only), wrong_method[:3], opt_offenders[:3]))
 
     # ================= D 组：杠④ 与卫生 =================
     srv.terminate()
@@ -879,15 +913,19 @@ def main():
         srv.kill()
         srv.wait()
     srv_log.close()
-    names2, st2_map, _ = bar4("t2_after_e2e")[1], None, None
+    _l2, names2, st2_map = bar4("t2_after_e2e")
     _r5, out_kill = sh(["zsh", "-c", "ps -p %d -o pid= || true" % srv.pid], timeout=30)
     auths = list(fake.auth_seen)
     fake.shutdown()
 
+    # 原先这里是 `names2, st2_map, _ = bar4(...)[1], None, None` + `st2_map_ok()` 恒 return True：
+    # md5 那半边**从未参与判定**（细节行里印的就是 md5=None），一条把真 key 换掉的写盘也拦不住。
+    # 现在三个时点的 (目录名, config/state 两个 md5) 都进等式，且不许 MISSING。
     chk("U1_bar4_three_timepoints_unchanged",
-        home_names0 == names2 and st2_map_ok(st2_map),
+        home_names0 == names2 and home_st0 == st2_map
+        and "MISSING" not in st2_map.values() and len(names2) == 8,
         "任何一处往真 profile 写东西（比如把 ~/.zbot 当缺省 configDir）",
-        "names %d->%d md5=%s" % (len(home_names0), len(names2), st2_map))
+        "names %d->%d md5 t0=%s t2=%s" % (len(home_names0), len(names2), home_st0, st2_map))
     chk("U2_real_key_never_read_and_stub_only_on_the_wire",
         all(STUB_KEY in a or a == "<none>" for a in auths) and auths,
         "把真 key 打进请求（Authorization 里出现非 stub 值）",
