@@ -232,10 +232,15 @@ public class AcpRealAgentChainTest {
         assertEquals("队列真身就是 BotAgent 的那个 ApprovalService", 1, agent.pendingApprovals().size());
         String queuedId = agent.pendingApprovals().get(0).id();
         assertEquals(queuedId, child(permission, "params", "toolCall", "_meta", "approvalRequestId").asText());
-        assertEquals("{\"command\":\"rm -rf ./out\"}",
-                child(permission, "params", "toolCall", "rawInput", "argsJson").asText());
+        // rawInput 必须是"工具的真入参对象"（她 SDK acp/helpers.py 同形），不是 z-bot 的记账壳：
+        // command 键取模型给的那个 command 参数，整串 argsJson 挪进 _meta 由人审/执行同源取用。
+        assertTrue("rawInput 得是对象，IDE 才渲染得出来: "
+                        + child(permission, "params", "toolCall", "rawInput").toString(),
+                child(permission, "params", "toolCall", "rawInput").isObject());
         assertEquals("rm -rf ./out",
                 child(permission, "params", "toolCall", "rawInput", "command").asText());
+        assertEquals("{\"command\":\"rm -rf ./out\"}",
+                child(permission, "params", "toolCall", "_meta", "approvalArgsJson").asText());
         assertEquals(acpId, child(permission, "params", "sessionId").asText());
 
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":" + idLiteral(permission)

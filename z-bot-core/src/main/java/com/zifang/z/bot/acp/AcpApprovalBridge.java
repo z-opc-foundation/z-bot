@@ -248,15 +248,17 @@ public final class AcpApprovalBridge {
         text.put("type", "text");
         text.put("text", head.reason() == null ? parsed.reason : head.reason());
         content.add(text);
-        ObjectNode rawInput = JsonRpc.object();
-        rawInput.put("command", head.command());
-        rawInput.put("argsJson", head.argsJson());
-        rawInput.put("approvalKey", head.approvalKey());
-        call.set("rawInput", rawInput);
+        // rawInput = 工具的真入参（与她 SDK acp/helpers.py 的 raw_input=dict 同形），与
+        // AcpStreamPublisher 的 tool_call 帧共用同一个 parseJsonOrWrap：同一个 toolCall 在
+        // "待批外送"和"执行中"两条帧里必须是同一个形状，否则 IDE 只能渲染其中一条。
+        // z-bot 自己的记账字段（argsJson / approvalKey）挪进 _meta，不冒充协议的 rawInput。
+        call.set("rawInput", AcpStreamPublisher.parseJsonOrWrap(head.argsJson()));
         // requestId 只经 ApprovalService 拿得到：这条 meta 就是"桥真的接在 FIFO 上"的证据。
         ObjectNode meta = JsonRpc.object();
         meta.put("approvalRequestId", head.id());
         meta.put("approvalSessionKey", head.sessionKey());
+        meta.put("approvalArgsJson", head.argsJson() == null ? "" : head.argsJson());
+        meta.put("approvalKey", head.approvalKey());
         meta.put("rule", head.rule());
         call.set("_meta", meta);
         return call;

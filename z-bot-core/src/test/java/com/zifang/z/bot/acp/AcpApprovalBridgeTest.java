@@ -108,7 +108,10 @@ public class AcpApprovalBridgeTest {
         assertEquals("requestId 必须就是队列里那条的 id（不是编的）",
                 f.target.pendingApprovals().get(0).id(), requestId);
         assertEquals("exec", call.path("title").asText().split(":")[0]);
-        assertTrue(call.path("rawInput").path("argsJson").asText().contains("rm -rf ./build"));
+        // 执行用的整串 args 走 _meta（人审放行后 confirmTool 取的就是它），rawInput 只放协议意义上的真入参。
+        assertTrue(call.path("_meta").path("approvalArgsJson").asText().contains("rm -rf ./build"));
+        assertTrue("rawInput 必须与 session/update 的 tool_call 同形（对象，不是记账壳）: "
+                        + call.path("rawInput"), call.path("rawInput").isObject());
         assertEquals("pending", call.path("status").asText());
 
         // 选项集 = z-bot 的四档，optionId 沿用她的稳定命名。

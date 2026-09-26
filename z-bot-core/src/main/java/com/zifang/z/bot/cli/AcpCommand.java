@@ -159,18 +159,35 @@ public class AcpCommand implements Callable<Integer> {
         };
         for (int i = 0; i < chain.length; i++) {
             probe.handleLine(chain[i]);
+            List<String> emitted;
             synchronized (frames) {
-                for (String f : frames) {
-                    System.err.println("[acp --check] ← " + f);
-                }
+                // 必须先取快照再清空：清空之后再问 isEmpty() 恒为真，
+                // 这条自检就会在"其实全接上了"的那次运行里也返回非 0（rc=i+1）。
+                emitted = new ArrayList<String>(frames);
                 frames.clear();
             }
-            if (frames.isEmpty()) {
+            for (String f : emitted) {
+                System.err.println("[acp --check] ← " + f);
+            }
+            if (emitted.isEmpty()) {
                 System.err.println("[acp --check] 第 " + (i + 1) + " 步没有任何回帧: " + chain[i]);
                 return i + 1;
             }
+            if (i == chain.length - 1) {
+                // 注释里承诺的自检点要真验：未知方法必须大声 -32601，
+                // 否则"接得上"可能只是"什么都往里吞"。
+                boolean methodNotFound = false;
+                for (String f : emitted) {
+                    if (f.contains("\"code\":-32601")) {
+                        methodNotFound = true;
+                    }
+                }
+                if (!methodNotFound) {
+                    System.err.println("[acp --check] 未知方法没有按 -32601 大声失败: " + emitted);
+                    return chain.length + 1;
+                }
+            }
         }
-        // 第 4 步必须是 method-not-found（-32601），这是"未知方法大声失败"的自检点。
         registry.closeAll();
         System.err.println("[acp --check] 装配自检通过：initialize/newSession/list 有回帧，"
                 + "未知方法已按 -32601 大声失败");

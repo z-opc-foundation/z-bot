@@ -242,7 +242,14 @@ public final class AcpStreamPublisher implements StreamListener {
         return update;
     }
 
-    private JsonNode parseJsonOrWrap(String raw) {
+    /**
+     * 工具入参/输出 → wire 上的 JSON 形状。
+     *
+     * <p>包内共享：审批帧的 {@code toolCall.rawInput}（{@link AcpApprovalBridge}）与这里的
+     * {@code session/update} 必须走同一个函数 —— 同一个 toolCall 在两条帧里给出两种形状，
+     * IDE 端就只能挑一条渲染（她 SDK 的 {@code acp/helpers.py:226,247} 就是"rawInput 即真入参对象"）。</p>
+     */
+    static JsonNode parseJsonOrWrap(String raw) {
         if (raw == null || raw.isEmpty()) {
             return JsonRpc.object();
         }
