@@ -929,3 +929,62 @@ A0
 ## 10.5 §未做（本棒）
 
 （待填）
+
+### 10.3.1 杠③ 真进程 E2E 三整跑（合并树，`p12_e2e.py` 无 `--only`）
+
+复算：`bash ~/.cache/zbot-p12d/bar3.sh`（先 `mvn -o -q package -DskipTests -pl z-bot-core`，
+再 `find z-bot-core/src/main/java -name '*.java' -newer z-bot-core/target/z-bot-core.jar` ⇒ **N=0**（jar 与源码同批字节）。
+每跑日志 `~/.cache/zbot-p17/p12d_bar3_e2e_run$i.log`）
+
+| 跑 | rc | 条数 | PASS | FAIL | 墙钟 | K2 判定 |
+|---|---|---|---|---|---|---|
+| run1 | 0 | 27 | 27 | 0 | 13:08:53→13:09:24 | PASS |
+| run2 | 1 | 27 | 26 | 1 | 13:09:24→13:09:56 | PASS |
+| run3 | 0 | 27 | 27 | 0 | 13:09:56→13:10:26 | PASS |
+
+**K2 三跑 3/3 绿**（这是工单点名要的比值）。逐跑 K2 原文：
+
+```
+PASS  K2 产物里出现的每一种 key 值都只有 stub-key-not-real                    扫了 28 个运行期产物（本跑新建/改动过的；另有 114 个本跑没碰过的既有文件不在面上）；见到的 key 值=['stub-key-not-real']   <- run1
+PASS  K2 产物里出现的每一种 key 值都只有 stub-key-not-real                    扫了 29 个运行期产物（本跑新建/改动过的；另有 114 个本跑没碰过的既有文件不在面上）；见到的 key 值=['stub-key-not-real']   <- run2
+PASS  K2 产物里出现的每一种 key 值都只有 stub-key-not-real                    扫了 28 个运行期产物（本跑新建/改动过的；另有 116 个本跑没碰过的既有文件不在面上）；见到的 key 值=['stub-key-not-real']   <- run3
+```
+
+E2E 自带杠④ 佐证（`p12_e2e.py` 自己在 creds 段之后打印，三跑同读数）：
+
+```
+  ~/.zbot 跑前跑后: 项数 8→8, config md5 前缀 2dadaed0, state.db md5 前缀 690ddbc0
+```
+
+### 10.3.2 K2 双向探针 `p12_k2_probe.py` 原文（rc=0，7/7 case 符合期望）
+
+复算：`python3 _doc/acceptance/p12/p12_k2_probe.py; echo rc=$?` ⇒ `rc=0`；日志 `~/.cache/zbot-p12d/k2_probe_step0.log`。被测字节=**工作树 `p12_e2e.py`**。
+工单点名的三个 case（并存⇒绿 / 塞别的 key⇒红 / 零命中⇒红）的 K1/K2/K3 三行原文：
+
+```
+A  A 两形态并存（都只含 stub）                      期望=PASS 实测=PASS OK          | 扫了 4 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['stub-key-not-real']
+PASS  K3 运行期产物里不出现真配置的痕迹（grep minimax 或真 ~/.zbot 绝对路径）           扫描面=4 个；命中=[]；本跑没碰过、故不在面上的既有文件=[]
+```
+
+```
+B  B 混入别的 key 值                           期望=FAIL 实测=FAIL OK          | 扫了 4 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
+PASS  K3 运行期产物里不出现真配置的痕迹（grep minimax 或真 ~/.zbot 绝对路径）           扫描面=4 个；命中=[]；本跑没碰过、故不在面上的既有文件=[]
+```
+
+```
+D  D 产物里配不到任何 key                         期望=FAIL 实测=FAIL OK          | 扫了 3 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=[]
+PASS  K3 运行期产物里不出现真配置的痕迹（grep minimax 或真 ~/.zbot 绝对路径）           扫描面=3 个；命中=[]；本跑没碰过、故不在面上的既有文件=[]
+```
+
+七支 case 的判定行（含探针自带的稳定性复跑 A2、单向形态 C、假红侧 F），逐字：
+
+```
+A A 两形态并存（都只含 stub） 期望=PASS 实测=PASS OK | 扫了 4 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['stub-key-not-real']
+B B 混入别的 key 值 期望=FAIL 实测=FAIL OK | 扫了 4 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
+B B2 混入别的 Bearer 值 期望=FAIL 实测=FAIL OK | 扫了 3 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
+D D 产物里配不到任何 key 期望=FAIL 实测=FAIL OK | 扫了 3 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=[]
+A A2 同现场再跑一遍（稳定性） 期望=PASS 实测=PASS OK | 扫了 4 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['stub-key-not-real']
+C C 只有 stub 一种形态 期望=PASS 实测=PASS OK | 扫了 3 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['stub-key-not-real']
+F F api.key=not-configured（假红侧） 期望=FAIL 实测=FAIL OK | 扫了 4 个运行期产物（本跑新建/改动过的；另有 0 个本跑没碰过的既有文件不在面上）；见到的 key 值=['not-configured', 'stub-key-not-real']
+```
+
