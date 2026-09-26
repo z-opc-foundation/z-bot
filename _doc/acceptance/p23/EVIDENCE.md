@@ -927,9 +927,9 @@ A5 的历史读数：p23b 六跑恒 `撞核心名=False 平台门=True`（FAIL�
 
 ```
 $ date -u +%Y-%m-%dT%H:%M:%SZ ; ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/.zbot/state.db | cut -c1-8 ; test -e ~/.zbot/skills && echo EXISTS || echo NOT_EXIST ; awk -F= '/^minimax\.api\.key=/{print length($2)}' ~/.zbot/config.properties
-t0 开工       2026-09-26T09:03:2xZ 本地 17:03 : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125   （§11.0）
-t1 杠① 在飞   2026-09-26T09:15:28Z                : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125
-t2 杠③ 之后   2026-09-26T09:23:19Z                : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125
+t0 开工（§11.0 那次只量了三值＋skills 不存在，keylen 当场没取）: 本地 Sat Sep 26 17:03:28 CST 2026 : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST
+t1 杠① 在飞   2026-09-26T09:15:28Z : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125
+t2 杠③ 之后   2026-09-26T09:23:19Z : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125
 -rw-r--r--@ 1 zifang staff 215 Jul 12 13:54:07 2026 ~/.zbot/config.properties     ← mtime 未推进
 -rw-r--r--@ 1 zifang staff 569344 Sep 25 17:05:14 2026 ~/.zbot/state.db           ← mtime 未推进
 ```
@@ -943,6 +943,26 @@ t2 杠③ 之后   2026-09-26T09:23:19Z                : 8 / 2dadaed0 / 690ddbc0
 
 | 要动 X | 因为 Y | 会撞 Z |
 |---|---|---|
-| 把 `/help`（及 `/?`、`/status`、`/theme`、`/feedback`、`/confirm`、`/exit`）纳入 `coreCommandNames()` 的守卫面 | 这 7 条是 `channel/TerminalChannel.java:235` 的本地 doc，从没进 `SlashRegistry`；技能 `name: help` 仍可在命令表里注册一条 `/help`，而 `TerminalChannel` 是先查 `command != null` 再落到本地 doc ⇒ **技能可以顶掉本地 `/help`**（D-2 候选，p23c 只按 §1.3 钉死既有守卫的口径，没扩这条） | 工单 §1.5「不要扩范围」＋ §3.4 禁写 `channel/**`；改哪一侧（把 help 注册进 registry，还是让 TerminalChannel 的本地 doc 先判）是产品决策，交主编 |
+| 把 `/help`（及本地 doc 那一族）纳入 `coreCommandNames()` 的守卫面 | 实测：`TerminalChannel.java:225` 先 `slash.find(name)`、命中就用它，落不到才轮到 `:226-238` 的本地分支（`/status` `/theme` `/feedback` `/confirm` `/help`\|`/?` `/exit`\|`/quit`\|`/q`，即 `LOCAL_DOC` 那 6 条，`:105-110`）；这 6 条**一条都不在** registry 的 20 条核心名里 ⇒ 技能 `name: help` 仍能在命令表里注册一条 `/help` 并**顶掉本地 /help 表**（D-2 候选；p23c 只按 §1.3 钉死既有守卫的口径，没扩这条） | 工单 §1.5「不要扩范围」＋ §3.4 禁写 `channel/**`；改哪一侧（把 help 注册进 registry，还是让本地 doc 先判）是产品决策，交主编 |
 | `coreCommandNames()` 改成吐裸 slug（口径 B） | 口径 A 已经让 `BotAgent` 零改动；口径 B 要动 `BotAgent:936/939` 的映射，正踩在 4 支共写的雷区上 | §3.4 |
 | `reserved` 两侧同时容错（既 `test(key)` 又在调用方补斜杠） | 工单 §1.1 明令只许一处归一；本棒已用 `caller_side_normalization_reintroduced` 这支变异把它钉住（RED-OK） | §1.1 |
+
+### §11.8 收口自查（p23c）
+
+```
+$ date -u +%Y-%m-%dT%H:%M:%SZ ; ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/.zbot/state.db | cut -c1-8 ; test -e ~/.zbot/skills && echo EXISTS || echo NOT_EXIST ; awk -F= '/^minimax\.api\.key=/{print length($2)}' ~/.zbot/config.properties
+t3 收口（本棒最后一次提交前）2026-09-26T09:24:41Z : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125
+$ grep -rho '@Test' --include='*.java' z-bot-core/src/test/java | wc -l
+775                                     （769 → 775）
+$ git diff 61d5b52..HEAD --numstat -- z-bot-core/src/main/java/com/zifang/z/bot/agent/BotAgent.java | wc -l
+0                                       （BotAgent.java 动过 0 行；禁写域 context/ llm/ tool/env/ memory/ delegate/ 各 0 行）
+$ git diff 5b79d88..HEAD --name-only -- z-bot-core/src | wc -l
+0                                       （杠①②③ 之后 src 再没动过 ⇒ §11.3 的三跑数字量的就是现在这棵树）
+$ git log --oneline 61d5b52..HEAD | wc -l ; git status --porcelain
+5                                       仅 _doc/acceptance/p23/EVIDENCE.md（本节）＋ 前棒遗留未跟踪 __pycache__
+```
+
+四杠对位：杠① 3× 全 reactor `775/0/0/0` rc=0 ×3（§11.3）；杠② 整批重打 47 支 `RED-OK=47`、
+双向变异与"两边都容错"三支全杀、还原 md5 对账 0 行不符（§11.4）；杠③ `41/41` ×3、A5 判据一字未改（§11.5）；
+杠④ t0/t1/t2/t3 四时点三值全等、`~/.zbot/skills` 始终不存在（§11.6 + 本节）。
+Git：5 次提交全走 `git add -- <显式路径>` + `git commit -m … -- <同路径>`，无 push / merge / stash / reset / clean。
