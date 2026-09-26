@@ -65,7 +65,7 @@ SRC = {
 TESTS = ",".join([
     "BotAgentTest", "BotAgentMemoryTest", "SystemPromptCacheFreezeTest",
     "P12RefundAndSteerGuardTest", "ToolSideInterruptTest", "AgentCoreP1Test",
-    "DelegateTaskTest", "SlashRegistryTest",
+    "DelegateTaskTest", "SlashRegistryTest", "VolatileContextPersistenceTest",
 ])
 
 HDR = "VOLATILE_CONTEXT_HEADER"
@@ -83,14 +83,21 @@ MUTANTS = [
      "缓存前缀里混进每轮都变的东⻄＝击穿缓存；杠① 修好的那条断言第二半（上下文不许进 system）必须抓到它"),
 
     ("M1b 上下文块搬回 system prompt（替换式：user 只剩原文）", "mvn", "bot",
-     "memory.add(Msg.user(withVolatileContext(mergeQueued(userMessage))));",
-     "memory.add(Msg.user(mergeQueued(userMessage)));",
+     # P12e 重锚：注入点从 memory.add(...) 搬到了建 request 时（BotAgent.injectVolatileContext），
+     # 旧锚点 `memory.add(Msg.user(withVolatileContext(mergeQueued(userMessage))));` 已不存在
+     # （漂移实测 count=0，见 EVIDENCE §11.5）。语义不变的等价锚点是「本轮块算成空串」：
+     # 一样是「发给模型的 user 行只剩原文」，且注入侧无从兜底。
+     "this.turnVolatileBlock = volatileContextBlock();",
+     "this.turnVolatileBlock = \"\";",
      1,
      ["newSessionAndSwitchRestoreHistory",
       "volatileContentReachesTheModelThroughTheUserMessageNotTheSystemPrompt",
-      "soulStaysInSystemPromptAndMemoryGoesToUserMessage"],
-     "反方向：user 消息里没有上下文头了。第一条断言（剥头之后逐字相等）必须因为找不到分隔符而红 —— "
-     "它同时证明我把 assertEquals 换成的是「按协议剥头再逐字相等」，不是 contains"),
+      "soulStaysInSystemPromptAndMemoryGoesToUserMessage",
+      "thirdRequestInOneSessionStacksContradictoryClockBlocks"],
+     "反方向：user 消息里没有上下文头了。BotAgentTest 那条（剥头之后逐字相等）必须因为请求里"
+     "找不到分隔符而红 —— 它同时证明 assertEquals 换的是「按协议剥头再逐字相等」，不是 contains；"
+     "P12e 新增的 thirdRequestInOneSessionStacksContradictoryClockBlocks 是它的阳性对照"
+     "（第 1 轮就要看到时钟块），摘掉注入 ⇒ 两支一起红"),
 
     ("M2 自动压缩不退款", "mvn", "bot",
      "long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, compressed));",

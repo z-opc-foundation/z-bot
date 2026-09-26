@@ -1362,7 +1362,29 @@ git grep -n "getContent()" -- '.../cli' '.../delegate'                          
 终端回显打的是回复文本与 title，不 dump 历史行。**这就是选"请求侧注入"而不是"渲染侧剥"的理由**：
 后者要数得清所有面（上面这张表就是数得清但会漏的那种活），前者只需要一个注入点 + 一处源头。
 
-## 11.4 杠①：全量单测串行三跑
+## 11.4 杠①：全量单测串行三跑（改完产品码之后）
+
+```
+bash ~/.cache/zbot-p12e/bar1_p12e.sh          # 每跑先 rm -rf z-bot-core/target/surefire-reports
+run1 rc=1 | Tests run: 640, Failures: 1, Errors: 0, Skipped: 0 | socket_hits=0
+run2 rc=1 | Tests run: 640, Failures: 1, Errors: 0, Skipped: 0 | socket_hits=0
+run3 rc=1 | Tests run: 640, Failures: 1, Errors: 0, Skipped: 0 | socket_hits=0
+```
+
+- 条数对账：`git grep -c '@Test' HEAD -- 'z-bot-core/src/test' | awk -F: '{s+=$NF} END{print s}'` = **640**
+  = surefire 的 640（637 条 P12d 基线 + 本棒新增 3 条 `VolatileContextPersistenceTest`）；测试类 62 个
+  （`grep -c "in com.zifang" bar1_run1.log`）。
+- socket 类：`grep -cE "BindException|Connection refused|SocketTimeout"` 三跑均 **0**。
+- **那 1 红就是任务二那一红，一字未变**：三跑都是
+  `GatewayDeliveryP16Test.graftedChatsShareOneSessionAndSerializeWithoutWedging:381 回显对不上说明两条会话串味了: echo: [z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）`
+  ⇒ 本棒没有新增任何红，也没有把这条已有的红搬走。
+
+**为什么不顺手把它"修绿"**：任务一的修法动的是 `memory`/transcript 侧，**请求形状一个字没改**
+（`system` + 本轮 user 行仍是「抬头 + 块 + 原话」，被 `SystemPromptCacheFreezeTest` 与 M1b 三支点名钉着），
+所以 `chan.sent` 的文本形状对 P16 那句 `startsWith("echo: A")` 依旧过期。这一句归 `channel/` 的那支或
+主编落刀（本棒禁改域），补丁文本与其实测读数在 §11.8。
+（备选方案"把上下文块拆成独立一条 message"能让 P16 不改而变绿，但要改 P12d 那条「块与原话同一条 user、
+原话在最后」的守门断言、且每轮 user 行翻倍 —— 比改一句断言大得多，本棒没走，记在 §11.9。）
 
 ## 11.5 杠②：LEDGER 重算 + M1b 能不能从 PARTIAL 收成 RED-OK
 
@@ -1371,5 +1393,99 @@ git grep -n "getContent()" -- '.../cli' '.../delegate'                          
 ## 11.7 杠④：`~/.zbot` 未污染三读数
 
 ## 11.8 §交接：`GatewayDeliveryP16Test` 补丁文本（本棒不落刀，主编落刀）
+
+### 11.8.1 先给"P16 真担保的东西没破"的实测读数（本棒自己在打了补丁的临时 worktree 上跑的）
+
+```
+git worktree add --detach /private/tmp/zbot-p12e-p16check 86e7b83   # 只在临时树里打补丁，交付树一个字节没动
+mvn -o test -pl z-bot-core -Dtest=GatewayDeliveryP16Test -DfailIfNoTests=false
+# Tests run: 18, Failures: 0, Errors: 0, Skipped: 0   rc=0（日志 ~/.cache/zbot-p12e/p16patch_check.log）
+git worktree remove --force /private/tmp/zbot-p12e-p16check          # 已回收，worktree 数回到 11
+```
+
+`chan.sent` / `chanB.sent` 的实际文本（测试自带的 `[p16-wiring]` 打印，原样）：
+
+```
+[p16-wiring] session_id=session_1790402015142-3da6f8
+  chat-A 回复=chat-A=echo: [z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）\n当前时间: 2026-09-26 13:53:35 +08:00 GMT+08:00\n---\nA0
+                … 同上抬头 … \n---\nA1
+                … 同上抬头 … \n---\nA2
+                … 同上抬头 … \n---\nA3
+  chat-B 回复=chat-B=echo: …\n---\nB0 / …\n---\nB1 / …\n---\nB2 / …\n---\nB3
+[p16-wiring] 共享 transcript 角色序列 = [user, assistant]×8
+```
+
+⇒ 主编那句因果链复算成立：4+4 条回复各归各家、无 `Error:`、一个 session 一把租约、
+`leaseTimeoutCount()==0`、transcript user/assistant 各 8 且交替 —— **P16 真担保的都没破**，
+破的只有 `startsWith("echo: A")` 这一句字符串形状假设。
+
+### 11.8.2 补丁文本（两处，直接套用）
+
+**① `z-bot-core/src/test/java/com/zifang/z/bot/channel/GatewayDeliveryP16Test.java:377-385`**
+
+```diff
+         for (OutboundMessage m : chan.sent) {
+             assertFalse("串行化失败的症状就是 Error: BotAgent 正在运行中 —— 实测 " + m.text,
+                     m.text.startsWith("Error:"));
+-            assertTrue("回显对不上说明两条会话串味了: " + m.text, m.text.startsWith("echo: A"));
+         }
+-        for (OutboundMessage m : chanB.sent) {
+-            assertTrue("回显对不上说明两条会话串味了: " + m.text, m.text.startsWith("echo: B"));
+-        }
++        // P12e：P12 之后回显文本是 "echo: " + <user 行>，而 user 行开头可能挂着运行时上下文块
++        // （抬头 + 时钟 + 记忆 + 技能 + "\n---\n"）—— 那是**请求侧的字符串形状**，不该由投递测试来钉。
++        // 钉的是**内容归属**：① 回显真发生了、② 结尾是自己的编号、③ 全文不出现对方编号、④ 四条覆盖 0..3。
++        assertOwnedBy(chan.sent, "A", "B");
++        assertOwnedBy(chanB.sent, "B", "A");
++        // 阳性对照（缺了它上面两支就是空跑）：把 chat-B 的一条真回复塞进 A 的视野 ⇒ 必须判红
++        List<OutboundMessage> poisoned = new ArrayList<OutboundMessage>(chan.sent);
++        poisoned.set(0, chanB.sent.get(0));
++        boolean crossTalkCaught = false;
++        try {
++            assertOwnedBy(poisoned, "A", "B");
++        } catch (AssertionError expectedRed) {
++            crossTalkCaught = true;
++        }
++        assertTrue("串味判据抓不到被塞进来的 chat-B 回复 ⇒ assertOwnedBy 是一把死尺", crossTalkCaught);
+```
+
+**② 同一个文件，`describe(List<OutboundMessage>)` 之前插入这个 private static 方法**
+
+```java
+    /**
+     * 投递归属判据（替换掉 P12e 之前那句过期的 {@code startsWith("echo: A")}）：
+     *  ① 每条回复都以 {@code "echo: "} 开头 —— 回显这一步真发生了；
+     *  ② 每条的结尾必须是自己的编号 {@code <who>0..<who>3}（前面挂什么模板都不管）；
+     *  ③ 全文里不许出现对方会话的任何编号 {@code <other>0..<other>3} —— 这才是"串味"本身；
+     *  ④ 四条合起来必须覆盖 0..3 —— 缺一条就是漏投，形状断言抓不到这件事。
+     * 四条都不认识 P12 的上下文协议，所以 P12 再怎么改模板也不会把它们顶歪。
+     */
+    private static void assertOwnedBy(List<OutboundMessage> replies, String who, String other) {
+        assertEquals("先要凑够 4 条才谈归属", 4, replies.size());
+        boolean[] seen = new boolean[4];
+        for (OutboundMessage m : replies) {
+            assertTrue("回显根本没发生（不是 echo 开头）: " + m.text, m.text.startsWith("echo: "));
+            int mine = -1;
+            for (int i = 0; i < 4; i++) {
+                if (m.text.endsWith(who + i)) {
+                    mine = i;
+                }
+                assertFalse("串味：" + who + " 的回复里出现了 " + other + i + " —— 原文 " + m.text,
+                        m.text.contains(other + i));
+            }
+            assertTrue("回显结尾不是自己的编号 " + who + "0..3，实得 " + m.text, mine >= 0);
+            seen[mine] = true;
+        }
+        for (int i = 0; i < 4; i++) {
+            assertTrue("漏投：" + who + " 少了第 " + i + " 条", seen[i]);
+        }
+    }
+```
+
+**为什么这套判据"保留串味猎物"**：② 与 ③ 合起来就是原断言真正想说的东西（A 只会拿到 A、拿不到 B），
+而且比原断言多抓两类原来漏网的事故 —— 重复投同一条（`seen` 覆盖不满 4）与漏投（`assertEquals(4,size)`）。
+它**不认识** P12 的模板协议（不 import、不硬编码抬头文本），所以 P12 侧今后再改块内容也不会顶歪它。
+本棒在临时 worktree 上实测：打了补丁 ⇒ 18/18 绿（同一支测试里那个"塞进 B 回复"的对照必须判红才拿得到绿，
+所以这个绿不是把判据放宽换来的）。**该文件在禁改域，交付树里我没有落这一刀。**
 
 ## 11.9 §未做（一条不许美化）
