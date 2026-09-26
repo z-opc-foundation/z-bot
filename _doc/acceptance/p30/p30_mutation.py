@@ -119,9 +119,13 @@ MUTANTS = [
     ("G2 原始 body 不进摘要", "G-飞书摘要", "fei",
      "            sha256.update(rawBody);\n", "", 1,
      ["FeishuChannelTest#signatureHelperMatchesFeishuKnownAnswer",
-      "FeishuChannelTest#signatureHelperRejectsWrongDigest"],
+      "FeishuChannelTest#signatureHelperRejectsWrongDigest"] + [],
      FEI_POSTIVES,
-     "签名只算 ts+nonce+key ⇒ 正文随便改都过（`RejectsWrongDigest` 里'内容改一个字节'那一臂就是为它备的）。"),
+     "签名只算 ts+nonce+key ⇒ 正文随便改都过。首跑（05:48）这一条判 PARTIAL：`RejectsWrongDigest` "
+     "里'内容改一个字节'那一臂**结构上杀不动** —— 它的预期签名是测试自己按'含 body'算的，"
+     "实现不算 body 时两边照样不相等 ⇒ 巧合绿，不是断到了。已补一臂'只算 ts+nonce+key 的签名必须拒'"
+     "（攻击者形状，G2 的猎物）。留下的教训同 I2：一条负例能不能杀某个变异，取决于它期望值的算法，"
+     "不取决于它的标题写的是不是'内容被改'。"),
 
     ("G3 签名比对照搬大小写敏感（去掉 toLowerCase）", "G-飞书摘要", "fei",
      "            byte[] theirs = signature.trim().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);",
@@ -204,14 +208,15 @@ MUTANTS = [
      "            byte[] expect = inboundSign(key, raw).getBytes(StandardCharsets.US_ASCII);",
      "            byte[] expect = sign.trim().getBytes(StandardCharsets.US_ASCII);", 1,
      ["DingTalkInboundVerifyTest#foreignKeysSignatureIsRejectedWith401AndNeverReachesBus",
-      "DingTalkInboundVerifyTest#nonNumericTimestampIsRejectedWith401AndNeverReachesBus",
-      "DingTalkInboundVerifyTest#staleTimestampIsRejectedEvenWithValidSign",
-      "DingTalkInboundVerifyTest#futureTimestampBeyondWindowIsRejected",
       "DingTalkInboundVerifyTest#inboundSecretOverridesWebhookSecret",
       "DingTalkInboundVerifyTest#registryManifestWiresInboundSecretKey"],
      [],
-     "打的是比对而不是门：`missingSignHeaders…` 在 null 守卫处就返回 false，结构上看不见恒真"
-     "（与 p18 的 D10/D11 分工同理），所以它不在点名里 —— 少一层就是一层空档。"),
+     "打的是比对而不是门。首跑（05:48）判 PARTIAL：我当时按主题把 6 支负例都点进来了，但 "
+     "`nonNumericTimestamp`（DingTalkChannel.java:419 parseLong 就 return false）、"
+     "`staleTimestamp` / `futureTimestampBeyondWindow`（:424 时间窗 return false）"
+     "都**在比对之前**就出局 ⇒ 恒真比对结构上看不见。`missingSignHeaders…` 同理（:414 null 守卫）。"
+     "预期集只能按'谁读这个值'派生，不能按'这条话题相关的用例'派生 —— 这是同一个错的第二现"
+     "（第一现是 p27 的按主题点名单）。杀到的 3 支已覆盖两层：通道层 2 支 + 工厂接线层 1 支。"),
 
     ("I3 时间窗改成单向（只挡过去）", "I-钉钉入站", "din",
      "        if (Math.abs(System.currentTimeMillis() - ts) > INBOUND_MAX_SKEW_MS) {",

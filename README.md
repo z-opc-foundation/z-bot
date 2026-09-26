@@ -112,7 +112,8 @@ P19 8/8 KILLED、P27 21 支 `10 RED-OK / 10 PARTIAL / 1 SURVIVED`、P28 14 支 `
 ## 明确没做的（别当成已完成）
 
 - **`0.2.0` / `0.3.0` 都没发 Central**，repo1 上只有 `z-bot-core:0.1.0`；P29（抬号 + 发布 + 外部工程真 pull 验证）未开工。
-- 飞书入站 `{"encrypt": …}` 的**解密**没实现（只验签，明文按 JSON 解析）；**钉钉入站签名不校验**（`handleInbound` 不看 `sign`/`timestamp`）。
+- 入站的**真凭据握手**仍然零验证：飞书 `{"encrypt": …}` 解密、飞书 **SHA-256** 事件验签、钉钉入站 `sign`+1 小时窗口校验三条 P30 都已实现并具名钉住（`_doc/hermes-roadmap.md` §8.14），但进出站的全部证据仍是"对 127.0.0.1 假端点发出的字节"——本机没有飞书/钉钉凭据。
+- 入站 body 长度**无上限**，四个入站面里只有钉钉把门放在读 body 之前（待做，P30b）；`GET /feishu/event?echostr=` 是验签门外的回显、v1 平铺事件的 `event.content` 没有读取点——这两条在等一份权威出处才动，记账见 `_doc/acceptance/p30/EVIDENCE.md` §6。
 - `POST /api/skill/push` 的语义（推 vs 拉）尚未裁定（D-P28-2）；`POST /api/agent/register` 该返 200 还是 501 未定。
 - 真 tty 下的人机体验（渲染、光标键、中文宽字符）没有自动化验收，只有 pty 探针取证，记 NO-RUN。
 - `z-bot-desktop-packager` 只有 jpackage 配置，本机没打过 .dmg/.exe/.deb。

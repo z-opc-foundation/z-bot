@@ -396,6 +396,13 @@ public class FeishuChannelTest {
                 ch.verifySignature("1700000000", "n-1", bytes(body + " "),
                         sha256Hex(("1700000000" + "n-1" + "my-secret").getBytes(StandardCharsets.UTF_8),
                                 bytes(body))));
+        // 上面那一臂**杀不掉** G2（实现里摘掉 `sha256.update(rawBody)`）：它的签名是测试自己
+        // 按"含 body"算的，实现不算 body 时两边还是不相等 ⇒ 靠巧合绿。真正能钉住"摘要必须含 body"
+        // 的是攻击者形状：签名只算 ts+nonce+key，body 随你改 ⇒ 必须拒。
+        assertFalse("不含 body 的摘要必须拒（G2 的猎物）",
+                ch.verifySignature("1700000000", "n-1", bytes(body),
+                        sha256Hex(("1700000000" + "n-1" + "my-secret").getBytes(StandardCharsets.UTF_8),
+                                new byte[0])));
         assertFalse("缺 signature 必须拒", ch.verifySignature("1700000000", "n-1", bytes(body), null));
         assertFalse("缺 timestamp 必须拒", ch.verifySignature(null, "n-1", bytes(body), KAT_SIG));
         assertFalse("null body 必须拒", ch.verifySignature("1700000000", "n-1", null, KAT_SIG));
