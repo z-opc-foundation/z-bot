@@ -115,7 +115,7 @@ public final class ExecEnvConfig {
             if (!dh.isEmpty()) {
                 return dh;
             }
-            return "unix://" + System.getProperty("user.home") + "/.docker/run/docker.sock";
+            return "unix://" + BotConfig.userHome() + "/.docker/run/docker.sock";
         }
         if (KEY_BACKEND.equals(key)) {
             String v2 = trim(System.getenv("ZBOT_EXEC_ENV_BACKEND"));
@@ -216,7 +216,7 @@ public final class ExecEnvConfig {
         if (!v.isEmpty()) {
             return new File(v);
         }
-        File base = configDir == null ? new File(System.getProperty("user.home"), ".zbot") : configDir;
+        File base = configDir == null ? BotConfig.defaultConfigDir() : configDir;
         return new File(base, "tool-env/docker-ledger.properties");
     }
 
