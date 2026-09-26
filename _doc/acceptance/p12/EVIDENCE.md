@@ -1095,6 +1095,11 @@ E2E 量具自带的第三方读数（`p12_e2e.py` 每次跑后自打，三跑同
 8. 我自建过一个对照用 worktree `~/.cache/zbot-p12d/wt-main`（detached @926b8b5），收尾已 `git worktree remove`；
    `/private/tmp/zbot-wt-p20/z-agent-kernel` 那个嵌套 checkout 一字节未碰。
 9. 没跑 `mvn` 之外的构建入口（gradle/bazel 无），没 push、没 merge 到 main、没 reset/clean/stash。
+10. **本棒没有把任何原始日志复制进 `_doc/acceptance/p12/logs/`**：那是 `p12_e2e.py` K3 的扫描面，
+    而杠①②③ 的日志逐字里含 `minimax` 这个标题词（G12 已经踩过一次：`p12c_k2_probe.log` 落进 `logs/` 之后
+    "从那一刻起每一跑都被钉成假红"）。所有原始日志留在仓外 `~/.cache/zbot-p17/` 与 `~/.cache/zbot-p12d/`，
+    决定性读数原样贴进本节（`.gitignore:5` 是 `*.log`，日志本来进不了仓）。代价：**换机器或 `~/.cache` 被清，
+    原始日志就没了**，只剩本节的转述——这是仓规逼出来的取舍，如实记在这里。
 
 ## 10.6 本棒落盘与"能不能并入 main"的判词
 
