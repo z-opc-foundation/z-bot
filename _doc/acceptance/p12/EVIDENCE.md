@@ -233,6 +233,22 @@ FAIL  K2 产物里出现的每一种 key 值都只有 stub-key-not-real         
 
 **成因取证（不是推测）**：`p12_e2e.py` 的 mtime 是 03:47:05 ⇒ run7 是修好之后的**第一跑**，
 run1–run6 跑的是**别的字节**（简报把它们当成"同一形态的量具连跑三次"，这一句与实测不符）。
+**本棒把这条从"mtime 推断"升级成"git 字节证据"**（mtime 已经被后续跑动覆盖过，不作数）：
+封存笔 `809b927` 里那份 `p12_e2e.py` 就是 p12b 临终的工作文件，它**已经带着修复**
+（`git show 809b927:_doc/acceptance/p12/p12_e2e.py | grep -n "yield m.group"` ⇒
+`744: yield m.group(1) if m.groups() else m.group(0)`）。把同一套双向实测跑在这份封存字节上
+（`python3 -u ~/.cache/zbot-p17/probe_k2/two_way_sealed.py`，rc=0，逐字）：
+
+```
+被测字节: …/probe_k2/e2e_sealed_809b927.py（= git show 809b927:_doc/acceptance/p12/p12_e2e.py）
+A  两形态并存（封存字节）   期望=PASS 实测=PASS OK | 扫了 4 个运行期产物；见到的 key 值=['stub-key-not-real']
+B  混入别的 key 值（封存字节） 期望=FAIL 实测=FAIL OK | 见到的 key 值=['FAKELEAKEDVALUE999', 'stub-key-not-real']
+D  配不到任何 key（封存字节）  期望=FAIL 实测=FAIL OK | 见到的 key 值=[]
+```
+
+⇒ 封存字节在"两种形态并存"的现场上只收**裸 key 值**、判绿；它**算不出** run5/run6 原文里那两个
+带前缀的取值 ⇒ run5/run6 必是更早的字节，run7 才是这份封存字节的第一跑。"同一把尺连跑 3 次红 2 次"
+这个前提不成立，但**结论（测量不足）成立**：封存字节到手后也只跑过 1 次。
 坏的地方在取值方式，`re_iter()` 的 docstring 已经写着，本棒把它复算成实机读数：
 对同一现场（`Bearer stub-key-not-real` 与 `api.key=stub-key-not-real` 并存）
 
@@ -255,7 +271,6 @@ FAIL  K2 产物里出现的每一种 Bearer/api-key 值都只有 stub-key-not-re
 **双向实测**（跑的是仓里那份 `section_creds()` 原函数，只把扫描根 `HERE` 指到
 `~/.cache/zbot-p17/probe_k2/harness`，仓里的 `out/`、`logs/` 一个字节都没动；
 复算：`python3 -u ~/.cache/zbot-p17/probe_k2/two_way.py`，rc=0）：
-
 ```
 A  两形态并存（都只含 stub）        期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
 A2 同现场再跑一遍（稳定性）         期望=PASS 实测=PASS OK  | 见到的 key 值=['stub-key-not-real']
