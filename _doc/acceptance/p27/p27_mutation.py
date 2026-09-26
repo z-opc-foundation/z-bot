@@ -2,12 +2,18 @@
 # -*- coding: utf-8 -*-
 """P27 委托面 —— 杠② 变异量具（自带 MUTANTS 表，不 import 任何别的战役脚本）。
 
-五档判定（一条不欠）：
-  KILLED                 注入后 mvn 变红，且红的是预期红集里的用例
+五档判定（工单 §3.4，一条不欠）：
+  RED-OK                 注入后变红，且红的恰是预期红集里的具名用例（无预期外红）
+  PARTIAL                预期红集命中，但同时有预期外用例变红（杀得掉，归属不干净）
+  KILLED                 注入后变红，但预期红集一支都没红——被别的用例杀掉的
   SURVIVED               注入后仍然全绿（必须在报告里点名 + 说为什么）
-  BASELINE_NOT_GREEN     跑之前基线就不绿 —— 本轮一律不出判定
   INJECTION_NOT_APPLIED  被替换的原文在本文件里不是唯一一处（注入本身不可信）
+
+停机型第六档（不在五档之内，出现即说明本轮不可读，不许拿它冒充杀变异）：
+  BASELINE_NOT_GREEN     跑之前基线就不绿 —— 本轮一律不出判定
   RESTORE_FAILED         逐字节还原后 md5 对不上 —— 立刻停机，不许继续测量
+  NONINFORMATIVE         rc≠0 却既无具名红也无类级红（编译断/没跑到用例）
+  ERROR                  mvn 超时（永挂嫌疑）
 
 共享锁：$(git rev-parse --path-format=absolute --git-common-dir)/zbot-mutlock
 抢不到 ⇒ rc=4 直接退出（不 sleep 死等、不 kill 别人）。
@@ -333,7 +339,14 @@ def forever_wait_health_check():
 
 
 def failed_tests_from_surefire():
-    """从 surefire XML 里取具名红用例（比抠控制台稳）。"""
+    """从 surefire XML 里取具名红用例（比抠控制台稳）。
+
+    P27b-G5 修尺：surefire 写的是 `<testcase name="<方法>" classname="<类>" .../>`，
+    旧正则 `<testcase[^>]*name="..."` 的贪婪 `[^>]*` 会退到 `classname=` 里那个 `name=`
+    上，取回的是**类名**——于是每一行都成"预期红却没红"，工单 §3.4 要求的
+    "这条 bug 被哪一支具名测试抓到"对账整个失效。这里按属性逐个解析，
+    只在字面是 `name=`（前面不是标识符字符）时取值。
+    """
     d = os.path.join(REPO, "z-bot-core/target/surefire-reports")
     out = set()
     if not os.path.isdir(d):
@@ -346,9 +359,10 @@ def failed_tests_from_surefire():
             if not block.startswith("<testcase"):
                 continue
             head = block.split("</testcase>")[0]
-            m = re.search(r"<testcase[^>]*name=\"([^\"]+)\"", head)
+            attrs = head.split(">")[0]
+            m = re.search(r'(?:^|\s)name="([^"]+)"', attrs)
             if m and ("<failure" in head or "<error" in head):
-                out.add(m.group(1))
+                out.add(m.group(1).split("(")[0])
     return out
 
 
@@ -461,13 +475,25 @@ def run_all():
                     outcome = "SURVIVED"
                     detail = "全绿：没有任何用例咬住这支变异"
                 elif not failed_i and not classes_i:
-                    # 编译不过 / 压根没跑到用例：这类"红"不携带任何判据信息，
+                    # 停机型第六档：这类"红"不携带任何判据信息，
                     # 记成 NONINFORMATIVE 而不是 KILLED，免得拿假绿冒充杀变异。
                     outcome = "NONINFORMATIVE"
                     detail = "rc=%d 但既无具名红也无类级红（编译断或没跑到用例），日志 %s" % (rc_i, log_i)
                 else:
-                    outcome = "KILLED"
-                    detail = ",".join(sorted(failed_i)) or ("类级红:" + ",".join(classes_i))
+                    # 按"预期红集是否命中"分档——P27b-G5 修尺前这是空话（取回的是类名），
+                    # 修尺后 RED-OK / PARTIAL / KILLED 三档才真的可区分。
+                    hit = [t for t in m["expect"] if t in failed_i]
+                    extra = sorted(x for x in failed_i if x not in m["expect"])
+                    if not hit:
+                        outcome = "KILLED"
+                        detail = "预期红集零命中，被这些具名用例杀掉:"
+                    elif extra:
+                        outcome = "PARTIAL"
+                        detail = "预期红命中 %d 支，另有预期外红:" % len(hit)
+                    else:
+                        outcome = "RED-OK"
+                        detail = "预期红集全红且无预期外红:"
+                    detail += ",".join(sorted(failed_i)) or ("类级红:" + ",".join(classes_i))
                 ok = restore(path, backup, want)
                 if not ok:
                     outcome = "RESTORE_FAILED"
@@ -479,7 +505,7 @@ def run_all():
                     die("还原失败，现场不可信，停机: " + m["file"], 3)
         # 预期红集对账
         unexpected = ""
-        if outcome == "KILLED":
+        if outcome in ("KILLED", "PARTIAL", "RED-OK"):
             missed = [t for t in m["expect"] if t not in failed_i]
             extra = sorted(x for x in failed_i if x not in m["expect"])
             bits = []

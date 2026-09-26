@@ -233,35 +233,61 @@ def main():
         print(l)
     print("INSPECT|rc=%d" % rc)
     tokens = {}
+    byline = {}
     for l in inspect_lines:
-        m = re.match(r"E2E\|(\w+)_before_pull|E2E\|(\w+)=(.*)", l)
-        parts = l[4:].split("=", 1)
-        if len(parts) == 2:
-            tokens.setdefault(parts[0], []).append(parts[1])
+        body = l[len("E2E|"):]
+        # 驱动一行可带多个字段（`E2E|head=v k2=v2 k3=v3`）。旧尺只按第一个 `=` 切一次，
+        # key 于是变成 "after_kill state"，k2/k3 永远查不到 ⇒ 五条 CHECK 恒假红（P27b-G6）。
+        # 这里逐对收：tokens 按字段名聚合，byline 按"行首字段"留整行的键值表。
+        pairs = re.findall(r'(?:^|\s)([A-Za-z_]\w*)=([^ ]*)', body)
+        for k, v in pairs:
+            tokens.setdefault(k, []).append(v)
+        # 有的行首是裸标签（`E2E|after_kill state=RUNNING ...`，after_kill 后面没有 `=`），
+        # 那就同时按裸标签登记，判词才不必去猜第一个键名。
+        bare = body.split(" ", 1)[0]
+        if "=" not in bare:
+            byline.setdefault(bare, dict(pairs))
+        if pairs:
+            byline.setdefault(pairs[0][0], dict(pairs))
 
     def tok(key, idx=0):
         vs = tokens.get(key, [])
         return vs[idx] if len(vs) > idx else "<missing>"
 
-    chk("inspect_read_back_the_scene", tok("after_kill", 0).startswith("RUNNING delivery=PENDING"),
-        tok("after_kill"))
+    def field(head, key):
+        return (byline.get(head) or {}).get(key, "<missing>")
+
+    chk("inspect_read_back_the_scene",
+        field("after_kill", "state") == "RUNNING" and field("after_kill", "delivery") == "PENDING"
+        and field("after_kill", "non_terminal") == "true",
+        "after_kill state=%s delivery=%s non_terminal=%s" % (
+            field("after_kill", "state"), field("after_kill", "delivery"),
+            field("after_kill", "non_terminal")))
     chk("inspect_prune_keeps_unexpired", tok("prune_before_adoption") == "0",
         "prune_before_adoption=" + tok("prune_before_adoption"))
-    chk("orphan_adopted_to_unknown", tok("adopted").startswith("1") and "UNKNOWN" in tok("state_after_adopt"),
-        "adopted=%s state_after_adopt=%s" % (tok("adopted"), tok("state_after_adopt")))
-    chk("expired_terminal_pruned", tok("prune_with_zero_window").startswith("1")
-        and "still_readable=false" in tok("prune_with_zero_window"),
-        tok("prune_with_zero_window"))
+    chk("orphan_adopted_to_unknown",
+        field("adopted", "adopted").startswith("1") and field("adopted", "state_after_adopt") == "UNKNOWN",
+        "adopted=%s state_after_adopt=%s events=%s" % (
+            field("adopted", "adopted"), field("adopted", "state_after_adopt"),
+            field("adopted", "events")))
+    chk("expired_terminal_pruned",
+        field("prune_with_zero_window", "prune_with_zero_window").startswith("1")
+        and field("prune_with_zero_window", "still_readable") == "false",
+        "prune_with_zero_window=%s still_readable=%s" % (
+            field("prune_with_zero_window", "prune_with_zero_window"),
+            field("prune_with_zero_window", "still_readable")))
     chk("cap_refused_after_eight", "cap_attempt_9=refused" in out and "DROPPED(8/8)" in out,
         "cap_final=%s" % tok("cap_final"))
     chk("cap_attempts_persist_on_disk", "DROPPED(8)" in tok("cap_from_fresh_instance"),
         tok("cap_from_fresh_instance"))
-    chk("dropped_not_replayed", tok("restore_offered").split(" ")[0] == "0",
-        "restore_offered=" + tok("restore_offered"))
+    chk("dropped_not_replayed", field("cap_final", "restore_offered") == "0",
+        "restore_offered=" + field("cap_final", "restore_offered"))
     chk("no_tmp_residue", tok("tmp_residue").startswith("false"), tok("tmp_residue"))
-    chk("ack_without_claim_loud_fail", tok("ack_without_claim") == "IllegalStateException"
-        and "PENDING" in tok("delivery"),
-        "ack_without_claim=%s delivery=%s" % (tok("ack_without_claim"), tok("delivery")))
+    chk("ack_without_claim_loud_fail",
+        field("ack_without_claim", "ack_without_claim") == "IllegalStateException"
+        and field("ack_without_claim", "delivery") == "PENDING",
+        "ack_without_claim=%s delivery=%s" % (
+            field("ack_without_claim", "ack_without_claim"), field("ack_without_claim", "delivery")))
     checks_m = re.search(r"E2E\|CHECKS=(\d+) FAILED=(\d+)", out)
     chk("java_side_all_checks_green", bool(checks_m) and checks_m.group(2) == "0",
         checks_m.group(0) if checks_m else "<没有 CHECKS 行>")
