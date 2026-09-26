@@ -1,0 +1,15 @@
+# P14 杠② 变异台账（由 p14_mutation.py 机械写出，基线 HEAD）
+# 五档: RED-OK / PARTIAL / GREEN-BUT-MUTATED / BROKEN / NO-RUN
+mutant	verdict	expected	hit	failing	rc	ran	note	restore	md5 对账
+M1 阈值公式摘掉 maxOutputTokens（窗口×pct）	RED-OK	5	3	ignoringMaxOutputTokensWouldTriggerTooLate,pctComesFromConfigAndMovesTheTriggerPoint,thresholdIsRatioOfWindowMinusMaxOutputTokens	1	ran=36	给输出额度留位是这次改口径的全部理由：摘掉之后触发线晚一倍，三条依赖触发线的测试必须一起红	restored=True	base=a2779684 before=a2779684 after=ok
+M2 pct 写死 1.0（不读配置位）	PARTIAL	12	10	coarseEstimateSiteTriggersBeforeAnyRealUsage,compressKeepsRecentVerbatimAndSummarizesMiddle,compressLockLetsOnlyOneThreadThrough,compressionForksSessionAndWritesParentAndBaseOrdinal,compressionLocksTableLetsOnlyOneProcessThrough,emptySummaryAlsoCountsAsFailure,ignoringMaxOutputTokensWouldTriggerTooLate,ineffectiveCompressionsStopTheEngine,ineffectiveStreakSurvivesProcessRestart,pctComesFromConfigAndMovesTheTriggerPoint,postToolBatchSiteSeesToolOutput,shouldCompressFollowsRealPromptTokensAgainstThreshold,summarizerFailureCooldownIsPersistedAndHonoured,summarizerPromptDemandsFactsRetention,thresholdIsRatioOfWindowMinusMaxOutputTokens,toolBatchSiteFoldsRealUsageWithToolOutput	1	ran=36	「不许只改常量」的反证：pct 不从配置流进来 ⇒ 配置位是死的，触发点挪不动	restored=True	base=a2779684 before=a2779684 after=ok
+M3 摘掉位点 1（轮首不评估）	RED-OK	1	1	turnStartSiteIsCalledEveryStep	1	ran=36	位点计数为 0 ⇒ 那条具名测试必须红，不许靠读数声称调到过	restored=True	base=14992a0c before=14992a0c after=ok
+M4 摘掉位点 2（API 前不拦粗估）	RED-OK	1	1	preApiCallSiteGuardsWithCoarseEstimate	1	ran=36	真实 usage 回来之前那一档没人拦 ⇒ oversized 请求照发	restored=True	base=14992a0c before=14992a0c after=ok
+M5 摘掉位点 3（工具批后不评估）	PARTIAL	1	1	compressionForksSessionAndWritesParentAndBaseOrdinal,postToolBatchSiteSeesToolOutput	1	ran=36	工具输出一大段灌进上下文之后不当场判 ⇒ 只能等下一轮首位点，白胖一轮	restored=True	base=14992a0c before=14992a0c after=ok
+M6 防抖只判不计数（streak 恒 0）	RED-OK	3	2	ineffectiveCompressionsStopTheEngine,ineffectiveStreakSurvivesProcessRestart	1	ran=36	「压了但没省下多少」不再被记 ⇒ 反复烧摘要，且无效的白压会去分叉会话	restored=True	base=a2779684 before=a2779684 after=ok
+M7 失败冷却不入库（写库那行摘掉）	PARTIAL	2	1	ineffectiveCompressionsStopTheEngine,ineffectiveStreakSurvivesProcessRestart,summarizerFailureCooldownIsPersistedAndHonoured	1	ran=36	这就是「跨进程重启仍在」的那一条：不入库就是没入库	restored=True	base=5a28a6b0 before=5a28a6b0 after=ok
+M8 DB 抢锁换成恒为 true	RED-OK	2	2	compressionLocksTableLetsOnlyOneProcessThrough,lockIsHeldForWholeLineage	1	ran=36	表又回到零消费者，而且两个进程会同时压同一份历史	restored=True	base=5a28a6b0 before=5a28a6b0 after=ok
+M9 派号写死 base #1	RED-OK	4	1	compressionForkWritesParentAndBaseOrdinal	1	ran=36	第二代开始每一代都叫 base #1 ⇒ 链在 /sessions 里看不出深浅	restored=True	base=5a28a6b0 before=5a28a6b0 after=ok
+M10 检索不沿血统回溯（只去重）	RED-OK	1	1	lineageSearchWalksBackToOriginalAndDedupes	1	ran=36	压缩过的子会话摘要与父会话原文各命中一次 ⇒ 不回溯就还是两条，用户看到重复	restored=True	base=5a28a6b0 before=5a28a6b0 after=ok
+# tally	BROKEN=0	GREEN-BUT-MUTATED=0	NO-RUN=0	PARTIAL=3	RED-OK=7
+# src_md5_stable	yes

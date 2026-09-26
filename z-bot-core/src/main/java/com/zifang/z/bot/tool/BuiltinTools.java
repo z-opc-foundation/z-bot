@@ -443,49 +443,94 @@ public final class BuiltinTools {
     }
 
     /**
-     * 在沙箱里跑一条 shell 命令。
+     * 在沙箱里跑一条 shell 命令 —— <b>P22 之后这一路走 {@link com.zifang.z.bot.tool.env.ExecEnvironment} SPI</b>。
      *
-     * <p>可断的三层：入口检查点（已经按了停止就不起子进程）、读输出循环里的逐行检查点
-     * （出字的长命令）、{@link InterruptScope#watch} 登记的看门狗（几十秒不吐一行的
-     * {@code sleep}/{@code mvn} —— 那种命令上「循环内检查点」根本执行不到，只能靠看门狗）。</p>
+     * <p>可断的三层仍然在：入口检查点（已经按了停止就不起子进程）、后端读输出时的中止轮询
+     * （通过 {@link ExecRequest.ProcessObserver#interrupted()} 递旗子，几十秒不吐一行的
+     * {@code sleep}/{@code mvn} 靠它 + {@link InterruptScope} 看门狗）、收尾检查点
+     * （看门狗动过手 ⇒ 这条命令是被中止的，半截输出绝不能当正常结果回给模型）。</p>
+     *
+     * <p>抽层改了三件事，都是既有一致前提下的补漏：输出按字节上界收（旧实现整段进内存，
+     * {@code maxChars} 只在读完之后裁）；到行数/字符上限之后仍然把管道 drain 到 EOF
+     * （旧实现在 {@code maxLines} 处 {@code break} 就不读了，子进程继续写会把 {@code waitFor()}
+     * 永久堵死）；超时端掉整棵进程树。字节上界取 {@code maxChars * 4}，保证 UTF-8 最坏情形下
+     * 旧的"按字符截断"看到的原始文本一个字节都不少 ⇒ 回文逐字节相同。</p>
      *
      * @param maxLines 0 表示不限行数；超限部分直接丢弃
      * @param maxChars 0 表示不限长度
      */
     private static ProcResult bash(Sandbox cwd, String script, int maxLines, int maxChars) throws Exception {
         InterruptScope.checkpoint();
-        ProcessBuilder pb = new ProcessBuilder("bash", "-c", script);
+        com.zifang.z.bot.tool.env.ExecEnvironment env =
+                com.zifang.z.bot.tool.env.ExecEnvironments.current(cwd);
+        int byteCap = maxChars > 0 ? maxChars * 4 : env.maxOutputBytesHint();
+        java.util.List<String> argv = new java.util.ArrayList<String>(3);
+        argv.add("bash");
+        argv.add("-c");
+        argv.add(script);
+        com.zifang.z.bot.tool.env.ExecRequest.Builder req =
+                com.zifang.z.bot.tool.env.ExecRequest.builder(argv)
+                        .mergeStreams(true)
+                        .policy(com.zifang.z.bot.tool.env.ExecRequest.OutputPolicy.HEAD)
+                        .maxOutputBytes(byteCap)
+                        .timeoutMillis(env.defaultTimeoutMillisHint())
+                        .observer(new InterruptBridgeObserver());
         if (cwd != null) {
-            pb.directory(cwd.root());
+            req.cwd(cwd.root());
         }
-        pb.redirectErrorStream(true);
-        Process p = pb.start();
-        InterruptScope.watch(p);
-        try {
-            StringBuilder out = new StringBuilder();
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-                String line;
-                int lines = 0;
-                while ((line = br.readLine()) != null) {
-                    InterruptScope.checkpoint();
-                    if (maxLines > 0 && lines >= maxLines) {
-                        break;
-                    }
-                    out.append(line).append('\n');
+        com.zifang.z.bot.tool.env.ExecResult r = env.exec(req.build());
+        // 收尾：看门狗/超时动过手 ⇒ 这是被中止的，不是它自己跑完的
+        InterruptScope.checkpoint();
+        String result = r.stdout();
+        // 既有语义的最后一块：旧实现是 readLine 逐行读、每行补一个 '\n' 再拼，
+        // 所以"末尾没有换行"的输出会被补上一个。字节级回归必须连这个细节一起保住。
+        if (!result.isEmpty() && !result.endsWith("\n")) {
+            result = result + "\n";
+        }
+        if (maxLines > 0) {
+            StringBuilder kept = new StringBuilder(result.length());
+            int lines = 0;
+            int i = 0;
+            while (i < result.length() && lines < maxLines) {
+                int nl = result.indexOf('\n', i);
+                if (nl < 0) {
+                    kept.append(result, i, result.length());
+                    i = result.length();
                     lines++;
+                    break;
                 }
+                kept.append(result, i, nl + 1);
+                i = nl + 1;
+                lines++;
             }
-            int exit = p.waitFor();
-            // 看门狗动过手 ⇒ 这条命令是被中止的，不是它自己跑完了：
-            // 半截输出绝不能当正常结果回给模型
-            InterruptScope.checkpoint();
-            String result = out.toString();
-            if (maxChars > 0 && result.length() > maxChars) {
-                result = result.substring(0, maxChars) + "\n...(已截断)";
-            }
-            return new ProcResult(exit, result);
-        } finally {
+            result = kept.toString();
+        }
+        if (maxChars > 0 && result.length() > maxChars) {
+            result = result.substring(0, maxChars) + "\n...(已截断)";
+        }
+        return new ProcResult(r.exitCode(), result);
+    }
+
+    /**
+     * 把 P12 的中断旗子递进 SPI（{@code InterruptScope.watch} 的老规矩不变）。
+     *
+     * <p>这根线就是"接线层"：断了的话工具侧再也断不掉在飞的子进程，
+     * {@code BuiltinToolsExecWiringTest} 点它名。</p>
+     */
+    static final class InterruptBridgeObserver implements com.zifang.z.bot.tool.env.ExecRequest.ProcessObserver {
+        @Override
+        public void started(Process p) {
+            InterruptScope.watch(p);
+        }
+
+        @Override
+        public void finished(Process p) {
             InterruptScope.unwatch(p);
+        }
+
+        @Override
+        public boolean interrupted() {
+            return InterruptScope.isInterrupted();
         }
     }
 

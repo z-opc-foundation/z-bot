@@ -16,6 +16,7 @@ import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
 import com.zifang.z.bot.checkpoint.CheckpointManager;
+import com.zifang.z.bot.context.CompressionLedger;
 import com.zifang.z.bot.context.CompressorEngine;
 import com.zifang.z.bot.cron.CronJob;
 import com.zifang.z.bot.cron.CronScheduler;
@@ -24,7 +25,10 @@ import com.zifang.z.bot.delegate.DelegateManager;
 import com.zifang.z.bot.memory.MemoryStore;
 import com.zifang.z.bot.mcp.McpManager;
 import com.zifang.z.bot.memory.MemoryTools;
+import com.zifang.z.bot.skill.SkillCommands;
+import com.zifang.z.bot.skill.SkillGuard;
 import com.zifang.z.bot.skill.SkillLoader;
+import com.zifang.z.bot.skill.SkillSync;
 import com.zifang.z.bot.llm.KeyPoolLlmProvider;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
@@ -52,6 +56,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -109,6 +114,10 @@ public class BotAgent {
 
     private final BotConfig config;
     private final LlmProvider provider;
+    /** P26：本次任务累计的 cache 读命中（provider 报了多少就记多少，无 cache 字段 ⇒ 0）。 */
+    private final java.util.concurrent.atomic.AtomicLong CACHE_READ = new java.util.concurrent.atomic.AtomicLong();
+    /** P26：本次任务累计的 cache 写命中。 */
+    private final java.util.concurrent.atomic.AtomicLong CACHE_WRITE = new java.util.concurrent.atomic.AtomicLong();
     private final String providerCode;
     private final String model;
     private final Toolkit toolkit;
@@ -149,6 +158,13 @@ public class BotAgent {
     /** 上下文压缩引擎（null = 未启用，如纯测试桩）；摘要走主 provider。 */
     private final CompressorEngine compressor;
     private final ContextEngine.Summarizer summarizer;
+    /**
+     * 压缩的落盘侧（P14）：{@code compression_locks} 抢锁、失败冷却入库、防抖计数、
+     * 血统分叉。null = 还没有可用的 store（纯测试桩），此时引擎退化为内存锁。
+     */
+    private volatile CompressionLedger compressionLedger;
+    /** 分叉时派到的 {@code base #N} 标题：{@code SessionManager.saveMessages} 会用内存标题盖库，每次落盘后按这张表回填。 */
+    private final Map<String, String> lineageTitles = new ConcurrentHashMap<String, String>();
     /** 影子 git checkpoint（null = 未启用）；破坏性工具执行前打快照。 */
     private final CheckpointManager checkpoints;
     /** 最近一次生效的快照 id，/rollback 不带参数时回滚到它。 */
@@ -189,11 +205,28 @@ public class BotAgent {
         this.budgetLedger = new BudgetLedger(this.context.budget());
         this.provider = b.provider != null ? Builder.wrapResilient(b.provider, b.config)
                 : Builder.wrapResilient(LlmRouter.create(b.config.activeProvider()), b.config);
+        // P26：换模型降级时重建在飞的 system 上下文 + 重置本侧记账（压缩侧计数需 context/ 给接口，见 §未做）
+        if (this.provider instanceof ResilientLlmProvider) {
+            ((ResilientLlmProvider) this.provider).setModelFallbackHook(
+                    new ResilientLlmProvider.ModelFallbackHook() {
+                        @Override
+                        public com.zifang.z.agent.kernel.llm.ChatCompletionsRequest rebuildContext(
+                                String fromModel, String toModel,
+                                com.zifang.z.agent.kernel.llm.ChatCompletionsRequest inFlight) {
+                            return BotAgent.this.rebuildForModel(fromModel, toModel, inFlight);
+                        }
+
+                        @Override
+                        public void resetCompressionState(String fromModel, String toModel) {
+                            BotAgent.this.resetModelSwitchState(fromModel, toModel);
+                        }
+                    });
+        }
         if (b.contextEngine != null) {
             this.compressor = b.contextEngine;
             this.summarizer = b.summarizer;
         } else if (b.config != null && !b.noCompress) {
-            this.compressor = new CompressorEngine(b.tokenBudget);
+            this.compressor = newCompressorFromConfig(b);
             this.summarizer = this::summarizeWithProvider;
         } else {
             this.compressor = null;
@@ -203,6 +236,14 @@ public class BotAgent {
         this.delegation = b.delegation;
         this.memoryStore = b.memoryStore;
         this.skillsRoot = b.skillsRoot;
+        if (b.config != null) {
+            // 验收/测试用的平台覆盖口：skills.platform.override → SkillLoader 的量测口子
+            String platformOverride = b.config.getSkillsPlatformOverride();
+            if (!platformOverride.isEmpty()
+                    && System.getProperty("zbot.skills.platform") == null) {
+                System.setProperty("zbot.skills.platform", platformOverride);
+            }
+        }
         this.cronScheduler = b.cronScheduler;
         this.mcpManager = b.mcpManager;
         this.approvals = b.approvalService;
@@ -307,11 +348,18 @@ public class BotAgent {
             listener.onEvent(new StreamEvent.StepStart(step));
             context.interrupt().checkpoint();
             injectSteer(listener);
-            applyCompression(listener);
+            // 位点 1：轮首。上一轮真实 usage（或压缩后的回落值）留在这里判一次。
+            applyCompressionAtSite(CompressorEngine.SITE_TURN_START, 0L, listener);
             ChatCompletionsResponse response;
             try {
                 ChatCompletionsRequest request = buildRequest();
                 lastRequestChars = requestCharsOf(request);
+                // 位点 2：请求已经拼好、还没发出去 —— 只有字符数可估，但越线就得先压，
+                // 压完必须重拼（否则这次粗估拦下的 oversized 请求照样发出去了）。
+                if (applyCompressionAtSite(CompressorEngine.SITE_BEFORE_API_CALL, 0L, listener)) {
+                    request = buildRequest();
+                    lastRequestChars = requestCharsOf(request);
+                }
                 response = provider.chat(request);
             } catch (Exception e) {
                 LOG.warn("[BotAgent] step {} LLM 调用失败: {}", step, e.getMessage());
@@ -335,7 +383,13 @@ public class BotAgent {
                         return terminal;
                     }
                 }
+                // 位点 3：工具批之后。这批工具往上下文里灌了多少字符是量得出来的，
+                // 把它加到最近一次真实 usage 上就是「本批之后上下文有多大」的最优可用观测。
+                long charsBeforeToolBatch = charsOf(memory.getMessages());
                 executeBatch(assistant.getToolCalls(), listener);
+                long addedToolTokens = Math.max(0L,
+                        (charsOf(memory.getMessages()) - charsBeforeToolBatch) / 2);
+                applyCompressionAtSite(CompressorEngine.SITE_AFTER_TOOL_BATCH, addedToolTokens, listener);
                 continue;
             }
 
@@ -383,6 +437,12 @@ public class BotAgent {
     }
 
     private void recordUsage(IterationBudget budget, ChatCompletionsResponse response) {
+        // P26：cache 维度先归一再累加（kernel 目前不透传 cache 字段 ⇒ 恒为 0，见 EVIDENCE §0.8/§5）
+        com.zifang.z.bot.llm.ModelUsage.Record usage = com.zifang.z.bot.llm.ModelUsage.fromResponse(response);
+        if (usage != null) {
+            CACHE_READ.addAndGet(usage.getCacheReadTokens());
+            CACHE_WRITE.addAndGet(usage.getCacheWriteTokens());
+        }
         // kernel 会把缺失的 usage 归一成 TokenUsage.empty()（全 0），所以不能只判 != null，
         // 否则网关不回传 usage 时（如本地 bench 代理）估算分支永远进不去、压缩阈值永远不触发。
         boolean hasUsage = response != null && response.getUsage() != null
@@ -407,27 +467,111 @@ public class BotAgent {
     }
 
     /**
-     * 达到阈值就把中段历史压成一条摘要消息（保最近 N 条原文），压缩结果回灌记忆。
-     * 压缩锁在 {@link CompressorEngine} 里，这里只负责回写与事件。
+     * 三个评估位点共用的落地点（P14）。位点自己负责「判」（并在引擎里计数，好让单测钉住它真被调到了），
+     * 这里只负责「判到之后做什么」：压一次、回灌记忆、把这次压缩登记成一次会话分叉、发事件、落盘。
+     *
+     * @param site            {@link CompressorEngine#SITE_TURN_START} /
+     *                        {@link CompressorEngine#SITE_BEFORE_API_CALL} /
+     *                        {@link CompressorEngine#SITE_AFTER_TOOL_BATCH}
+     * @param addedTokens     仅位点 3 用：本批工具新灌进上下文的 token 估算
+     * @return true = 这次真的压成功了（调用方据此决定是否重拼请求）
      */
-    private void applyCompression(StreamListener listener) {
-        if (compressor == null || !compressor.shouldCompress()) {
-            return;
+    private boolean applyCompressionAtSite(int site, long addedTokens, StreamListener listener) {
+        if (compressor == null) {
+            return false;
+        }
+        ensureCompressionLedger();
+        boolean triggered;
+        if (site == CompressorEngine.SITE_BEFORE_API_CALL) {
+            triggered = compressor.evaluateBeforeApiCall(lastRequestChars);
+        } else if (site == CompressorEngine.SITE_AFTER_TOOL_BATCH) {
+            long base = compressor.getContextTokens();
+            long merged = Math.min(Integer.MAX_VALUE, base + addedTokens);
+            triggered = compressor.evaluateAfterToolBatch((int) merged, 0);
+        } else {
+            triggered = compressor.evaluateAtTurnStart();
+        }
+        return triggered && applyCompression(listener);
+    }
+
+    /**
+     * 达到阈值就把中段历史压成一条摘要消息（保最近 N 条原文），压缩结果回灌记忆。
+     * 抢锁/冷却/防抖在 {@link CompressorEngine} + {@link CompressionLedger} 里，
+     * 这里只负责回写、血统登记与事件。
+     */
+    private boolean applyCompression(StreamListener listener) {
+        if (compressor == null) {
+            return false;
         }
         List<Msg> history = memory.getMessages();
         List<Msg> compressed = compressor.compress(history, summarizer);
         if (compressed == history || compressed.size() >= history.size()) {
-            return;
+            return false;
         }
         // 省下来的空间必须当场还回预算，否则「压缩」只是把消息换短、账面上却一秒都没回本
         long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, compressed));
+        // 分叉之前先把「压缩前的完整原文」落到父会话那一行 —— 父会话留着原文，
+        // 检索沿血统回溯才有东西可回溯（先落子会话的话父行会是空的）。
+        persistSession();
         memory.load(compressed);
+        // 压缩 = 会话分叉：原文留在父会话里，压缩后的这条历史开一个新会话并挂 parent_session_id
+        String forkTitle = forkSessionForCompression();
         listener.onEvent(new StreamEvent.Compacted(compressor.getLastSummary(),
                 compressor.getLastFromCount(), compressor.getLastToCount()));
-        LOG.info("[BotAgent] 上下文压缩: {} -> {} 条 (累计 {} 次, 本次退还预算 {} tokens)",
+        LOG.info("[BotAgent] 上下文压缩: {} -> {} 条 (累计 {} 次, 本次退还预算 {} tokens, 分叉 {})",
                 compressor.getLastFromCount(), compressor.getLastToCount(),
-                compressor.getCompressCount(), refunded);
+                compressor.getCompressCount(), refunded,
+                forkTitle == null ? "未登记" : forkTitle + " @ " + sessionManager.getCurrentSessionId());
         persistSession();
+        return true;
+    }
+
+    /**
+     * 压缩之后建血统：新建子会话（当前会话即切到它上面）、挂父、派 {@code base #N} 标题。
+     *
+     * @return 派到的标题；store 不可用时 null（退化成「只压不分叉」，内存桩场景）
+     */
+    private String forkSessionForCompression() {
+        CompressionLedger ledger = ensureCompressionLedger();
+        if (ledger == null || sessionManager == null) {
+            return null;
+        }
+        String parent = sessionManager.getCurrentSessionId();
+        if (parent == null) {
+            return null;
+        }
+        String child = sessionManager.createSession();
+        String title = ledger.forkForCompression(parent, child);
+        if (title != null) {
+            lineageTitles.put(child, title);
+        }
+        return title;
+    }
+
+    /** 压缩引擎的配置口径全部来自 BotConfig（P14）：窗口 / 输出额度 / pct / keepRecent / 冷却 / 防抖 / 锁 TTL。 */
+    private static CompressorEngine newCompressorFromConfig(Builder b) {
+        BotConfig c = b.config;
+        CompressorEngine e = new CompressorEngine(c.getContextWindow(), c.getContextMaxOutputTokens(),
+                c.getContextCompressPct(), c.getContextCompressKeepRecent(),
+                c.getContextCompressCooldownMillis(), c.getContextCompressMaxIneffective(),
+                c.getContextCompressLockTtlMillis());
+        return e.withEnabled(c.isContextCompressEnabled());
+    }
+
+    /** store 到手之后才挂得上（Builder 里 sessionManager 可能是 build() 中途才造的）。 */
+    private CompressionLedger ensureCompressionLedger() {
+        CompressionLedger ledger = compressionLedger;
+        if (ledger != null || sessionManager == null || compressor == null) {
+            return ledger;
+        }
+        StateStore store = sessionManager.getStore();
+        if (store == null) {
+            return null;
+        }
+        ledger = new CompressionLedger(store);
+        compressionLedger = ledger;
+        compressor.withGate(ledger, this::currentSessionId);
+        return ledger;
     }
 
     /**
@@ -804,7 +948,44 @@ public class BotAgent {
         String sid = sessionManager.getCurrentSessionId();
         if (sid != null) {
             sessionManager.saveMessages(sid, memory.getConversationMessages());
+            reassertLineageTitle(sid);
         }
+    }
+
+    /**
+     * 分叉出来的会话标题（{@code base #N}）必须压过 {@code SessionManager} 那条
+     * 「标题还是『新会话』就拿首条用户消息猜一个」的默认路径 —— 它每次 saveMessages 都会
+     * 用猜出来的标题覆盖库里那行，所以每次落盘之后都要回填一次。
+     */
+    private void reassertLineageTitle(String sessionId) {
+        String title = lineageTitles.get(sessionId);
+        CompressionLedger ledger = compressionLedger;
+        if (title == null || ledger == null) {
+            return;
+        }
+        ledger.retitle(sessionId, title);
+    }
+
+    /** 压缩引擎（P14 自证面：位点计数、阈值口径、锁后端、冷却与防抖状态）。 */
+    public CompressorEngine compressor() {
+        return compressor;
+    }
+
+    /** 血统落盘侧（无 store 时为 null）。 */
+    public CompressionLedger compressionLedger() {
+        return compressionLedger;
+    }
+
+    /**
+     * 沿血统回溯并去重的会话检索（P14）。
+     *
+     * <p>生产消费者在 {@code cli/SessionsCommand}（不在本棒写域），先把口径落在 core 里，
+     * 并由 {@code CompressionLineageTest} 钉住「子会话摘要 + 父会话原文各命中一次 ⇒ 只回父会话一条」。</p>
+     */
+    public List<CompressionLedger.SearchHit> searchSessionsAlongLineage(String keyword, int limit) {
+        CompressionLedger ledger = ensureCompressionLedger();
+        return ledger == null ? new ArrayList<CompressionLedger.SearchHit>()
+                : ledger.searchAlongLineage(keyword, limit);
     }
 
     // ===== center 集成 =====
@@ -829,31 +1010,171 @@ public class BotAgent {
         }
     }
 
-    /** {@code /skills [view <name>]} — 列出/查看已安装技能（center 下发 + 本地 <configDir>/skills）。 */
+    /**
+     * {@code /skills [view <name> | check <name> | sync [src] | install <dir>]}
+     * —— 列出/查看/体检/同步/安装技能（center 下发 + 本地 <configDir>/skills）。
+     */
     public String skillsManage(String args) {
         List<SkillLoader.Skill> local = skillsRoot == null
                 ? Collections.<SkillLoader.Skill>emptyList() : SkillLoader.scan(skillsRoot);
         String a = args == null ? "" : args.trim();
-        if (a.toLowerCase().startsWith("view")) {
+        String lower = a.toLowerCase();
+        if (lower.startsWith("view")) {
             String name = a.length() > 4 ? a.substring(4).trim() : "";
             for (SkillLoader.Skill s : local) {
                 if (s.name.equalsIgnoreCase(name)) {
                     return "[" + s.name + "] v" + (s.version.isEmpty() ? "?" : s.version)
                             + "  " + (s.slash.isEmpty() ? "" : "(slash: " + s.slash + ")")
+                            + (s.offerable() ? "" : "\n未进命令表: " + s.hiddenReason)
+                            + (s.setupNote == null ? "" : "\nsetup: " + s.setupNote)
                             + "\n" + s.description + "\n\n" + s.body;
                 }
             }
             return "未找到技能: " + name + "（/skills 查看列表）";
         }
+        if (lower.startsWith("check")) {
+            String name = a.length() > 5 ? a.substring(5).trim() : "";
+            return skillHealthCheck(name);
+        }
+        if (lower.startsWith("sync")) {
+            File src = a.length() > 4 ? new File(a.substring(4).trim()) : skillBundledDir();
+            if (src == null || !src.isDirectory()) {
+                return "同步源目录不存在: " + src + "（可用 skills.bundled.dir 或 /skills sync <dir> 指定）";
+            }
+            if (skillsRoot == null) {
+                return "本地技能根未启用（configDir 不可用），无法 sync";
+            }
+            SkillSync.Report r = SkillSync.sync(src, skillsRoot, skillGuardSource());
+            refreshSkillCommandTable();
+            List<String> written = new ArrayList<String>(r.copied);
+            written.addAll(r.updated);
+            return r.describe() + (written.isEmpty()
+                    ? "\n没有写入任何文件" : "\n写入: " + String.join(", ", written));
+        }
+        if (lower.startsWith("install")) {
+            String dir = a.length() > 7 ? a.substring(7).trim() : "";
+            File src = new File(dir);
+            if (dir.isEmpty() || !new File(src, "SKILL.md").isFile()) {
+                return "格式: /skills install <技能目录>（目录里要有 SKILL.md）";
+            }
+            if (skillsRoot == null) {
+                return "本地技能根未启用（configDir 不可用），无法 install";
+            }
+            SkillSync.Report r = SkillSync.install(src, skillsRoot, skillGuardSource());
+            refreshSkillCommandTable();
+            return r.describe() + (r.suppressed.isEmpty() ? "" : "\n被拦下: " + r.suppressed);
+        }
         List<String> codes = listInstalledSkills();
         StringBuilder sb = new StringBuilder();
+        List<SkillCommands.Entry> table = skillCommandPlan(local).entries();
         for (String c : codes) {
             boolean isLocal = local.stream().anyMatch(s -> s.name.equals(c));
-            sb.append("- ").append(c).append(isLocal ? " (local)" : "").append('\n');
+            String cmd = "";
+            for (SkillCommands.Entry e : table) {
+                if (e.skill.name.equals(c)) {
+                    cmd = "  -> " + e.key;
+                    break;
+                }
+            }
+            sb.append("- ").append(c).append(isLocal ? " (local)" : "").append(cmd).append('\n');
+        }
+        for (SkillLoader.Skill s : local) {
+            if (s.offerable()) {
+                continue;
+            }
+            sb.append("- ").append(s.name).append(" (local)  -> 不进命令表: ")
+                    .append(s.hiddenReason).append('\n');
+        }
+        if (skillsRoot != null) {
+            SkillCommands.Plan plan = skillCommandPlan(local);
+            String skipped = plan.describeSkipped();
+            if (!skipped.isEmpty()) {
+                sb.append("命令表账本（为什么没进）:\n").append(skipped).append('\n');
+            }
         }
         String out = sb.toString().trim();
         return out.isEmpty() ? "本地无已安装的 Skill（接入 center 后运行 /sync 拉取，"
                 + "或把 <skill>/SKILL.md 放进 <configDir>/skills/）" : "已安装 Skill:\n" + out;
+    }
+
+    /** 技能 → 命令计划（保留的第一个 / 撞核心名跳过的账本都在这里）。 */
+    public SkillCommands.Plan skillCommandPlan(List<SkillLoader.Skill> local) {
+        com.zifang.z.bot.slash.SlashRegistry live =
+                com.zifang.z.bot.slash.SlashRegistry.live();
+        final java.util.Set<String> core = new java.util.HashSet<String>();
+        if (live != null) {
+            core.addAll(live.coreCommandNames());
+        } else {
+            for (String n : com.zifang.z.bot.slash.SlashRegistry.withBuiltinCommands()
+                    .coreCommandNames()) {
+                core.add(n);
+            }
+        }
+        return SkillCommands.plan(local, core::contains);
+    }
+
+    /** 让 live 命令表跟着这次 sync/install 重新派生（不落第二份表，只是重算技能那一段）。 */
+    private void refreshSkillCommandTable() {
+        com.zifang.z.bot.slash.SlashRegistry live =
+                com.zifang.z.bot.slash.SlashRegistry.live();
+        if (live != null) {
+            live.refreshSkillCommands();
+        }
+    }
+
+    /** {@code /skills check <name>}：门控理由 + guard 结论 + origin_hash 台账。 */
+    private String skillHealthCheck(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            return "格式: /skills check <name>";
+        }
+        File dir = skillsRoot == null ? null : new File(skillsRoot, name.trim());
+        if (dir == null || !new File(dir, "SKILL.md").isFile()) {
+            return "未找到技能目录: " + dir;
+        }
+        StringBuilder sb = new StringBuilder();
+        SkillLoader.Skill s = SkillLoader.tryParse(dir);
+        if (s != null) {
+            sb.append("[").append(s.name).append("] platforms=").append(s.platforms)
+                    .append(" environments=").append(s.environments)
+                    .append(" 需要 env=").append(s.requiredEnvVars)
+                    .append(" 需要命令=").append(s.requiredCommands).append('\n');
+            sb.append(s.offerable() ? "进命令表: 是" : "进命令表: 否 —— " + s.hiddenReason).append('\n');
+            if (s.setupNote != null) {
+                sb.append("降级说明: ").append(s.setupNote).append('\n');
+            }
+        }
+        SkillGuard.ScanResult scan = SkillGuard.scanSkill(dir, skillGuardSource());
+        sb.append("guard(").append(SkillGuard.SCANNER_VERSION).append(") verdict=")
+                .append(scan.verdict).append(" blocked=").append(scan.blocked).append('\n');
+        for (SkillGuard.Finding f : scan.findings) {
+            sb.append("  - ").append(f).append('\n');
+        }
+        Map<String, String> manifest = skillsRoot == null
+                ? Collections.<String, String>emptyMap() : SkillSync.readManifest(skillsRoot);
+        String origin = manifest.get(name.trim());
+        sb.append("origin_hash=")
+                .append(origin == null ? "(不在同步清单里)" : origin)
+                .append("  当前目录指纹=").append(SkillSync.dirHash(dir));
+        if (origin != null && !origin.isEmpty() && !origin.equals(SkillSync.dirHash(dir))) {
+            sb.append(" ⇒ 本地已改动，sync 不会覆盖它");
+        }
+        return sb.toString().trim();
+    }
+
+    /** 同步源目录：{@code skills.bundled.dir} &gt; {@code <configDir>/skills-bundled}。 */
+    public File skillBundledDir() {
+        String v = config == null ? "" : config.getSkillsBundledDir();
+        if (v != null && !v.trim().isEmpty()) {
+            return new File(v.trim());
+        }
+        File cfg = config == null ? null : config.getConfigDir();
+        return cfg == null ? null : new File(cfg, "skills-bundled");
+    }
+
+    /** guard 的信任级：{@code skills.guard.source}（缺省 bundled = 自带源，阈值宽松一档）。 */
+    public String skillGuardSource() {
+        String v = config == null ? null : config.getSkillsGuardSource();
+        return v == null || v.trim().isEmpty() ? "bundled" : v.trim();
     }
 
     /** 本地已安装 skill：扫 {@code <profile>/skills/<instanceCode>/} 一级子目录。 */
@@ -981,10 +1302,30 @@ public class BotAgent {
         }
         boolean preview = args != null && args.toLowerCase().contains("preview");
         if (preview) {
-            return "context tokens=" + compressor.getContextTokens() + "/" + compressor.getMaxTokens()
-                    + " shouldCompress=" + compressor.shouldCompress()
-                    + " 已压缩次数=" + compressor.getCompressCount()
-                    + "（输入 /compress 执行压缩）";
+            ensureCompressionLedger();
+            StringBuilder sb = new StringBuilder();
+            sb.append("context observed=").append(compressor.observedTokens())
+                    .append("/limit=").append(compressor.compressionLimit())
+                    .append(" shouldCompress=").append(compressor.shouldCompress())
+                    .append(" 已压缩次数=").append(compressor.getCompressCount())
+                    .append("（输入 /compress 执行压缩）\n");
+            // 产品里没有 /config 斜杠命令（SlashRegistry 未注册），压缩口径就在这儿自证
+            sb.append("位点调用次数 轮首/粗估/工具批 = ")
+                    .append(compressor.siteHits(CompressorEngine.SITE_TURN_START)).append('/')
+                    .append(compressor.siteHits(CompressorEngine.SITE_BEFORE_API_CALL)).append('/')
+                    .append(compressor.siteHits(CompressorEngine.SITE_AFTER_TOOL_BATCH)).append('\n');
+            sb.append(compressor.describe()).append('\n');
+            if (config != null) {
+                for (String line : config.contextCompressConfigLines()) {
+                    sb.append(line).append('\n');
+                }
+            }
+            String sid = sessionManager == null ? null : sessionManager.getCurrentSessionId();
+            CompressionLedger ledger = compressionLedger;
+            sb.append("session=").append(sid)
+                    .append(" 压缩锁持有者=").append(ledger == null ? "无库" : String.valueOf(ledger.lockHolder(sid)))
+                    .append(" 血统深度=").append(ledger == null ? -1 : ledger.lineageDepth(sid));
+            return sb.toString().trim();
         }
         List<Msg> history = memory.getMessages();
         List<Msg> out = compressor.forceCompress(history, summarizer);
@@ -993,9 +1334,12 @@ public class BotAgent {
         }
         memory.load(out);
         long refunded = budgetLedger.refundTokens(freedTokensOfCompression(history, out));
+        String forkTitle = forkSessionForCompression();
         persistSession();
         return "已压缩: " + history.size() + " -> " + out.size() + " 条 (累计 "
-                + compressor.getCompressCount() + " 次，本次退还预算 " + refunded + " tokens)";
+                + compressor.getCompressCount() + " 次，本次退还预算 " + refunded + " tokens，"
+                + (forkTitle == null ? "未分叉（无 state.db）"
+                : "分叉为 " + forkTitle + " @ " + sessionManager.getCurrentSessionId()) + ")";
     }
 
     /**
@@ -1406,11 +1750,32 @@ public class BotAgent {
         return sb.toString();
     }
 
-    /** 已安装技能的指引（最多 3 个、正文各截 600 字符），让模型能直接按技能干活。 */
+    /**
+     * 已安装技能的指引（最多 3 个、正文各截 600 字符），让模型能直接按技能干活。
+     *
+     * <p>P23：进这里的必须是过了门的技能（{@code platforms}/{@code environments} 不匹配的
+     * 不进 prompt），并且要写明"为什么没进"，不许静默消失。</p>
+     */
     static String skillContextBlock(File skillsRoot) {
-        List<SkillLoader.Skill> skills = SkillLoader.scan(skillsRoot);
-        if (skills.isEmpty()) {
+        List<SkillLoader.Skill> all = SkillLoader.scan(skillsRoot);
+        if (all.isEmpty()) {
             return "";
+        }
+        List<SkillLoader.Skill> skills = new java.util.ArrayList<SkillLoader.Skill>();
+        List<String> hidden = new java.util.ArrayList<String>();
+        for (SkillLoader.Skill s : all) {
+            if (s.offerable()) {
+                skills.add(s);
+            } else {
+                hidden.add(s.name + ": " + s.hiddenReason);
+            }
+        }
+        if (skills.isEmpty()) {
+            StringBuilder h = new StringBuilder("可用技能指引：\n");
+            for (String s : hidden) {
+                h.append("(未提供) ").append(s).append('\n');
+            }
+            return h.toString();
         }
         StringBuilder sb = new StringBuilder("可用技能指引：\n");
         int n = 0;
@@ -1420,6 +1785,9 @@ public class BotAgent {
             }
             sb.append("[").append(s.name).append("] ")
                     .append(s.description.isEmpty() ? "(无描述)" : s.description).append('\n');
+            if (s.setupNote != null) {
+                sb.append("(setup) ").append(s.setupNote).append('\n');
+            }
             String body = s.body;
             if (body.length() > 600) {
                 body = body.substring(0, 600) + "…";
@@ -1428,7 +1796,70 @@ public class BotAgent {
                 sb.append(body).append('\n');
             }
         }
+        for (String s : hidden) {
+            sb.append("(未提供) ").append(s).append('\n');
+        }
         return sb.toString();
+    }
+
+    // ───────────────────────────────────────────────── 技能 → 斜杠命令（P23）
+
+    /** 本地技能根（{@code <configDir>/skills}），可能为 null。 */
+    public File getSkillsRoot() {
+        return skillsRoot;
+    }
+
+    /** 当前该被"供货"的本地技能：命令表与 prompt 共用这一份判定。 */
+    public List<SkillLoader.Skill> offerableSkills() {
+        return skillsRoot == null
+                ? java.util.Collections.<SkillLoader.Skill>emptyList()
+                : SkillLoader.scanOffers(skillsRoot);
+    }
+
+    /**
+     * 真执行一次技能调用：把技能正文按 hermes 的注入形态拼成一条 user 消息，走 {@link #chat}。
+     *
+     * <p>技能正文里的指令文本只当语料，不当成对本进程的指令。</p>
+     */
+    public String invokeSkills(List<SkillLoader.Skill> skills, String instruction) {
+        if (skills == null || skills.isEmpty()) {
+            return "没有可执行的技能";
+        }
+        return chat(SkillCommands.buildInvocationMessage(skills, instruction));
+    }
+
+    /**
+     * {@code /skill <name> [指令]} —— 显式加载。
+     *
+     * <p>它绕过 {@code environments} 相关性门（hermes: 显式加载就是显式同意），
+     * 并把"它为什么没进命令表"照实说出来；缺前置时只降级、不丢技能。</p>
+     */
+    public String invokeSkillByName(String args) {
+        String a = args == null ? "" : args.trim();
+        if (a.isEmpty()) {
+            return "格式: /skill <name> [指令]";
+        }
+        String name = a.split("\\s+", 2)[0];
+        String instruction = a.length() > name.length() ? a.substring(name.length()).trim() : "";
+        List<SkillLoader.Skill> all = skillsRoot == null
+                ? java.util.Collections.<SkillLoader.Skill>emptyList()
+                : SkillLoader.scan(skillsRoot);
+        SkillLoader.Skill hit = null;
+        for (SkillLoader.Skill s : all) {
+            if (s.name.equalsIgnoreCase(name)
+                    || SkillCommands.slug(s.slash).equalsIgnoreCase(SkillCommands.slug(name))
+                    && !s.slash.isEmpty()) {
+                hit = s;
+                break;
+            }
+        }
+        if (hit == null) {
+            return "未找到技能: " + name + "（/skills 查看列表）";
+        }
+        String note = hit.offerable() ? "" : "提示: 该技能本被隐藏 —— " + hit.hiddenReason
+                + "（显式加载绕过 environments/platforms 门）\n";
+        String setup = hit.setupNote == null ? "" : "提示: " + hit.setupNote + "\n";
+        return note + setup + invokeSkills(java.util.Collections.singletonList(hit), instruction);
     }
 
     /** center 下发的长期记忆召回；拿不到就空串（不阻塞本轮）。 */
@@ -1580,7 +2011,65 @@ public class BotAgent {
             return;
         }
         String model = config == null ? null : config.getModel();
-        store.recordUsage(sessionManager.getCurrentSessionId(), model, promptTokens, completionTokens, apiCalls);
+        // P26：cache 读/写命中随本笔账一起交给 store（列在位才落库，见 StateStore#recordUsage）。
+        long cacheRead = takeAccumulated(CACHE_READ);
+        long cacheWrite = takeAccumulated(CACHE_WRITE);
+        store.recordUsage(sessionManager.getCurrentSessionId(), model, promptTokens, completionTokens, apiCalls,
+                Long.valueOf(cacheRead), Long.valueOf(cacheWrite));
+    }
+
+    private static long takeAccumulated(java.util.concurrent.atomic.AtomicLong counter) {
+        long v = counter.get();
+        counter.set(0L);
+        return v;
+    }
+
+    /** P26 降级链：换到 {@code toModel} 时重建在飞的 system 上下文（口径按新模型重算）。 */
+    private com.zifang.z.agent.kernel.llm.ChatCompletionsRequest rebuildForModel(
+            String fromModel, String toModel,
+            com.zifang.z.agent.kernel.llm.ChatCompletionsRequest inFlight) {
+        if (inFlight == null || toModel == null) {
+            return inFlight;
+        }
+        // system 上下文按新模型重算：工具清单/记忆块口径不变，但系统提示里点名的是当前模型
+        String systemPrompt = memory.getSystemPrompt();
+        java.util.List<com.zifang.z.agent.kernel.message.Msg> msgs = new ArrayList<com.zifang.z.agent.kernel.message.Msg>();
+        for (com.zifang.z.agent.kernel.message.Msg m : inFlight.getMessages()) {
+            if (m == null) {
+                continue;
+            }
+            if (com.zifang.z.agent.kernel.types.MessageRole.SYSTEM == m.getRole()
+                    && systemPrompt != null && !systemPrompt.isEmpty()) {
+                msgs.add(Msg.system(systemPrompt));
+            } else {
+                msgs.add(m);
+            }
+        }
+        int maxTokens = inFlight.getMaxTokens() <= 0 ? configMaxTokens() : inFlight.getMaxTokens();
+        LOG.warn("[BotAgent] 降级链 {} -> {}：system 上下文已重建（{} 条消息，maxTokens={}）",
+                fromModel, toModel, msgs.size(), maxTokens);
+        return new com.zifang.z.agent.kernel.llm.ChatCompletionsRequest(toModel, msgs, inFlight.getTools(),
+                inFlight.getTemperature(), inFlight.getTopP(), maxTokens, inFlight.isStream(),
+                inFlight.getProviderParams());
+    }
+
+    /** P26 降级链：换模型后清掉本侧按旧模型口径攒下的字符估算与 cache 累加。 */
+    private void resetModelSwitchState(String fromModel, String toModel) {
+        lastRequestChars = 0;
+        CACHE_READ.set(0L);
+        CACHE_WRITE.set(0L);
+        // CompressorEngine 的 compressCount 没有对外重置口（context/ 归 w6-p14），
+        // 这里只能把"换模型 ⇒ 旧压缩账作废"记进日志；接口需求见 _doc/acceptance/p26/EVIDENCE.md §11。
+        LOG.warn("[BotAgent] 换模型 {} -> {}：本侧字符估算已清零；压缩计数重置待 context/ 提供 reset 接口",
+                fromModel, toModel);
+    }
+
+    private int configMaxTokens() {
+        try {
+            return config == null ? 0 : config.getMaxTokens();
+        } catch (RuntimeException e) {
+            return 0;
+        }
     }
 
     // ===== 装配 =====
@@ -1782,8 +2271,11 @@ public class BotAgent {
                 return provider;
             }
             LlmProvider pooled = KeyPoolLlmProvider.wrap(provider, config.activeProvider());
+            // P26：退避/看门狗策略走自家 RetryPolicyConfig（llm.retry.* / llm.stream.*），
+            // 底座指数档首值沿用 BotConfig 已有的 retry.backoff.ms，不抄第二份。
             return new ResilientLlmProvider(pooled, config.getRetryMaxAttempts(),
-                    config.getRetryBackoffMs(), config.getFallbackModels());
+                    config.getRetryBackoffMs(), config.getFallbackModels(),
+                    com.zifang.z.bot.llm.RetryPolicyConfig.of(config, null, config.getConfigDir()), null);
         }
 
         /**
