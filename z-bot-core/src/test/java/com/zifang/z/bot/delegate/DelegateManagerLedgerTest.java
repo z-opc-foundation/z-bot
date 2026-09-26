@@ -265,9 +265,10 @@ public class DelegateManagerLedgerTest {
     }
 
     /**
-     * 并发闸那条连发用例靠时序：条目多半已经起跑，"只数 RUNNING"的写法在它面前照样能全绿
-     * （P27 台账里 M17 就是这支 SURVIVED）。谓词抽出来之后，这一条不需要线程、不需要闸门，
-     * 四种取值各问一次 ⇒ 摘掉 QUEUED 那半边必红。
+     * 并发闸那条连发用例靠时序：条目多半已经起跑，"只数 RUNNING"的写法在它面前常常照样全绿
+     * （09-27 实测 M17 三跑：红、红、绿 —— 红时报"前 3 条都该收下 expected:<3> but was:<4>"，
+     * 所以它是捕手但不是确定性判据；p27 台账把它记进 allow_extra）。
+     * 谓词抽出来之后，这一条不需要线程、不需要闸门，四种取值各问一次 ⇒ 摘掉 QUEUED 那半边必红。
      */
     @Test
     public void flyingPredicateCountsQueuedRowsButNotTerminals() {

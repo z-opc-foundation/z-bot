@@ -73,8 +73,14 @@ MUTANTS = [
          old="putDeliv(DeliveryState.PENDING, DelegateEvent.RESULT_DROPPED, DeliveryState.DROPPED);",
          new=("putDeliv(DeliveryState.PENDING, DelegateEvent.RESULT_DROPPED, DeliveryState.DROPPED);\n"
               "        putDeliv(DeliveryState.PENDING, DelegateEvent.RESULT_DELIVERED, DeliveryState.DELIVERED);"),
-         expect=["deliveryMatrixIsExhaustive", "ackWithoutClaimIsIllegal", "ackWithoutClaimFailsLoudly"],
-         why="给 PENDING 开一条到 DELIVERED 的口子 = 把 P16 那个同型洞重新焊回去"),
+         expect=["deliveryMatrixIsExhaustive", "ackWithoutClaimIsIllegal"],
+         why="给 PENDING 开一条到 DELIVERED 的口子 = 把 P16 那个同型洞重新焊回去 G1b 机制订正"
+             "（三轮实测同一读数：预期红却没红:ackWithoutClaimFailsLoudly ⇒ 摘出预期红集）："
+             "真红的两支都在**表格层**（DelegateStateMachineTest.deliveryMatrixIsExhaustive 逐格对“状态×事件”手写基准、"
+             "ackWithoutClaimIsIllegal 问 nextDelivery(PENDING, RESULT_DELIVERED) 必抛）；"
+             "而 ackWithoutClaimFailsLoudly 走**服务层**——DelegationDelivery.complete():131 在查表之前就"
+             " `if (e.delivery == PENDING) throw`，表格多一条边改不动它的通过条件 ⇒ 属“与它的通过条件等价”，不是尺空跑。"
+             "服务层另立 M22 来注：两层的账不许并成一支（当年并成一支才读出“没红=没牙”的假信号）。"),
     dict(id="M04-claim-does-not-burn",
          file=D("DelegationDelivery.java"),
          old="""        e.deliveryAttempts++;
@@ -146,9 +152,15 @@ MUTANTS = [
                 continue;
             }
             if (e.updatedAt""",
-         expect=["orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes",
-                 "asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery"],
-         why="收工的现场也被再过一遍孤儿流程 ⇒ DONE 被改判 UNKNOWN"),
+         expect=["orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes"],
+         why="收工的现场也被再过一遍孤儿流程 ⇒ DONE 被改判 UNKNOWN G1b 机制订正"
+             "（三轮实测同一读数：预期红却没红:asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery ⇒ 摘出）："
+             "那一支从头到尾不调 adoptOrphans（它测 dispatch→闸门→pull 的投递轴），结构上看不见这支变异。"
+             "顺带查清一条**反向**的：unfinishedAsyncSceneIsAdoptableAsOrphan 确实调了 adoptOrphans 并断言"
+             "“只有超期的非终态被认领”，但它那条 DONE 现场是**刚写的**（updatedAt=now），第二道年龄闸自己就把它挡住了"
+             " ⇒ 摘掉终态闸它照样绿，也不是判据。终态闸今天只有**一支**确定性捕手 ="
+             " orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes（它的 dlg-done 是 10× 超期，"
+             "只有终态闸挡得住），实测 3/3 红。"),
     dict(id="M11-done-means-delivered",
          file=D("DelegateManager.java"),
          old='advanceQuiet(live, DelegateEvent.TASK_COMPLETED, "异步收工");',
@@ -224,14 +236,17 @@ MUTANTS = [
          old='        return !"DONE".equals(status) && !"FAILED".equals(status);',
          new='        return "RUNNING".equals(status);',
          expect=["flyingPredicateCountsQueuedRowsButNotTerminals"],
+         allow_extra=["concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth",],
          why="并发闸退回只数 RUNNING（修之前的写法）⇒ 连发可越过 width。"
              "09-27 改锚：谓词已从闸门里抽成 DelegateManager.isFlying(String)，由那条无时序的"
-             "谓词用例确定性抓（实测：注入后红的恰是它，见 EVIDENCE §M17 有牙探针）。"
-             "原来那支连发用例 `concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth` "
-             "**从预期红集里摘出**，理由是机制而不是读数：它用 `Scripted().blocking(gate)` 卡的是 "
-             "`chat()`，而池线程在进 `chat()` 之前就把 `d.status` 置成 RUNNING —— 三次提交到第 4 次时"
-             "三条早已 RUNNING，'只数 RUNNING' 照样报 3/3 ⇒ 这一支结构上看不到 QUEUED 那半边。"
-             "它仍是'槽位数对不对'的产品级守卫（保留在套件里），只是不承担 M17 的杀变异职责"),
+             "谓词用例确定性抓（实测：注入后红的恰是它，见 EVIDENCE §M17 有牙探针）。 G1b 实测三轮改口："
+             "同一张表、同一棵树、串行三跑（r1 02:46 / r2 02:57 / r3 03:00）读数是**红、红、绿** ⇒ "
+             "原先那句“连发用例结构上看不到 QUEUED 那半边”**被实测否证，撤回**：它看得见，红的时候失败点是 "
+             "DelegateManagerLedgerTest.java:257 “前 3 条都该收下 expected:<3> but was:<4>”（闸真放行了 width 之外的条数，真阳性）。"
+             "但它不是确定性判据——submitAsync 的 ASYNC_POOL 是 cached pool，行 N 的 d.status=RUNNING 与主线程下一次闸门检查赛跑。"
+             "负载也解释不了：r3 的 load_average=20.36 比两支红时的 9.5 更高，方向相反 ⇒ 纯竞态，没有环境预测因子。"
+             "因此记 allow_extra（可真红、但不承重），载荷仍由 flyingPredicateCountsQueuedRowsButNotTerminals 承担（3/3 红）；"
+             "连发那支继续留在套件里当“槽位数对不对”的产品级守卫"),
     dict(id="M18-poll-burns-delivery",
          file=D("DelegateManager.java"),
          old='if (!"DONE".equals(d.status) && !"FAILED".equals(d.status)) {',
@@ -269,6 +284,19 @@ MUTANTS = [
          new='.append("").append("")',
          expect=["asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery"],
          why="/agents 不再显示投递格 ⇒ 界面全绿而账上是空的（对操作员撒谎）"),
+    dict(id="M22-ack-precheck-removed",
+         file=D("DelegationDelivery.java"),
+         old="""        if (e.delivery == DeliveryState.PENDING) {
+            throw new IllegalStateException("拒绝无凭证的 ack: " + id""",
+         new="""        if (false && e.delivery == DeliveryState.PENDING) {
+            throw new IllegalStateException("拒绝无凭证的 ack: " + id""",
+         expect=["ackWithoutClaimFailsLoudly"],
+         why="摘掉服务层“没 claim 就想 ack”的预检 ⇒ complete() 退化成静默返回 false，P16 那个洞换个口子回来。"
+             "G1b 与 M03 配对立的账：M03 注在**表格层**（红的是 DelegateStateMachineTest 那两支），这一支注在**服务层**"
+             "（预期红只有 ackWithoutClaimFailsLoudly，从 M03 摘出来挪到这里）。两层互补：M03 点名的集合里不含服务层、"
+             "M22 不含表格层 ⇒ “接线对但算法错”和“算法对但没人调”各钉一层（差集就是分层的证据）。"
+             "同一判据在真进程那层由 P27DelegationDriver 第⑧段（E2E|ack_without_claim=IllegalStateException）钉住，"
+             "它不在杠② 的 -Dtest 范围里 ⇒ 记账指向杠③，不在这里冒充覆盖。"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -720,7 +748,7 @@ def run_all():
                      unexpected, "%.1f" % elapsed, restored, ";".join(m.get("allow_extra", []))])
         print("%-34s %-22s rc=%-4s %s" % (m["id"], outcome, rc_i, unexpected or detail[:90]))
         sys.stdout.flush()
-        # 每支都落一次台账：整批 21 跑要几十分钟，中途掉线也留得下已判定的部分
+        # 每支都落一次台账：中途掉线也留得下已判定的部分（22 支整批实测 ≈3 分钟，旧注释"几十分钟"是废案期的数）
         write_ledger(rows, header, counts, hits, baseline_green, survivors)
 
     write_ledger(rows, header, counts, hits, baseline_green, survivors)

@@ -401,7 +401,9 @@ public final class DelegateManager {
      * <p>今天 {@link AsyncDelegation#status} 只会出现 QUEUED/RUNNING/DONE/FAILED 四种值
      * （写点：初值、线程池里起跑那一行、收工与失败两处判决；实测 grep 无第五种）。
      * 抽成单独一处是为了让
-     * "摘掉 QUEUED 也算在飞"这一支能被<b>确定性</b>抓到 —— 连发那条用例靠时序，量不到它。</p>
+     * "摘掉 QUEUED 也算在飞"这一支能被<b>确定性</b>抓到 —— 连发那条用例靠时序（实测三跑红两回、绿一回：
+     * 红时失败点是"前 3 条都该收下 expected:&lt;3&gt; but was:&lt;4&gt;"，即闸门确实放行了 width 之外的条数），
+     * 抓得到但不承重，判据的载荷在这一层。</p>
      */
     static boolean isFlying(String status) {
         return !"DONE".equals(status) && !"FAILED".equals(status);
