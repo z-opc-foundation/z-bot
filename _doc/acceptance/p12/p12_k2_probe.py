@@ -36,6 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CURRENT_SRC = os.path.join(HERE, "p12_e2e.py")
@@ -56,11 +57,13 @@ def load(src, tag):
     return m
 
 
-def run_scenario(m, base, name, files, expect, key_header=True):
-    """在干净的 base 上铺 out/ 现场，叫被测那份 section_creds()，只看 K2 的判定。
+def run_scenario(m, base, name, files, expect, key_header=True, stale_files=None,
+                 k3_expect=None, roll_window=True):
+    """在干净的 base 上铺 out/ 现场，叫被测那份 section_creds()，看 K2（和 K3）的判定。
 
     key_header=False 时 001.headers.json 里不含任何可配的取值
     （C/D 场景要的就是"产物里一个 key 形态都配不到"这个前提）。
+    stale_files= 先铺、然后把本跑窗口推到它之后 —— 模拟"上一跑/别的工具留下的读数"。
     """
     if os.path.isdir(base):
         shutil.rmtree(base)
@@ -73,6 +76,12 @@ def run_scenario(m, base, name, files, expect, key_header=True):
             fh.write('{"authorization":"Bearer %s"}' % m.STUB_KEY)
         else:
             fh.write('{"x-placeholder":"none-of-these-match"}')
+    for fn, body in sorted((stale_files or {}).items()):
+        with open(os.path.join(base, "out", fn), "w") as fh:
+            fh.write(body)
+    if stale_files and roll_window and hasattr(m, "RUN_START"):
+        # 把"本跑起点"推到这些文件之后：它们就成了"上一跑没被本跑碰过的既有产物"
+        m.RUN_START = time.time() + 1.0
     for fn, body in sorted(files.items()):
         with open(os.path.join(base, "out", fn), "w") as fh:
             fh.write(body)
@@ -82,9 +91,16 @@ def run_scenario(m, base, name, files, expect, key_header=True):
     m.LLM_HITS.append({"headers": {"authorization": "Bearer " + m.STUB_KEY}})
     m.section_creds()
     k2 = [c for c in m.CHECKS if c["name"].startswith("K2")][0]
+    k3 = [c for c in m.CHECKS if c["name"].startswith("K3")][0]
     ok = (k2["status"] == expect)
-    print("  %-2s %-32s 期望=%-4s 实测=%-4s %-11s | %s"
-          % (name[0], name, expect, k2["status"], "OK" if ok else "!!! MISMATCH", k2["detail"]),
+    detail = k2["detail"]
+    if k3_expect:
+        ok = ok and k3["status"] == k3_expect
+        detail = "K2=%s / K3=%s（期望 %s/%s）%s" % (k2["status"], k3["status"], expect, k3_expect,
+                                                   ("；K3 命中=" + k3["detail"][:150])
+                                                   if k3["status"] != "PASS" else "")
+    print("  %-2s %-38s 期望=%-4s 实测=%-4s %-11s | %s"
+          % (name[0], name, expect, k2["status"], "OK" if ok else "!!! MISMATCH", detail),
           flush=True)
     return ok, k2
 

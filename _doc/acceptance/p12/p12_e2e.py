@@ -22,11 +22,15 @@ P12（主循环节律包）验收③：**真进程** E2E。读代码不算证据
          同时证明 user 块里那个易变时钟这两轮确实变了（否则"逐字节相同"可以是两轮都没注入）。
   home   ~/.zbot 跑前跑后不变（项数 + config.properties / state.db 的 md5 前缀）。
   creds  凭证卫生：stub key 真进了产物（反向钉住），且产物里出现的每一种 Bearer 值只有它。
+         扫描面 = **本跑新建/改动过**的 out/ 与 logs/ 下的文件（按 mtime 定，不按文件名猜）。
+  build  B0/B0b：本跑开跑前自己 `mvn -o package` 重打 jar，并把 git HEAD + jar sha256
+         打进读数；收工后复核 sha256 没变。判"跑的是哪一版字节"不能靠人记得先打包
+         （G13 实测：杠② 变异分支留下的被变异 jar，会把 C1/C5 红成"产品坏了"）。
 
 为什么用 pty 而不是 `script`：`openpty()` 让 harness 直接握住 master fd，
 写入时刻精确到 us（R2 要从"写 /stop 那一刻"起算），也免掉 `script` 那层缓冲与时序差。
 
-前置: mvn -o package -DskipTests -pl z-bot-core
+前置: 无（本脚本自己打包；打包失败就不开跑，不拿旧 jar 顶包）
 复算: python3 -u _doc/acceptance/p12/p12_e2e.py
        python3 -u _doc/acceptance/p12/p12_e2e.py --only stop
 """
@@ -73,6 +77,12 @@ LLM_LOCK = threading.Lock()
 LLM_HITS = []
 SCRIPT = {"mode": "text", "command": None}
 
+# 本跑的起点（ns 精度）：K2/K3 的扫描面按"这一跑新建或改动过的文件"来定，
+# 不再按文件名猜（详见 G12：别的工具往 logs/ 里落一个读数，就把后面每一跑
+# 都钉成假红 —— 哨兵吃到了别人的字，还自己续了一口）。
+RUN_START = time.time()
+JAR_SHA_AT_BUILD = {"sha": None}
+
 
 def check(name, ok, detail, section, status=None):
     st = status or ("PASS" if ok else "FAIL")
@@ -101,6 +111,47 @@ def free_port():
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+def sha256_of(path):
+    if not os.path.isfile(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for blk in iter(lambda: fh.read(65536), b""):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def git_out(*args):
+    try:
+        r = subprocess.run(["git", "-C", ZBOT] + list(args),
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+        return (r.stdout or b"").decode("utf-8", "replace").strip() if r.returncode == 0 else "GIT-rc=%s" % r.returncode
+    except Exception as e:
+        return "GIT-ERR=%s" % e
+
+
+def build_gate(tag):
+    """杠③的"跑的是哪一版字节"闸门：每次都现打 jar，并把 provenance 打进读数。
+
+    这里踩过一次（G13）：杠② 的 M12 分支会 `mvn -o package` 打出**被变异**的 jar，
+    还原源码后 jar 不会自己还原；随后的 `mvn -o test` 也不重打 package。
+    于是"全绿基线"的那次 E2E 跑的其实是 M12 的变异字节 —— C1/C5 红得像是产品坏了，
+    而反过来（变异残留却没被抓到）更糟。判"跑了哪一版字节"不能靠人记得先打包。
+    """
+    pkglog = os.path.join(LOGS, "package-%s.log" % tag)
+    with open(pkglog, "wb") as fh:
+        rc = subprocess.run(["mvn", "-o", "package", "-DskipTests", "-pl", "z-bot-core"],
+                            cwd=ZBOT, stdout=fh, stderr=subprocess.STDOUT,
+                            timeout=1800).returncode
+    sha = sha256_of(JAR)
+    JAR_SHA_AT_BUILD["sha"] = sha
+    head = git_out("rev-parse", "--short", "HEAD")
+    dirty = git_out("status", "--porcelain", "--", "z-bot-core/src", "pom.xml", "z-bot-core/pom.xml")
+    log("打包 rc=%s jar=%s head=%s 源码脏=%s 打包日志=logs/%s"
+        % (rc, (sha or "MISSING")[:16], head, "无" if not dirty else dirty.replace("\n", " | "), tag))
+    return rc, sha, head, dirty
 
 
 # ===== 假 LLM（OpenAI 兼容；把每一轮实际发出的请求原文落盘） =====
@@ -721,10 +772,19 @@ def section_creds():
           "stub 收到的 Authorization 值集合=%s（%d 次调用），产物=%s/001.headers.json 存在=%s"
           % (sorted(auth_values), len(LLM_HITS), REQ_SUBDIR["path"], in_artifact), "creds")
 
-    # 扫描面 = **运行期产物**：JVM 自己写的日志、profile、stub 落盘请求、state.db…
-    # 不含 harness 自己的读数文件（out/e2e_*.json、logs/e2e_*_run*.log）：那里面
-    # 逐字写着检查项的名字（"grep minimax"），拿它当扫描对象等于让哨兵吃自己。
-    # 被排除的文件照样在读数里报出来，不藏。
+    # 扫描面 = **本跑新建或本跑改动过的运行期产物**（按文件系统证据 mtime 定，不按文件名猜）。
+    # 为什么不再按名字：老写法是"logs/ 与 out/ 底下的，但名字里带 _run / e2e_full /
+    # e2e_stop_only 的排除"——那既挡不住别的工具往 logs/ 里落一个读数（G12：
+    # p12c_k2_probe.log 里逐字写着 api.key=not-configured，从那一刻起每一跑都被
+    # 钉成假红，且红跑自己又把这句话写回自己的日志/JSON，自我续命），
+    # 也说不清"凭什么这个文件算产物"。现在判据只有一句：
+    # **这一跑动过的字节里，不许出现第二把 key、不许出现真配置的痕迹。**
+    # 排除的是"本跑没碰过的既有文件"（上一跑的 scratch、别的工具的读数）——
+    # 它们不是本跑的产物；本跑要是去改写它，mtime 进窗，照样在面上。一条没藏。
+    # 另：本跑的读数文件（--json 的 out/*.json、逐条 PASS/FAIL 行）是**扫描之后**
+    # 才写的，所以扫不到它们自己的尾部 —— 那正是自锁的断点。真凭证要是泄了，
+    # 一定是先落到本跑写的产物（out/llm-requests/、logs/e2e-*.log、out/profile-*/），
+    # 那些都在面上；读数只是它们的转述，不当第二次扫描对象。
     artifacts, skipped = [], []
     for root, dirs, files in os.walk(HERE):
         dirs[:] = [d for d in dirs if d not in (".git",)]
@@ -733,10 +793,13 @@ def section_creds():
             if not f.endswith((".json", ".log", ".txt", ".tsv", ".md", ".py", ".properties", ".db")):
                 continue
             rel = os.path.relpath(pth, HERE)
-            is_runtime = (rel.startswith("out" + os.sep) or rel.startswith("logs" + os.sep)) \
-                and "e2e_full" not in rel and "e2e_stop_only" not in rel \
-                and "_run" not in rel.split(os.sep)[-1]
-            (artifacts if is_runtime else skipped).append(pth)
+            if not (rel.startswith("out" + os.sep) or rel.startswith("logs" + os.sep)):
+                continue
+            try:
+                touched_by_this_run = os.stat(pth).st_mtime >= RUN_START - 0.5
+            except OSError:
+                touched_by_this_run = False
+            (artifacts if touched_by_this_run else skipped).append(pth)
     bearer, hits = set(), []
     for p in artifacts:
         try:
@@ -759,9 +822,10 @@ def section_creds():
             hits.append(p)
     check("K2 产物里出现的每一种 key 值都只有 stub-key-not-real",
           bearer == set([STUB_KEY]) and bool(bearer),
-          "扫了 %d 个运行期产物；见到的 key 值=%s" % (len(artifacts), sorted(bearer)), "creds")
+          "扫了 %d 个运行期产物（本跑新建/改动过的；另有 %d 个本跑没碰过的既有文件不在面上）；"
+          "见到的 key 值=%s" % (len(artifacts), len(skipped), sorted(bearer)), "creds")
     check("K3 运行期产物里不出现真配置的痕迹（grep minimax 或真 ~/.zbot 绝对路径）",
-          not hits, "扫描面=%d 个；命中=%s；未纳入扫描的 harness 读数文件=%s"
+          not hits, "扫描面=%d 个；命中=%s；本跑没碰过、故不在面上的既有文件=%s"
           % (len(artifacts), hits, [os.path.relpath(x, HERE) for x in skipped][:6]), "creds")
 
 
@@ -827,6 +891,17 @@ def main():
         print("FATAL 缺 %s —— 先跑 mvn -o package -DskipTests -pl z-bot-core" % JAR, flush=True)
         return 2
     home_before = home_reading()
+    brc, bsha, bhead, bdirty = build_gate(only or "all")
+    if brc != 0:
+        check("B0 本跑真进程用的是现打的 jar（打包 rc=0）", False,
+              "mvn -o package rc=%s（见 logs/package-%s.log）—— 不拿旧 jar 顶包，拒绝开跑"
+              % (brc, only or "all"), "build")
+        print("B0 不成立：不跑真进程（避免把上一位留下的字节当成本树的读数）。", flush=True)
+        return 3
+    check("B0 本跑真进程用的是现打的 jar（打包 rc=0）", True,
+          "打包 rc=0；jar sha256=%s；git HEAD=%s；z-bot-core/src 未提交改动=%s"
+          % ((bsha or "MISSING")[:16], bhead, "无" if not bdirty else "%d 行" % len(bdirty.splitlines())),
+          "build")
     srv, base_url = start_stub()
     only = args.only
     try:
@@ -855,6 +930,11 @@ def main():
     finally:
         cleanup()
     # 红线读数放在所有 JVM 收工之后取：跑前/跑后各一次，中间隔着真进程层的全部副作用
+    check("B0b 跑的过程中那台 jar 的字节没被换过",
+          sha256_of(JAR) == JAR_SHA_AT_BUILD["sha"],
+          "开跑前 sha256=%s / 收工后 sha256=%s（防止别处在半途重打包）"
+          % ((JAR_SHA_AT_BUILD["sha"] or "MISSING")[:16], (sha256_of(JAR) or "MISSING")[:16]),
+          "build")
     if only in (None, "home"):
         section_home(home_before)
     if only in (None, "creds"):
