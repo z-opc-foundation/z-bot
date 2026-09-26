@@ -180,6 +180,31 @@ M12 system prompt 快照解冻 ⇒
 真长出了中途写的 SOUL 那一行（`False/True`），摘掉看门狗 ⇒ 工具子进程在进程表里数得到、`/stop` 断不掉。
 M12 那对 sha256 同时就是 §9 的阳性对照（冻结在位时两轮都是 `8b38a41d…`，摘掉后第二发变成 `2b4de935…`）。
 
+### 2.1c 全量第三遍（**入库的 `LEDGER.tsv` 就是这一遍的产物**，脚本 = HEAD `4dfce89`）
+
+第二遍之后本棒改了探针（§6 G11），为了让"入库台账出自现脚本"这条复算成立，又跑了一整遍：
+
+```
+cd /private/tmp/zbot-wt-p12 && python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e \
+    → _doc/acceptance/p12/logs/p12c_mut_full_run3.log   rc=0（首行 LOCK-ACQUIRED，19 支跑完）
+```
+
+tally 与前两遍**一字不差**（`RED-OK 14 / PARTIAL 2 / GREEN-BUT-MUTATED 3 / BROKEN 0 / SRC_MD5_STABLE=yes`），
+逐支比对三遍的 19 行 × 11 列 ⇒ **只有 2 个单元格不同，都在 `e2e_detail` 这一列的自由文本里**：
+
+```
+M6  e2e_detail: run2 的 G0「ready=True 耗时=1116ms」 → run3「耗时=1087ms」
+M12 e2e_detail: run2 的 C0「ready=True 耗时=1146ms」 → run3「耗时=1115ms」
+```
+
+⇒ 三遍里 `verdict / named_expected / named_hit / tests_that_went_red / mvn_rc / e2e_rc / restored /
+restore_forensics_vs_git` **零漂移**，唯一会变的是 JVM 启动耗时这种本来就不该钉的量。
+上面 M6/M12 的两层判红读数（S2 `pgrep=['18906','18907']`、S3 `elapsed_ms=-1`、
+C1 `sha256_1=8b38a41d… sha256_2=2b4de935…`、C5 `False/True`）在第三遍里**逐字复现**（只有 pid 换人），
+复算：`python3 -c "import json;print(*[c['status']+' '+c['name'][:40]+' | '+c['detail'][:150] for c in json.load(open('_doc/acceptance/p12/out/mutation-M12.json'))['checks'] if c['status']!='PASS'],sep='\n')"`。
+复算三遍对拍（第一遍在 `git show e69709a:…LEDGER.tsv`，第二遍在
+`git show 5965f80:…LEDGER.tsv`，第三遍在盘上）：见 §8 的那段 python。
+
 ### 2.2 非 RED-OK 的 5 条：逐条落到断言行 + 因果（不洗）
 
 1. **M8 摘掉 `bash()` 入口检查点 ⇒ 全绿**（GREEN-BUT-MUTATED）。因果链：入口那次
@@ -650,9 +675,12 @@ $ md5 -q ~/.zbot/state.db | cut -c1-8
    今天仍然只有实现、没有能判红的观测**，别当成验收了。
 3. **M16 想钉的那条测试（`interruptInsideParallelToolBatch…`）判不了红**，要抓它得注入
    `InterruptFlag.checkpoint()` 本体 —— 那个类在 `z-agent-kernel`，本期红线不许动内核仓 ⇒ 未覆盖。
-4. ~~杠② 全量只跑了一轮~~ ⇒ **本棒已补第二遍全量**（`--with-e2e`，19 支逐支对拍 19/19 全同，见 §2.1b）。
-   仍然没做的是：**没有第三遍**，也没有"换机/换负载下的重复"，所以两遍里都恰好稳定的漏判分不出来；
-   且第二遍的 `e2e_rc` 只有 M6/M12 两支有值（其余 17 支的 kind 是 `mvn`，设计上不跑真进程层）。
+4. **杠② 全量已经跑到第三遍**（`e69709a` 的一遍 + 本棒 `--with-e2e` 的两遍，见 §2.1b/§2.1c：
+   三遍 19 支的判定列零漂移）。仍然没做的是：
+   (a) 三遍都在**同一台机器、同一段负载窗口**里，没有"换机/换负载/并发邻居下"的重复；
+   (b) 真进程层（`e2e_rc`）只有 **M6/M12 两支**有值 —— 另外 17 支的 kind 是 `mvn`，设计上不进 E2E，
+   所以"摘掉 steer 的 `clear()` 之后真进程 REPL 会不会露出来"这类问题今天仍然没有第二层读数；
+   (c) 判定规则 `if hit and not extra`（§6 G7）没改 ⇒ "RED-OK 但点名没打满"这种半覆盖还得靠人读 §2.3。
 5. **D1/D2（§5 的 token 账与 post-chat）没修**，本棒一行产品码都没动（只动测试与量具）。
 6. **E2E 的 `STOP_LIMIT_MS=2000`、R2b 那条 pty 反面对照的语义**沿用上一棒设定，本棒没重估；
    实测余量很大（§3.3 五跑 33–92 ms、§3.3b 五跑 50–81 ms），但没有多机分布数据支撑这个阈值。
@@ -684,16 +712,20 @@ python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e      # → logs/p12c_m
 column -t -s $'\t' _doc/acceptance/p12/LEDGER.tsv              # 只读台账，不许手改
 python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M6 M12   # 单独复打真进程层两支（stop / cache）
 python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe    # flock 双向实测：本棒两跑 rc=0 ⇒ PASS（§2.4）
-# 两遍全量逐支对拍（本棒读数 19/19 全同，唯一差异是 e2e_rc 列）
+# 三遍全量逐支对拍（本棒读数：19/19 判定列全同，只有 2 个 e2e_detail 单元格的耗时数字不同）
 python3 - <<'PY'
 import csv, io, subprocess
-a=list(csv.DictReader(io.StringIO(subprocess.check_output(
-   ['git','show','e69709a:_doc/acceptance/p12/LEDGER.tsv']).decode()),delimiter='\t'))
-b=list(csv.DictReader(open('_doc/acceptance/p12/LEDGER.tsv'),delimiter='\t'))
-k=('verdict','named_hit','named_expected','mvn_rc','tests_that_went_red','restore_forensics_vs_git')
-d={r['id']:[r[x] for x in k] for r in a}; e={r['id']:[r[x] for x in k] for r in b}
-print('rows',len(a),len(b),'全同支数',sum(1 for x in d if d[x]==e.get(x)))
-print('e2e_rc 非空:',[(r['id'].split()[0],r['e2e_rc']) for r in b if r['e2e_rc']])
+def load(spec, path='_doc/acceptance/p12/LEDGER.tsv'):
+    raw = subprocess.check_output(['git','show','%s:%s'%(spec,path)]).decode() if spec \
+          else open(path).read()
+    return {r['id']: r for r in csv.DictReader(io.StringIO(raw), delimiter='\t')}
+runs = {'run1(e69709a)': load('e69709a'), 'run2(5965f80)': load('5965f80'), 'run3(盘上)': load(None)}
+cols = list(next(iter(runs['run3(盘上)'].values())).keys())   # 取"列名"，不是行 id
+for a, b in [('run1(e69709a)','run2(5965f80)'), ('run2(5965f80)','run3(盘上)')]:
+    diff = [(i, c) for i in runs[a] for c in cols if runs[a][i][c] != runs[b].get(i, {}).get(c)]
+    print('%s vs %s: rows=%d/%d 不同的单元格=%s' % (a, b, len(runs[a]), len(runs[b]),
+          diff or '无（逐字节全同）'))
+print('e2e_rc 非空:', [(r['id'].split()[0], r['e2e_rc']) for r in runs['run3(盘上)'].values() if r['e2e_rc']])
 PY
 
 # 杠③（真进程 E2E，不带 --only 就是全 25 条；约 30 s/跑）
