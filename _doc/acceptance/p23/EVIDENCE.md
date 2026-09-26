@@ -859,3 +859,39 @@ Reactor Summary（run1）：z-bot 0.197 s SUCCESS / z-bot-core 29.475 s SUCCESS 
 
 三跑全 `BUILD SUCCESS`、**775/775 全绿、零 Skipped** ⇒ 杠① 过。
 在飞时点 t1（09:15:28Z）顺手复量 `~/.zbot`：`8 / 2dadaed0 / 690ddbc0 / skills=NOT_EXIST / keylen=125` 未动。
+
+### §11.4 杠② 变异台账重打（量具 mtime 变了 ⇒ 旧台账随 src 一起作废，本棒整批重跑）
+
+命令：`python3 _doc/acceptance/p23/p23_mutation.py`（**无参数＝47 支全打**；独占 flock 在
+`$(git rev-parse --path-format=absolute --git-common-dir)/zbot-mutlock`，抢到才跑；本棒没有 sleep 死等、没 kill 任何人）。
+日志 `~/.cache/zbot-p23-lead/bar2_p23c_run1.log`，`start 2026-09-26T09:16:19Z / rc=0 / end 09:20:20Z`（241 s，47 支串行）。
+
+```
+$ tail -1 ~/.cache/zbot-p23-lead/bar2_p23c_run1.log
+五档计数: RED-OK=47 合计 47
+$ awk -F'\t' 'NR>1{print $5}' LEDGER.tsv | sort | uniq -c
+  47 RED-OK
+$ awk -F'\t' 'NR>1 && $7!=$9 {c++} END{print c+0}' LEDGER.tsv      # 还原后 md5 与 HEAD 不一致的行数
+0
+$ git status --porcelain -- z-bot-core/src | wc -l
+0
+$ ls -lT LEDGER.tsv p23_mutation.py
+Sep 26 17:20:20 2026 LEDGER.tsv        ← 晚于
+Sep 26 17:14:16 2026 p23_mutation.py   ← 量具（含本棒新增两支 + 一支改锚点）⇒ 台账有效
+```
+
+**工单 §1.3 点名的两支双向变异（新增/改造），判词与"谁杀的"**：
+
+| 变异 | 注入 | 预期红集 | 实测红 | 判词 | tests_run |
+|---|---|---|---|---|---|
+| `core_name_collision_skip_removed`（摘掉 `reserved` 判断；p23a 原有，**锚点随口径 A 改成 `reserved.test(key)`**，预期红集加上新卫兵） | `if (false && reserved != null && reserved.test(key)) {` | SkillCommandsTest,SlashRegistrySkillCommandTest,**SkillCommandPlanProductionWiringTest** | 三支全红 | **RED-OK** | 28 |
+| `reserved_arity_normalized_away`（**新增**：把归一去掉＝退回 D-1 原状） | `reserved.test(key)` → `reserved.test(slug)` | 同上三支 | 三支全红 | **RED-OK** | 28 |
+| `caller_side_normalization_reintroduced`（**新增**：把归一搬回调用方＝工单 §1.1 禁的"两边都容错"） | `find(name)` → `find("/" + slug)`（SlashRegistry） | SlashRegistrySkillCommandTest,**SkillCommandPlanProductionWiringTest** | 两支全红 | **RED-OK** | 15 |
+
+⇒ 三支都必须红的没有一支 SURVIVED / GREEN-BUT-MUTATED：新卫兵确实钉在"归一只有这一处"上，
+把它挪回 D-1 的形状（`test(slug)`）或挪回调用方（`find("/"+…)`）都会当场红，不需要靠记 SURVIVED 交差。
+
+**顺带收掉 p23b 那条 PARTIAL**：`environment_gate_removed` 的预期红集里一直写着 `SlashRegistrySkillCommandTest`，
+p23b 那轮它不红（命令表侧当时没有 `environments` 用例）⇒ 记 PARTIAL。本棒补的 G-1
+（`environmentHiddenSkillStaysOutOfTableAndIsAccounted`）正是那个缺失的猎物 ⇒ 本轮实测两支全红、升 **RED-OK**
+（台账 45→47 支，五档 `RED-OK 47 / PARTIAL 0`）。

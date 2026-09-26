@@ -41,10 +41,24 @@ def m(name, path, old, new, expect):
 
 
 # ── §2 技能→斜杠命令的三条硬规则 + slug + 记账 ────────────────────────────────
+# P23c/D-1 之后 `reserved` 的入参是**命令全名（含斜杠）**，归一只在 SkillCommands 一处。
+# 下面三支是这一条口径的守卫（工单 §1.3 要求的双向变异 + 一支"两边都容错"）：
+# 杀不掉任何一支就说明口径没统一，要回去改码，不许记 SURVIVED。
 m("core_name_collision_skip_removed", f"{SKILL}/SkillCommands.java",
+  "if (reserved != null && reserved.test(key)) {",
+  "if (false && reserved != null && reserved.test(key)) {",
+  ["SkillCommandsTest", "SlashRegistrySkillCommandTest",
+   "SkillCommandPlanProductionWiringTest"])
+m("reserved_arity_normalized_away", f"{SKILL}/SkillCommands.java",
+  "if (reserved != null && reserved.test(key)) {",
   "if (reserved != null && reserved.test(slug)) {",
-  "if (false && reserved != null && reserved.test(slug)) {",
-  ["SkillCommandsTest", "SlashRegistrySkillCommandTest"])
+  ["SkillCommandsTest", "SlashRegistrySkillCommandTest",
+   "SkillCommandPlanProductionWiringTest"])
+m("caller_side_normalization_reintroduced",
+  "z-bot-core/src/main/java/com/zifang/z/bot/slash/SlashRegistry.java",
+  "SkillCommands.plan(skills, name -> find(name) != null);",
+  "SkillCommands.plan(skills, slug -> find(\"/\" + slug) != null);",
+  ["SlashRegistrySkillCommandTest", "SkillCommandPlanProductionWiringTest"])
 m("duplicate_slug_first_wins_removed", f"{SKILL}/SkillCommands.java",
   "if (plan.byKey.containsKey(key)) {",
   "if (false && plan.byKey.containsKey(key)) {",
