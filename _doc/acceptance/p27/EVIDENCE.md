@@ -836,5 +836,149 @@ PROBE_DONE
 - 杠④ 在这一节所有测量之后复测仍是 `entries=8 cfg=2dadaed0 db=690ddbc0 keylen=125`
   （真 key 只量长度，值未被读取）；锁 `pid=22579` 已 `LOCK|released`，`src/main` 两支文件 md5 逐支 `md5_same=YES`。
 
+## §12 主编在 `31be6c7` 上重跑杠②（09-27 00:36–00:41，实测；补 §11 欠的"21 支整批复跑"）
 
+§11 只定向验了 M17/M19 两支的捕手是否红，**没有重跑整批** ⇒ 本节补整批，并在同一棵合并树上
+复跑 P19 的 8 支。两支尺共用一把 `zbot-mutlock`、串行（先 P19 后 P27），树身份由尺自己打印：
+
+```
+TARGET|repo=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot head=31be6c7 branch=main dirty_lines=2
+   rc=0 elapsed=2.9s [INFO] Tests run: 88, Failures: 0, Errors: 0, Skipped: 0
+   git diff --name-only (src/main/delegate): <空>
+   git status --porcelain 里的非预期条目: <无>
+== 计数: PARTIAL=10, RED-OK=10, SURVIVED=1 ==
+== SURVIVED 点名 ==
+   M13-non-atomic-state-write —— 丢掉 ATOMIC_MOVE：单进程读写序下这条不可观测（预期可能 SURVIVED，见 EVIDENCE §6）
+== 锁已释放 ==
+```
+
+### 12.1 判定分布与 09-26 那批的差
+
+| | 09-26（p27b，写手树） | 09-27（本节，`31be6c7`） |
+|---|---|---|
+| RED-OK | 8 | **10** |
+| PARTIAL | 10 | 10 |
+| SURVIVED | 3（M13/M17/M19） | **1（只剩 M13）** |
+
+两支新判据在整批里各自判 **RED-OK**，`mvn_rc=1`，且台账第五列原文是"预期红集全红且无预期外红"
+—— 下面这两行是从 `LEDGER.tsv` 的字节里读出来的（`c5=命中说明 c6=expected c7=意外说明`），不是我推的：
+
+```
+M17-gate-counts-running-only | outcome=RED-OK rc=1
+   c5=预期红集全红且无预期外红:flyingPredicateCountsQueuedRowsButNotTerminals
+   c6=flyingPredicateCountsQueuedRowsButNotTerminals
+   c7=预期内
+M19-stale-copy-overwrites-scene | outcome=RED-OK rc=1
+   c5=预期红集全红且无预期外红:staleCopyCannotOverwriteATerminalSceneOnDisk
+   c6=staleCopyCannotOverwriteATerminalSceneOnDisk
+   c7=预期内
+```
+
+### 12.2 21 支逐支（台账原文，节选 `mutant/outcome/rc/c5`）
+
+```
+M01-cap-anchor-bumped            PARTIAL   rc=1 预期红命中 2 支，另有预期外红:asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery,attemptCapIsEightLikeTheHermesAnchor,deliveredIsTerminal,eachClaimBurnsExactlyOneAttempt,exhaustedAttemptsConvergeToTerminalDropped,q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth,summaryCountsEveryDeliveryState,summaryOnEmptyLedgerIsHonest,theCapEvidenceSurvivesARestart
+M02-cap-unbounded                PARTIAL   rc=1 预期红命中 2 支，另有预期外红:exhaustedAttemptsConvergeToTerminalDropped,q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth,theCapEvidenceSurvivesARestart
+M03-ack-without-claim-allowed    RED-OK    rc=1 预期红集全红且无预期外红:ackWithoutClaimIsIllegal,deliveryMatrixIsExhaustive
+M04-claim-does-not-burn          PARTIAL   rc=1 预期红命中 4 支，另有预期外红:asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery,claimLeaseBlocksOtherConsumersUntilItExpires,deliveredIsTerminal,eachClaimBurnsExactlyOneAttempt,exhaustedAttemptsConvergeToTerminalDropped,q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth,summaryCountsEveryDeliveryState,theCapEvidenceSurvivesARestart
+M05-prune-age-inverted           PARTIAL   rc=1 预期红命中 3 支，另有预期外红:corruptStateFileIsIgnoredNotCrashed,pruneDeletesExpiredTerminalScenesAndKeepsEverythingElse,pruneHonoursTheRetentionWindowBoundary,q3a_killedDelegatorLeavesAPhantomInFlightSceneAndNoReadPathReconcilesIt,q3c_unparsableAndZeroTimestampScenesEscapeEveryReadAndPrunePath,startupSweepAdoptsStaleSceneAndReportsFromDisk,unfinishedAsyncSceneIsAdoptableAsOrphan,unknownScenesAreTerminalAndThusPrunable
+M06-prune-eats-inflight          RED-OK    rc=1 预期红集全红且无预期外红:pruneDeletesExpiredTerminalScenesAndKeepsEverythingElse
+M07-retention-window-bloated     RED-OK    rc=1 预期红集全红且无预期外红:retentionConstantMatchesHermesSevenDays
+M08-age-basis-dispatch-time      PARTIAL   rc=1 预期红命中 2 支，另有预期外红:corruptStateFileIsIgnoredNotCrashed,pruneDeletesExpiredTerminalScenesAndKeepsEverythingElse,pruneHonoursTheRetentionWindowBoundary,unknownScenesAreTerminalAndThusPrunable
+M09-orphan-adoption-ignores-age  PARTIAL   rc=1 预期红命中 1 支，另有预期外红:orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes,q3a_killedDelegatorLeavesAPhantomInFlightSceneAndNoReadPathReconcilesIt
+M10-orphan-adoption-eats-terminal RED-OK    rc=1 预期红集全红且无预期外红:orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes
+M11-done-means-delivered         PARTIAL   rc=1 预期红命中 2 支，另有预期外红:asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery,q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth,q3b_afterARestartTheUserFacingEntriesLoseTheSceneWhileTheDiskStillHoldsIt,unclampedChildBudgetIsRecordedOnDiskWhenParentIsNotAttached
+M12-scene-never-created          PARTIAL   rc=1 预期红命中 3 支，另有预期外红:aBehindCopyAdoptsTheDiskStateBeforeAdvancing,ackWithoutClaimFailsLoudly,advanceRejectsIllegalTransitionBeforeTouchingDisk,asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery,atomicWriteLeavesNoTempFileAndNoHalfState,claimLeaseBlocksOtherConsumersUntilItExpires,concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth,corruptStateFileIsIgnoredNotCrashed,createWritesTheSceneBeforeAnythingRuns,deliveredIsTerminal,droppedRowsAreNotOfferedForRestoreButPendingRowsAre,eachClaimBurnsExactlyOneAttempt,eventsLogCarriesWireNamesInOrder,exhaustedAttemptsConvergeToTerminalDropped,explicitDropFromPendingIsHonouredOnce,listIsOrderedByDispatchTime,orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes,pruneDeletesExpiredTerminalScenesAndKeepsEverythingElse,pruneHonoursTheRetentionWindowBoundary,q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth,q2_deliveryAxisHasNoLifecycleGateWhileOnlyTheInMemoryStatusGuardsThePullEntry,q3a_killedDelegatorLeavesAPhantomInFlightSceneAndNoReadPathReconcilesIt,q3b_afterARestartTheUserFacingEntriesLoseTheSceneWhileTheDiskStillHoldsIt,q3c_unparsableAndZeroTimestampScenesEscapeEveryReadAndPrunePath,sceneIsReadableFromAFreshInstance,secretsAreMaskedBeforeHittingDisk,staleCopyCannotOverwriteATerminalSceneOnDisk,staleOrForeignTokenCannotAck,startupSweepAdoptsStaleSceneAndReportsFromDisk,stopOnFlyingChildWritesStoppedSceneAndFirstTerminalVerdictWins,summaryCountsEveryDeliveryState,syncDelegationWritesASceneThatIsReadableWithoutTheCaller,theCapEvidenceSurvivesARestart,unclampedChildBudgetIsRecordedOnDiskWhenParentIsNotAttached,unfinishedAsyncSceneIsAdoptableAsOrphan,unknownScenesAreTerminalAndThusPrunable
+M13-non-atomic-state-write       SURVIVED  rc=0 全绿：没有任何用例咬住这支变异
+M14-legacy-status-silent-default RED-OK    rc=1 预期红集全红且无预期外红:legacyStatusLiteralsAreNormalizedOrRejected
+M15-redaction-off                RED-OK    rc=1 预期红集全红且无预期外红:secretsAreMaskedBeforeHittingDisk
+M16-id-validation-off            PARTIAL   rc=1 预期红命中 1 支，另有预期外红:pathEscapingIdsAreRejected,q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth
+M17-gate-counts-running-only     RED-OK    rc=1 预期红集全红且无预期外红:flyingPredicateCountsQueuedRowsButNotTerminals
+M18-poll-burns-delivery          PARTIAL   rc=1 预期红命中 1 支，另有预期外红:asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery,q2_deliveryAxisHasNoLifecycleGateWhileOnlyTheInMemoryStatusGuardsThePullEntry,unfinishedAsyncSceneIsAdoptableAsOrphan
+M19-stale-copy-overwrites-scene  RED-OK    rc=1 预期红集全红且无预期外红:staleCopyCannotOverwriteATerminalSceneOnDisk
+M20-stop-leaves-no-scene         RED-OK    rc=1 预期红集全红且无预期外红:stopOnFlyingChildWritesStoppedSceneAndFirstTerminalVerdictWins
+M21-agents-hides-delivery        RED-OK    rc=1 预期红集全红且无预期外红:asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery
+```
+
+### 12.3 记一笔对尺的账：`expected_red` 集合在合并树上**双向陈旧**
+
+10 条 PARTIAL 的两种偏差逐条取出方法名（`c7` 列原文按 `,` 拆），再拿 `void <name>(` 在
+`z-bot-core/src/test/java/com/zifang/z/bot/delegate/` 下定位归属（脚本扫盘，不靠我记忆）：
+
+- **预期红却没红**：4 条
+- **预期外变红**：58 条
+
+| 方法名 | 住在哪个文件 | 该文件最后一次提交 |
+|---|---|---|
+| `aBehindCopyAdoptsTheDiskStateBeforeAdvancing` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `ackWithoutClaimFailsLoudly` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `advanceRejectsIllegalTransitionBeforeTouchingDisk` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery` | `DelegateManagerLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `atomicWriteLeavesNoTempFileAndNoHalfState` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `claimLeaseBlocksOtherConsumersUntilItExpires` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth` | `DelegateManagerLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `corruptStateFileIsIgnoredNotCrashed` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `deliveredIsTerminal` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `droppedRowsAreNotOfferedForRestoreButPendingRowsAre` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `eachClaimBurnsExactlyOneAttempt` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `eventsLogCarriesWireNamesInOrder` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `exhaustedAttemptsConvergeToTerminalDropped` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `explicitDropFromPendingIsHonouredOnce` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `listIsOrderedByDispatchTime` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `orphanAdoptionMarksStaleNonTerminalScenesUnknownAndKeepsLiveOnes` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `pruneDeletesExpiredTerminalScenesAndKeepsEverythingElse` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `pruneHonoursTheRetentionWindowBoundary` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth` | `P27FalsificationTest.java` | 5d0fc25 09-26 18:10 |
+| `q2_deliveryAxisHasNoLifecycleGateWhileOnlyTheInMemoryStatusGuardsThePullEntry` | `P27FalsificationTest.java` | 5d0fc25 09-26 18:10 |
+| `q3a_killedDelegatorLeavesAPhantomInFlightSceneAndNoReadPathReconcilesIt` | `P27FalsificationTest.java` | 5d0fc25 09-26 18:10 |
+| `q3b_afterARestartTheUserFacingEntriesLoseTheSceneWhileTheDiskStillHoldsIt` | `P27FalsificationTest.java` | 5d0fc25 09-26 18:10 |
+| `q3c_unparsableAndZeroTimestampScenesEscapeEveryReadAndPrunePath` | `P27FalsificationTest.java` | 5d0fc25 09-26 18:10 |
+| `sceneIsReadableFromAFreshInstance` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `secretsAreMaskedBeforeHittingDisk` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `staleCopyCannotOverwriteATerminalSceneOnDisk` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `staleOrForeignTokenCannotAck` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `startupSweepAdoptsStaleSceneAndReportsFromDisk` | `DelegateManagerLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `stopOnFlyingChildWritesStoppedSceneAndFirstTerminalVerdictWins` | `DelegateManagerLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `summaryCountsEveryDeliveryState` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `summaryOnEmptyLedgerIsHonest` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `syncDelegationWritesASceneThatIsReadableWithoutTheCaller` | `DelegateManagerLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `theCapEvidenceSurvivesARestart` | `DelegationDeliveryTest.java` | 07f25a8 09-26 17:27 |
+| `unfinishedAsyncSceneIsAdoptableAsOrphan` | `DelegateManagerLedgerTest.java` | 31be6c7 09-27 00:29 |
+| `unknownScenesAreTerminalAndThusPrunable` | `DelegationLedgerTest.java` | 31be6c7 09-27 00:29 |
+
+两条都要读，别只读对自己有利的那条：
+
+- **对产品**：这 10 条没有一条是漏抓 —— 每支变异都有具名测试变红（21 支里除 M13 外全部 `rc=1` 实测），
+  "检出"这一栏不变；唯一 SURVIVED 仍是 M13，已按 §11.4 判等价变异，本节不重开。
+- **对尺**：`expected_red` 列已经不再描述真实的守卫集合（上表右两列是可复核的归属与提交时刻）。
+  按红线"预期红集跑之前写死、不许回填"，我**没有**在本节动表；要动必须**按"谁读这个值"重推归属**、
+  改完**整批复跑**再记账 ⇒ 登记为 **P27c-G1**。
+
+### 12.4 P19 杠② 同批复跑（8 支，命令表单源守卫）
+
+```
+M1-web-advertises-exit-without-branch -> KILLED 
+M2-tui-drops-theme-branch -> KILLED 
+M3-http-drops-one-row -> KILLED 
+M4-catalog-advertises-theme-to-web -> KILLED 
+M5-acp-frame-wrong-discriminator -> KILLED 
+M6-acp-frame-drops-one-command -> KILLED 
+M7-registry-skips-one-server-def -> KILLED 
+M8-acp-advertise-call-removed -> KILLED 
+LEDGER=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/_doc/acceptance/p19/LEDGER.tsv rows=8 tally={'KILLED': 8} secs=77
+mtimes harness=1790430140 ledger=1790440674
+```
+
+`tally={'KILLED': 8}`、`NOT_ALL_KILLED` 那行未打印（脚本只在存在非 KILLED 时才打它并 `exit(1)`，
+本轮驱动脚本报 `rc=0`）⇒ 8/8 杀，77 s。
+
+### 12.5 收口三查（本节所有测量之后现量，`2026-09-27 00:43:52+0800`）
+
+- 四支 delegate 源文件 `md5(盘上) == md5(git show HEAD:)` 逐个 YES：`DelegateManager fd1652b3`、
+  `DelegationLedger e79ece41`、`DelegationDelivery b6903d7e`、`DelegateTransitions ff567850`；
+  `web/index.html` 仍 `bb3ff2e6`。
+- `git status --porcelain --untracked-files=no` 只剩两支台账（`p19/LEDGER.tsv`、`p27/LEDGER.tsv`），
+  即"由脚本重写"的那两份产物；其余一字未动。
+- 杠④ `entries=8 cfg=2dadaed0 db=690ddbc0 keylen=125`（真 key 全程只量长度，值未被读取）。
+  两支尺各自打印 `== 锁已释放 ==`；我只 `os.close(fd)`，未 `unlink` 共享锁。
 
