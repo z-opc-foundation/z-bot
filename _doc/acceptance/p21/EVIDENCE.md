@@ -214,19 +214,20 @@ bar-3: BindException|Connection refused|SocketTimeout = 0    [ERROR] 行 = 0    
 
 ## §10 杠② 变异注入（`LEDGER.tsv` 只由 `p21_mutation.py` 生成）
 
-STATUS: 未跑
+STATUS: 已跑（写手 p21c 15:23 那一跑 + **主编 15:52 独立复跑**；两跑的差在 T1 一档，见 §16.2）
+本节的原骨架由 p21c 未回填，读数一律在 **§16.2**（主编亲测），此处只留指针与复算命令。
 五档 `RED-OK / PARTIAL / GREEN-BUT-MUTATED / BROKEN / NO-RUN`；逐字节还原 + md5 对账；预期红集不事后凑。
 复算命令：`awk -F'\t' 'NR>1{print $2}' _doc/acceptance/p21/LEDGER.tsv | sort | uniq -c`
-实测：待填
+实测：**见 §16.2**（当前 `LEDGER.tsv` 是主编 15:52 那一跑的机械产出：`RED-OK 18 / PARTIAL 1 / GBM 0 / BROKEN 0 / NO-RUN 0`）
 
 ---
 
 ## §11 杠③ 真进程 E2E ≥3 整跑
 
-STATUS: 未跑
+STATUS: 已跑（写手 3 跑见 §15；**主编另跑 3 + 3 跑见 §16.3**，其中一组暴露量具的 `--label` 假红并已修）
 复算命令：`python3 -u _doc/acceptance/p21/p21_e2e.py`
 (a) 官方 SDK 真 stdio server / (b) 官方 SDK 真 StreamableHTTP-SSE server / (c) 外部改工具表⇒真注销 / (d) 反向 mcp_serve / (e) 父死 watchdog
-每跑条数 + 状态码纪律（HTTP 状态 + 响应形状）+ `lsof` 复扫 + `ps -o lstart`：待填
+每跑条数 + 状态码纪律（HTTP 状态 + 响应形状）+ `lsof` 复扫 + `ps -o lstart`：**见 §15 与 §16.3**
 
 ---
 
@@ -314,9 +315,23 @@ $ python3 -c "import mcp,importlib.metadata as m;print(m.version('mcp'))"
 
 ## §14 明确不做 / §未做（含理由，不默默省略）
 
-STATUS: 未跑
-工单点名不做：OSV 依赖预检、sampling 与 elicitation 全链路 —— 理由待填。
-本期新增未做项：待填（越界才验收的一律不越，写"要动 X / 因为 Y / 会撞 Z"）
+STATUS: 已填（p21c 未回填，由主编在 §16.5 落；本节保留清单）
+
+**工单点名不做的三条**（`grep` 复算口径：`git grep -ic 'createMessage|elicitation|osv' -- 'z-bot-core/src'` 在合并前树上三条**全部零命中** ⇒ 确实没做，不是"做了没写文档"）：
+
+1. **OSV 依赖预检** —— 她是在挂载外部 MCP server 前查其依赖漏洞。我们不做，理由：z-bot 不安装任何第三方 server 的依赖、也没有可查的依赖图（server 由用户自己在配置里给命令/URL）；真做要打 `api.osv.dev` = 出站非回环，撞本战役红线 2（任何测试/E2E 不得向非 `127.0.0.1` 发起请求）。**要动的东西**：一条带缓存的出站 HTTP 客户端 + 一份"server ⇒ 包坐标"的映射（今天不存在）。
+2. **sampling（`sampling/createMessage`）** —— server→client 的**请求**，需要入站请求派发 + 回包路径。内核 `McpTransport` 只有 4 个方法且**结构上收不到 server 主动推的任何帧**（§2 实测已证），因此走内核那条 `StdioMcpTransport` 做不了。
+3. **elicitation（`server/elicitation/create`）** —— 同 2 的阻塞原因。
+   **重要更正（这条是本棒自己改出来的新事实）**：2/3 的阻塞在**本期之后已经小了一截** —— z-bot 侧新增的 `ZBotStdioMcpTransport` 已经会解析入站帧并区分"响应 / 通知"（`McpNotificationListener` 就是那个口），缺的只是"入站**请求** ⇒ 本地处理 ⇒ 回包"这一层。⇒ 下期做 sampling 不必再动内核。**这条不是本期已做**，记在这里是为了不让下期重复调研。
+
+**本期新增未做（逐条"要动 X / 因为 Y / 会撞 Z"）**：
+
+4. **`tools/list_changed` 的 http 侧只做了 client 收流，没做 server 侧推**：反向 `mcp_serve` 明确广告 `listChanged=false`（`R1` 变异体就是为了钉死"不许广告兑现不了的承诺"）。要动的是 `ZBotMcpServe` 的出站通知通道（今天是纯 request/response 循环）；本期不做是因为没有第二个真 client 能验它 ⇒ 会变成自说自话的断言。
+5. **`McpManager` 的重连/退避**：bridge 掉线后没有指数退避重连（与 `w8-p26` 的 llm 退避是同一族问题，那边统一做）。
+6. **`_meta` / progress token / roots / 资源（resources）面**：一个都没做。工单没点名，但矩阵 #22 的"10 个工具 vs 我们 2 个读端工具"的差额主要就在这里 ⇒ **verdict 不许写成"已对齐"**，见 §16.6。
+7. 杠② 的 `W1` 至今是 `PARTIAL`（点名 2/2 里只有 `watchdogTakesEvenAnEofInsensitiveChildWithIt` 红，`killedParentTakesTheChildWithIt` 不红）⇒ "监护脚本发现父死但不杀子"这一坏法只被一条断言守着。补第二条要动 `McpParentWatchdogTest`，本战役这一棒不加覆盖面。
+8. 三处 `StdioMcpTransport`（内核）缺陷只取证未修（§1.1 非紧凑 JSON 永久挂死 / §1.2 30s deadline 不成立 / §1.3 版本写死 `0.2.0`）⇒ 我们绕开了它（z-bot 侧自带 transport），**内核那条错法对任何直接用它的下游仍然生效**。修它要动 `z-agent-kernel`（一棒都没被授权改）。
+
 
 ---
 
@@ -533,3 +548,140 @@ p21b 临终说的 EOF 混淆因子已在对照臂上摘掉：`sleeper` 那组的
 读数 `['202 application/json mcp-session-id=c90d52']`）。
 顺手把会话头写进 wire 取证（只记前 6 位，会话 id 全文不入日志）—— 原来 `wire_log` 里根本没有会话头，
 那条断言只能靠"猜 server 认了"，现在是逐 POST 行数对账。
+
+---
+
+# §16 主编收口棒：P21 并入 main 之前的四杠（被测树 = `9c24c23`，@Test 面 661）
+
+> 本节全部读数由主编自己跑出来（不抄写手自述）。p21c 死于 turn 150（这是 P21 连死的第三棒：
+> `p21a`→`d01c3a7`、`p21b`→`86447fe`、`p21c`→本节起点 `9c24c23`），临终工作树由主编封存。
+> 原始日志一律在仓外 `~/.cache/zbot-p21-lead/`（`.gitignore:5` = `*.log` ⇒ 决定性读数原样贴进本节）。
+
+## 16.0 起点取证
+
+```
+cd /private/tmp/zbot-wt-p21
+git log --oneline -1                    # 9c24c23 封存 p21c 临终工作树（死于 turn 150，161 次工具调用）…
+git status --porcelain                  # ?? _doc/acceptance/p21/__pycache__/   ← 除此之外干净
+git grep -c '@Test' HEAD -- 'z-bot-core/src/test' | awk -F: '{s+=$NF} END{print s}'    # 661
+git merge-tree --write-tree --name-only d23cd0d 9c24c23
+  7de37a9b9223282716760c7320d846652c08d74a          # 只一行 ⇒ 与 main 零冲突
+git grep -c '@Test' 7de37a9 -- 'z-bot-core/src/test' | awk -F: '{s+=$NF} END{print s}'   # 735
+```
+⇒ 合并面 **735 = main 693 + P21 净增 42**（机械求和，不是"沿用 661"）；`merge-tree` 一行 ⇒ 零冲突。
+P21 的增量全在 `mcp/` 与验收件：`git diff --stat $(git merge-base d23cd0d 9c24c23) 9c24c23` = **28 文件 / +7939 / −39**。
+`McpE2eDriver.java` / `McpWatchdogProbe.java` / `RealMcpHarness.java` 三支经 `git ls-tree -r --name-only` 核对
+**都在 `src/test/` 下** ⇒ 发布 jar 里不会带验收脚手架。
+
+## 16.1 杠① 全量单测 ×3 串行（主编亲测，全 reactor 不 `-pl`）
+
+复算：`bash ~/.cache/zbot-p21-lead/lead_loop.sh`（三跑前各自 `rm -rf z-bot-core/target/surefire-reports`）
+
+```
+HEAD=9c24c23   @TESTS_GITGREP=661
+MVN_RC_1=0  run1 tests=[[INFO] Tests run: 661, Failures: 0, Errors: 0, Skipped: 0] build=[1] socket=0 errlines=0   Total time:  52.783 s  Finished at: 2026-09-26T15:37:23+08:00
+MVN_RC_2=0  run2 tests=[[INFO] Tests run: 661, Failures: 0, Errors: 0, Skipped: 0] build=[1] socket=0 errlines=0   Total time:  49.958 s  Finished at: 2026-09-26T15:38:14+08:00
+MVN_RC_3=0  run3 tests=[[INFO] Tests run: 661, Failures: 0, Errors: 0, Skipped: 0] build=[1] socket=0 errlines=0   Total time:  55.371 s  Finished at: 2026-09-26T15:39:11+08:00
+```
+三跑汇总行逐字一致；`BindException|Connection refused|SocketTimeout` = **0**；`[ERROR]` 行 = **0**；墙钟 50–55 s。
+
+## 16.2 杠② 变异注入（主编独立复跑，独占 flock）
+
+复算：`python3 -u _doc/acceptance/p21/p21_mutation.py`（日志 `~/.cache/zbot-p21-lead/lead2_bar2.log`）
+
+```
+MUT_RC=0
+== 台账 ==
+  RED-OK             18
+  PARTIAL            1
+  GREEN-BUT-MUTATED  0
+  BROKEN             0
+  NO-RUN             0
+  注入后 src 与基线 md5 有差异的文件: 无（逐字节还原）
+LEDGER_ROWS=30     CORE_DIRTY=0     MD5_CORE_VS_HEAD=0
+```
+- 我另用一把独立的尺重算台账（不读脚本自打的 `#tally`）：
+  `python3` + `csv.DictReader` 数 19 支变异体 ⇒ `{'RED-OK': 18, 'PARTIAL': 1}`，与 `#tally` 逐档相符；
+  7 支 `CTRL-*`（阳性对照，injection=NONE）**全 OK** ⇒ 没有任何一族是"猎物进不来还硬判红"。
+- `CORE_DIRTY=0` + `MD5_CORE_VS_HEAD=0`（`git diff --stat HEAD -- z-bot-core` 空）⇒ 跑完之后
+  `src/` 与提交树**逐字节相同**，这是脚本之外第二把尺量的还原。
+
+**与写手那一跑的差分取证（这一条是本节存在的理由）**：p21c 留下的 `LEDGER.tsv` 是
+`RED-OK 17 / PARTIAL 1 / BROKEN 1`（`T1` 判 `BROKEN`，读数 `红=全绿 ran=0 rc=1 2.8s`）。复算时间戳：
+
+```
+_doc/acceptance/p21/LEDGER.tsv          mtime=15:23:20
+_doc/acceptance/p21/p21_mutation.py     mtime=15:27:03   ← 晚于台账 3 分 43 秒
+```
+⇒ **写手的台账出自比它自己的提交版更旧的一份量具字节**（`git show 9c24c23:` 两样都在同一笔提交里，
+但生成顺序反了）。旁证是 `T1` 的标题字面量也随那次编辑变了：旧台账 `T1 请求不等自己的 deadline（回到内核那条错法）`
+vs 现脚本 `T1 请求不等自己的 timeoutMillis（deadline 形同虚设）`（`git diff 9c24c23 -- LEDGER.tsv | grep '^[-+]T1'` 逐字可见）。
+我用**当前**脚本复跑 ⇒ `T1 ... RED-OK 点名 1/1 ran=1 rc=1 19.2s 还原=True`（`2.8s` 那次连一次 mvn 都没跑完，
+`ran=0` 说明是编译期失败，不是"摘了没人管"）。⇒ **`BROKEN` 那档在本树当前字节下不存在**；
+台账里那条"同机别人的 mvn 会跟我抢同一个 target/ ⇒ 编译类失败重跑一次再定性"的 20 s 重试确实起了作用。
+这一列的教训（写下来防下次再踩）：**台账的 `#generated_by` 时间必须晚于量具脚本的 mtime，否则台账作废重跑**。
+
+仍存的真实缺口：`W1 监护脚本发现父死但不杀子` 还是 `PARTIAL`（点名 2 支只红 1 支：
+红 `McpParentWatchdogTest#watchdogTakesEvenAnEofInsensitiveChildWithIt`，不红 `killedParentTakesTheChildWithIt`），
+已记 §14.7，本棒不加覆盖面。
+
+## 16.3 杠③ 真进程 E2E（主编亲测，两组各 3 跑）
+
+复算：`bash ~/.cache/zbot-p21-lead/lead_loop2.sh`（**与写手同口径：不给 `--label`**）
+
+```
+e2e2_run1 rc=0 PASS=59 FAIL=0 汇总=[  合计 59 条，失败 0 条: []]  工作根=…/e2e/R154506-p59320  用时=68.5s
+e2e2_run2 rc=0 PASS=59 FAIL=0 汇总=[  合计 59 条，失败 0 条: []]  工作根=…/e2e/R154615-p62022  用时=72.8s
+e2e2_run3 rc=0 PASS=59 FAIL=0 汇总=[  合计 59 条，失败 0 条: []]  工作根=…/e2e/R154728-p65199  用时=71.0s
+```
+官方 SDK 读数三跑同为 `mcp 版本=1.27.1`；分节条数逐字一致（(a)17 (b)14 (c)11 (d)13 (e)4 = 59）；
+三个现场目录互不相同。**先打包再跑**：`mvn -o package -DskipTests -pl z-bot-core` ⇒ `PKG_RC=0`，
+`z-bot-core.jar` sha256 前 8 = `0a7d8186`（另一枚 `original-*.jar` = `506c60d5`，是 repackage 前的空壳，别拿它当被测件）。
+
+**我自己制造的一把假红（如实记，因为这正是"复测前先怀疑量具"）**：同一棵树上我另跑了一组带 `--label lead1/2/3` 的：
+
+```
+e2e_run1 rc=1 PASS=0 FAIL=0   →  合计 59 条，失败 1 条: ['a/fresh_workdir_default_label_is_formatted']
+e2e_run2 rc=1 …（同）      e2e_run3 rc=1 …（同）      三跑一致的只有这一条红
+```
+定位：`p21_e2e.py:309-311` 的原文是
+`g.chk("fresh_workdir_default_label_is_formatted", "%H" not in label and … and label.startswith("R"), "本次 label=%s" % label)`
+—— 它把"**缺省** label 的 strftime 有没有漏字面量"这件事绑在了**本次 run 的 label** 上 ⇒
+显式 `--label` 必然判红。⇒ 不是产品坏，也不是 P21 的功能坏，是这一条量具自证的口径错。
+**主编已改**（`p21_e2e.py:309-315`：自己按缺省口径算 `default_label` 再测，读数同时打两个名字），双向验完再并：
+
+```
+python3 -u _doc/acceptance/p21/p21_e2e.py --only a --label leadfix   →  RC=0  合计 17 条，失败 0 条: []
+[PASS] a/fresh_workdir_default_label_is_formatted :: 缺省口径 label=R155426-p83123（本次 run label=leadfix）
+# 阳性对照（谓词必须还能判红，否则就是把它调松）：
+broken_label_predicate= False        # "R%H%M%S-p12345" 这种漏字面量的名字，谓词仍然判 False
+real_label= R155427-p83247 predicate= True
+```
+
+## 16.4 杠④ `~/.zbot` 一字未动（四时点，全部现量）
+
+```
+15:36:29 bar4_before  items=8 cfg=2dadaed0 db=690ddbc0      # 杠① 起跑前
+15:42:37 NOW          bar4_after items=8 cfg=2dadaed0 db=690ddbc0   # 杠① ×3 + 杠③(带 --label) 全跑完
+15:4x    bar4_mid     items=8 cfg=2dadaed0 db=690ddbc0      # 杠③ 三整跑之后、杠② 之前
+15:52:18 bar4_end     items=8 cfg=2dadaed0 db=690ddbc0      # 杠② 19 支注入 + 7 支对照跑完
+```
+⇒ 条目数 8 与两个 md5 前缀在四时点完全未变。真 key 全程未被读、未打印、未复制、未提交
+（本棒所有 E2E 都走 `p21_e2e.py` 自己的 `--config-dir`/`ZBOT_HOME` 临时根；`--only a` 那一跑也只落临时根）。
+
+## 16.5 本节与写手各节的关系（谁给谁让路）
+
+- `§9`（写手杠①）/ `§15`（写手杠③）读数我**没有推翻**，但我另跑了同口径的一组，两组的汇总行逐字相同 ⇒ 写手读数可信。
+- `§10`/`§11`/`§14` 的原骨架是 `STATUS: 未跑 / 待填`，本节填上了；`§10`/`§11` 已改成指向本节的指针（不留"待填"字样在仓里）。
+- `§14` 的三条"点名不做"我按字面量复算过 `createMessage|elicitation|osv` 在 `z-bot-core/src` **零命中** ⇒ 是"没做"，不是"做了没写"。
+
+## 16.6 判词（写给主编自己，也写给下一棒）
+
+| 杠 | 一次跑齐了吗 | 关键读数 |
+|---|---|---|
+| ① | 是 | `Tests run: 661, F:0 E:0 S:0` ×3、rc 全 0、socket/`[ERROR]` 均 0 |
+| ② | 是（独占 flock） | `RED-OK 18 / PARTIAL 1 / GBM 0 / BROKEN 0 / NO-RUN 0`；19 支 + 7 支对照；逐字节还原（脚本尺 + `git diff` 第二把尺同为 0）；写手台账 `T1 BROKEN` 系出自旧量具字节，当前脚本复跑为 `RED-OK` |
+| ③ | 是（我另加 3 跑 + 1 定位跑） | `合计 59 条，失败 0 条` ×3 rc=0，三个独立现场目录；`--label` 组的唯一红是量具口径错，已改并双向对照 |
+| ④ | 四时点同读数 | `8 / 2dadaed0 / 690ddbc0` |
+
+**P21 具备并入 main 的门禁面。** 合并后仍需在**目标树**（main）复测杠①③④（这一条是 P18 那期"少打一杠"的账，本期不许再欠）。

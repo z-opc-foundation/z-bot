@@ -306,9 +306,13 @@ def prove_fresh_workdir(g, workroot, label):
           not cross and not (seen[1] / "run1-only-marker.txt").exists()
           and first_marker.is_file(),
           "第二跑目录里的文件=%s 第一跑的哨兵仍在=%s" % (cross, first_marker.is_file()))
+    # 这一条测的是**缺省 label 的格式化**（strftime 有没有漏成 %H%M%S 字面量），
+    # 所以拿缺省口径自己算一遍来测；绑在本次 run 的 label 上会让 `--label 任意名` 必红（假红）。
+    default_label = "R" + time.strftime("%H%M%S") + "-p%d" % os.getpid()
     g.chk("fresh_workdir_default_label_is_formatted",
-          "%H" not in label and "%M" not in label and "%S" not in label and label.startswith("R"),
-          "本次 label=%s" % label)
+          "%H" not in default_label and "%M" not in default_label and "%S" not in default_label
+          and default_label.startswith("R"),
+          "缺省口径 label=%s（本次 run label=%s）" % (default_label, label))
     shutil.rmtree(probe_root, ignore_errors=True)
 
 
