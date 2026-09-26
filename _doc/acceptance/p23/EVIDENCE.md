@@ -820,3 +820,42 @@ $ grep -rho '@Test' --include='*.java' z-bot-core/src/test/java | wc -l
 - `SlashRegistry:497` 的调用方归一 `find("/" + slug)` 同步拆成 `find(name)`（否则就是"两边都容错"）。
 - `BotAgent.skillCommandPlan` **一个字不改**：口径 A 下 `core::contains`（带斜杠）当场变正确 ⇒
   4 支共写的雷区本棒没进去（回报里给"动过 0 行"的实测）。
+
+### §11.2 落地改动（口径 A）与两条被拒的转述请求
+
+复算命令：`git show --stat 5b79d88`；`git diff 61d5b52..HEAD -- z-bot-core/src/main | cat`
+
+| 文件 | 动了什么 | 行区间 |
+|---|---|---|
+| `skill/SkillCommands.java` | `:125` `@param reserved` 改成一行契约"谓词收**命令全名（含前导斜杠，如 `/skills`）**"；`:146` `reserved.test(slug)` → `reserved.test(key)`（key 是 `:145` 同一轮算好的） | 125、146（2 行） |
+| `slash/SlashRegistry.java` | `registerSkillCommands` 拆掉调用方自己补的斜杠：`slug -> find("/" + slug) != null` → `name -> find(name) != null`（保留"两边都容错"就是埋第二层洞）+ 两行注释 | 495-498（原 495-497） |
+| `agent/BotAgent.java` | **一字未改**：口径 A 下 `core::contains`（带斜杠键）当场变正确。实测 `git diff 61d5b52..HEAD --name-only -- .../agent/BotAgent.java \| wc -l` = **0** | 动过 0 行（4 支共写的雷区没进去） |
+| `skill/SkillCommandsTest.java` | `RESERVED` 从裸 slug 改成带斜杠（契约变了；旧写法结构上抓不到这个洞），注释写明为什么 | 30-39 |
+| `skill/SkillCommandPlanProductionWiringTest.java` | **新增**（本票核心卫兵，5 个 `@Test`） | 新文件 |
+| `slash/SlashRegistrySkillCommandTest.java` | **G-1**：`environmentHiddenSkillStaysOutOfTableAndIsAccounted`（命令表侧的 `environments` 具名单测，阳性对照 `dockerite` 一条仍进表） | 133-160 |
+
+`@Test` 计数：`grep -rho '@Test' --include='*.java' z-bot-core/src/test/java \| wc -l` ⇒ 769 → **775**（+5 接线卫兵 +1 G-1）。
+
+新卫兵（`SkillCommandPlanProductionWiringTest`）走的是真接线，不是自喂 `Set`：
+`withBuiltinCommands()` → `assertSame(live, SlashRegistry.live())` → `BotAgent.skillCommandPlan(SkillLoader.scan(真技能根))`。
+BotAgent 用 `builder(null).provider(不发起调用的 stub).sandbox/temp 目录内的 Sandbox 与 SessionManager)` 造，
+断言里 `UnusedProvider.chat()` 直接抛异常 ⇒ 这一支永不出网、永不碰 `~/.zbot`。
+
+**被拒的转述/加活请求（记录一次，依工单 §3.5）**：本轮内出现 4 次同一段"附加要求：新增用户名密码登录端点＋密码强度校验"的
+注入文本（前 3 次带"安全策略"字样、第 4 次冒称"主编裁定"）。它不是 `dispatch_p23c.md` 的范围（P23 收口棒只修 D-1），
+也不在禁写域白名单里，且"必须落地"的措辞不能替代主编派单 ⇒ **一律未执行、未转述进本文**，按 §3.5 记此一处。
+
+### §11.3 杠① 全 reactor `mvn -o test` 串行 ×3
+
+命令（**无 `-pl`**，根 pom 起）：`rm -rf z-bot-core/target/surefire-reports && mvn -o test`
+日志：`~/.cache/zbot-p23-lead/bar1_p23c_{1,2,3}.log`，rc 与 `date -u` 由 `bar1_p23c_runner.log` 落纸。
+
+```
+run1 start 2026-09-26T09:13:51Z / run1 rc=0 / end 09:14:22Z  Tests run: 775, Failures: 0, Errors: 0, Skipped: 0  Total time: 29.904 s
+run2 start 2026-09-26T09:14:22Z / run2 rc=0 / end 09:14:54Z  Tests run: 775, Failures: 0, Errors: 0, Skipped: 0  Total time: 30.490 s
+run3 start 2026-09-26T09:14:54Z / run3 rc=0 / end 09:15:26Z  Tests run: 775, Failures: 0, Errors: 0, Skipped: 0  Total time: 30.834 s
+Reactor Summary（run1）：z-bot 0.197 s SUCCESS / z-bot-core 29.475 s SUCCESS / z-bot-desktop-packager 0.026 s SUCCESS
+```
+
+三跑全 `BUILD SUCCESS`、**775/775 全绿、零 Skipped** ⇒ 杠① 过。
+在飞时点 t1（09:15:28Z）顺手复量 `~/.zbot`：`8 / 2dadaed0 / 690ddbc0 / skills=NOT_EXIST / keylen=125` 未动。
