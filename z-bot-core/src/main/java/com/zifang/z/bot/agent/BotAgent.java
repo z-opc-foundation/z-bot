@@ -24,7 +24,10 @@ import com.zifang.z.bot.delegate.DelegateManager;
 import com.zifang.z.bot.memory.MemoryStore;
 import com.zifang.z.bot.mcp.McpManager;
 import com.zifang.z.bot.memory.MemoryTools;
+import com.zifang.z.bot.skill.SkillCommands;
+import com.zifang.z.bot.skill.SkillGuard;
 import com.zifang.z.bot.skill.SkillLoader;
+import com.zifang.z.bot.skill.SkillSync;
 import com.zifang.z.bot.llm.KeyPoolLlmProvider;
 import com.zifang.z.bot.llm.LlmRouter;
 import com.zifang.z.bot.llm.ResilientLlmProvider;
@@ -203,6 +206,14 @@ public class BotAgent {
         this.delegation = b.delegation;
         this.memoryStore = b.memoryStore;
         this.skillsRoot = b.skillsRoot;
+        if (b.config != null) {
+            // 验收/测试用的平台覆盖口：skills.platform.override → SkillLoader 的量测口子
+            String platformOverride = b.config.getSkillsPlatformOverride();
+            if (!platformOverride.isEmpty()
+                    && System.getProperty("zbot.skills.platform") == null) {
+                System.setProperty("zbot.skills.platform", platformOverride);
+            }
+        }
         this.cronScheduler = b.cronScheduler;
         this.mcpManager = b.mcpManager;
         this.approvals = b.approvalService;
@@ -829,31 +840,171 @@ public class BotAgent {
         }
     }
 
-    /** {@code /skills [view <name>]} — 列出/查看已安装技能（center 下发 + 本地 <configDir>/skills）。 */
+    /**
+     * {@code /skills [view <name> | check <name> | sync [src] | install <dir>]}
+     * —— 列出/查看/体检/同步/安装技能（center 下发 + 本地 <configDir>/skills）。
+     */
     public String skillsManage(String args) {
         List<SkillLoader.Skill> local = skillsRoot == null
                 ? Collections.<SkillLoader.Skill>emptyList() : SkillLoader.scan(skillsRoot);
         String a = args == null ? "" : args.trim();
-        if (a.toLowerCase().startsWith("view")) {
+        String lower = a.toLowerCase();
+        if (lower.startsWith("view")) {
             String name = a.length() > 4 ? a.substring(4).trim() : "";
             for (SkillLoader.Skill s : local) {
                 if (s.name.equalsIgnoreCase(name)) {
                     return "[" + s.name + "] v" + (s.version.isEmpty() ? "?" : s.version)
                             + "  " + (s.slash.isEmpty() ? "" : "(slash: " + s.slash + ")")
+                            + (s.offerable() ? "" : "\n未进命令表: " + s.hiddenReason)
+                            + (s.setupNote == null ? "" : "\nsetup: " + s.setupNote)
                             + "\n" + s.description + "\n\n" + s.body;
                 }
             }
             return "未找到技能: " + name + "（/skills 查看列表）";
         }
+        if (lower.startsWith("check")) {
+            String name = a.length() > 5 ? a.substring(5).trim() : "";
+            return skillHealthCheck(name);
+        }
+        if (lower.startsWith("sync")) {
+            File src = a.length() > 4 ? new File(a.substring(4).trim()) : skillBundledDir();
+            if (src == null || !src.isDirectory()) {
+                return "同步源目录不存在: " + src + "（可用 skills.bundled.dir 或 /skills sync <dir> 指定）";
+            }
+            if (skillsRoot == null) {
+                return "本地技能根未启用（configDir 不可用），无法 sync";
+            }
+            SkillSync.Report r = SkillSync.sync(src, skillsRoot, skillGuardSource());
+            refreshSkillCommandTable();
+            List<String> written = new ArrayList<String>(r.copied);
+            written.addAll(r.updated);
+            return r.describe() + (written.isEmpty()
+                    ? "\n没有写入任何文件" : "\n写入: " + String.join(", ", written));
+        }
+        if (lower.startsWith("install")) {
+            String dir = a.length() > 7 ? a.substring(7).trim() : "";
+            File src = new File(dir);
+            if (dir.isEmpty() || !new File(src, "SKILL.md").isFile()) {
+                return "格式: /skills install <技能目录>（目录里要有 SKILL.md）";
+            }
+            if (skillsRoot == null) {
+                return "本地技能根未启用（configDir 不可用），无法 install";
+            }
+            SkillSync.Report r = SkillSync.install(src, skillsRoot, skillGuardSource());
+            refreshSkillCommandTable();
+            return r.describe() + (r.suppressed.isEmpty() ? "" : "\n被拦下: " + r.suppressed);
+        }
         List<String> codes = listInstalledSkills();
         StringBuilder sb = new StringBuilder();
+        List<SkillCommands.Entry> table = skillCommandPlan(local).entries();
         for (String c : codes) {
             boolean isLocal = local.stream().anyMatch(s -> s.name.equals(c));
-            sb.append("- ").append(c).append(isLocal ? " (local)" : "").append('\n');
+            String cmd = "";
+            for (SkillCommands.Entry e : table) {
+                if (e.skill.name.equals(c)) {
+                    cmd = "  -> " + e.key;
+                    break;
+                }
+            }
+            sb.append("- ").append(c).append(isLocal ? " (local)" : "").append(cmd).append('\n');
+        }
+        for (SkillLoader.Skill s : local) {
+            if (s.offerable()) {
+                continue;
+            }
+            sb.append("- ").append(s.name).append(" (local)  -> 不进命令表: ")
+                    .append(s.hiddenReason).append('\n');
+        }
+        if (skillsRoot != null) {
+            SkillCommands.Plan plan = skillCommandPlan(local);
+            String skipped = plan.describeSkipped();
+            if (!skipped.isEmpty()) {
+                sb.append("命令表账本（为什么没进）:\n").append(skipped).append('\n');
+            }
         }
         String out = sb.toString().trim();
         return out.isEmpty() ? "本地无已安装的 Skill（接入 center 后运行 /sync 拉取，"
                 + "或把 <skill>/SKILL.md 放进 <configDir>/skills/）" : "已安装 Skill:\n" + out;
+    }
+
+    /** 技能 → 命令计划（保留的第一个 / 撞核心名跳过的账本都在这里）。 */
+    public SkillCommands.Plan skillCommandPlan(List<SkillLoader.Skill> local) {
+        com.zifang.z.bot.slash.SlashRegistry live =
+                com.zifang.z.bot.slash.SlashRegistry.live();
+        final java.util.Set<String> core = new java.util.HashSet<String>();
+        if (live != null) {
+            core.addAll(live.coreCommandNames());
+        } else {
+            for (String n : com.zifang.z.bot.slash.SlashRegistry.withBuiltinCommands()
+                    .coreCommandNames()) {
+                core.add(n);
+            }
+        }
+        return SkillCommands.plan(local, core::contains);
+    }
+
+    /** 让 live 命令表跟着这次 sync/install 重新派生（不落第二份表，只是重算技能那一段）。 */
+    private void refreshSkillCommandTable() {
+        com.zifang.z.bot.slash.SlashRegistry live =
+                com.zifang.z.bot.slash.SlashRegistry.live();
+        if (live != null) {
+            live.refreshSkillCommands();
+        }
+    }
+
+    /** {@code /skills check <name>}：门控理由 + guard 结论 + origin_hash 台账。 */
+    private String skillHealthCheck(String name) {
+        if (name == null || name.trim().isEmpty()) {
+            return "格式: /skills check <name>";
+        }
+        File dir = skillsRoot == null ? null : new File(skillsRoot, name.trim());
+        if (dir == null || !new File(dir, "SKILL.md").isFile()) {
+            return "未找到技能目录: " + dir;
+        }
+        StringBuilder sb = new StringBuilder();
+        SkillLoader.Skill s = SkillLoader.tryParse(dir);
+        if (s != null) {
+            sb.append("[").append(s.name).append("] platforms=").append(s.platforms)
+                    .append(" environments=").append(s.environments)
+                    .append(" 需要 env=").append(s.requiredEnvVars)
+                    .append(" 需要命令=").append(s.requiredCommands).append('\n');
+            sb.append(s.offerable() ? "进命令表: 是" : "进命令表: 否 —— " + s.hiddenReason).append('\n');
+            if (s.setupNote != null) {
+                sb.append("降级说明: ").append(s.setupNote).append('\n');
+            }
+        }
+        SkillGuard.ScanResult scan = SkillGuard.scanSkill(dir, skillGuardSource());
+        sb.append("guard(").append(SkillGuard.SCANNER_VERSION).append(") verdict=")
+                .append(scan.verdict).append(" blocked=").append(scan.blocked).append('\n');
+        for (SkillGuard.Finding f : scan.findings) {
+            sb.append("  - ").append(f).append('\n');
+        }
+        Map<String, String> manifest = skillsRoot == null
+                ? Collections.<String, String>emptyMap() : SkillSync.readManifest(skillsRoot);
+        String origin = manifest.get(name.trim());
+        sb.append("origin_hash=")
+                .append(origin == null ? "(不在同步清单里)" : origin)
+                .append("  当前目录指纹=").append(SkillSync.dirHash(dir));
+        if (origin != null && !origin.isEmpty() && !origin.equals(SkillSync.dirHash(dir))) {
+            sb.append(" ⇒ 本地已改动，sync 不会覆盖它");
+        }
+        return sb.toString().trim();
+    }
+
+    /** 同步源目录：{@code skills.bundled.dir} &gt; {@code <configDir>/skills-bundled}。 */
+    public File skillBundledDir() {
+        String v = config == null ? "" : config.getSkillsBundledDir();
+        if (v != null && !v.trim().isEmpty()) {
+            return new File(v.trim());
+        }
+        File cfg = config == null ? null : config.getConfigDir();
+        return cfg == null ? null : new File(cfg, "skills-bundled");
+    }
+
+    /** guard 的信任级：{@code skills.guard.source}（缺省 bundled = 自带源，阈值宽松一档）。 */
+    public String skillGuardSource() {
+        String v = config == null ? null : config.getSkillsGuardSource();
+        return v == null || v.trim().isEmpty() ? "bundled" : v.trim();
     }
 
     /** 本地已安装 skill：扫 {@code <profile>/skills/<instanceCode>/} 一级子目录。 */
@@ -1406,11 +1557,32 @@ public class BotAgent {
         return sb.toString();
     }
 
-    /** 已安装技能的指引（最多 3 个、正文各截 600 字符），让模型能直接按技能干活。 */
+    /**
+     * 已安装技能的指引（最多 3 个、正文各截 600 字符），让模型能直接按技能干活。
+     *
+     * <p>P23：进这里的必须是过了门的技能（{@code platforms}/{@code environments} 不匹配的
+     * 不进 prompt），并且要写明"为什么没进"，不许静默消失。</p>
+     */
     static String skillContextBlock(File skillsRoot) {
-        List<SkillLoader.Skill> skills = SkillLoader.scan(skillsRoot);
-        if (skills.isEmpty()) {
+        List<SkillLoader.Skill> all = SkillLoader.scan(skillsRoot);
+        if (all.isEmpty()) {
             return "";
+        }
+        List<SkillLoader.Skill> skills = new java.util.ArrayList<SkillLoader.Skill>();
+        List<String> hidden = new java.util.ArrayList<String>();
+        for (SkillLoader.Skill s : all) {
+            if (s.offerable()) {
+                skills.add(s);
+            } else {
+                hidden.add(s.name + ": " + s.hiddenReason);
+            }
+        }
+        if (skills.isEmpty()) {
+            StringBuilder h = new StringBuilder("可用技能指引：\n");
+            for (String s : hidden) {
+                h.append("(未提供) ").append(s).append('\n');
+            }
+            return h.toString();
         }
         StringBuilder sb = new StringBuilder("可用技能指引：\n");
         int n = 0;
@@ -1420,6 +1592,9 @@ public class BotAgent {
             }
             sb.append("[").append(s.name).append("] ")
                     .append(s.description.isEmpty() ? "(无描述)" : s.description).append('\n');
+            if (s.setupNote != null) {
+                sb.append("(setup) ").append(s.setupNote).append('\n');
+            }
             String body = s.body;
             if (body.length() > 600) {
                 body = body.substring(0, 600) + "…";
@@ -1428,7 +1603,70 @@ public class BotAgent {
                 sb.append(body).append('\n');
             }
         }
+        for (String s : hidden) {
+            sb.append("(未提供) ").append(s).append('\n');
+        }
         return sb.toString();
+    }
+
+    // ───────────────────────────────────────────────── 技能 → 斜杠命令（P23）
+
+    /** 本地技能根（{@code <configDir>/skills}），可能为 null。 */
+    public File getSkillsRoot() {
+        return skillsRoot;
+    }
+
+    /** 当前该被"供货"的本地技能：命令表与 prompt 共用这一份判定。 */
+    public List<SkillLoader.Skill> offerableSkills() {
+        return skillsRoot == null
+                ? java.util.Collections.<SkillLoader.Skill>emptyList()
+                : SkillLoader.scanOffers(skillsRoot);
+    }
+
+    /**
+     * 真执行一次技能调用：把技能正文按 hermes 的注入形态拼成一条 user 消息，走 {@link #chat}。
+     *
+     * <p>技能正文里的指令文本只当语料，不当成对本进程的指令。</p>
+     */
+    public String invokeSkills(List<SkillLoader.Skill> skills, String instruction) {
+        if (skills == null || skills.isEmpty()) {
+            return "没有可执行的技能";
+        }
+        return chat(SkillCommands.buildInvocationMessage(skills, instruction));
+    }
+
+    /**
+     * {@code /skill <name> [指令]} —— 显式加载。
+     *
+     * <p>它绕过 {@code environments} 相关性门（hermes: 显式加载就是显式同意），
+     * 并把"它为什么没进命令表"照实说出来；缺前置时只降级、不丢技能。</p>
+     */
+    public String invokeSkillByName(String args) {
+        String a = args == null ? "" : args.trim();
+        if (a.isEmpty()) {
+            return "格式: /skill <name> [指令]";
+        }
+        String name = a.split("\\s+", 2)[0];
+        String instruction = a.length() > name.length() ? a.substring(name.length()).trim() : "";
+        List<SkillLoader.Skill> all = skillsRoot == null
+                ? java.util.Collections.<SkillLoader.Skill>emptyList()
+                : SkillLoader.scan(skillsRoot);
+        SkillLoader.Skill hit = null;
+        for (SkillLoader.Skill s : all) {
+            if (s.name.equalsIgnoreCase(name)
+                    || SkillCommands.slug(s.slash).equalsIgnoreCase(SkillCommands.slug(name))
+                    && !s.slash.isEmpty()) {
+                hit = s;
+                break;
+            }
+        }
+        if (hit == null) {
+            return "未找到技能: " + name + "（/skills 查看列表）";
+        }
+        String note = hit.offerable() ? "" : "提示: 该技能本被隐藏 —— " + hit.hiddenReason
+                + "（显式加载绕过 environments/platforms 门）\n";
+        String setup = hit.setupNote == null ? "" : "提示: " + hit.setupNote + "\n";
+        return note + setup + invokeSkills(java.util.Collections.singletonList(hit), instruction);
     }
 
     /** center 下发的长期记忆召回；拿不到就空串（不阻塞本轮）。 */

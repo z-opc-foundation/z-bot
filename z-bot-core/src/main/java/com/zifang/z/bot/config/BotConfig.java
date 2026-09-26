@@ -698,6 +698,33 @@ public final class BotConfig {
         return loaded;
     }
 
+    // ─── P23 技能体系（只增键，不重排既有代码） ───────────────────────────────
+
+    /** {@code skills.bundled.dir} —— {@code /skills sync} 的源目录（自带技能包）。 */
+    public String getSkillsBundledDir() {
+        return trim(rawProps.getProperty("skills.bundled.dir"));
+    }
+
+    /** {@code skills.guard.source} —— 安装期扫描的信任级：bundled(默认) | community。 */
+    public String getSkillsGuardSource() {
+        String v = trim(rawProps.getProperty("skills.guard.source"));
+        return v.isEmpty() ? "bundled" : v;
+    }
+
+    /** {@code skills.commands.enabled} —— 技能是否注册成斜杠命令（缺省开）。 */
+    public boolean isSkillCommandsEnabled() {
+        String v = trim(rawProps.getProperty("skills.commands.enabled"));
+        return v.isEmpty() || Boolean.parseBoolean(v);
+    }
+
+    /**
+     * {@code skills.platform.override} —— 覆盖 OS 探测（给测试/验收用；留空 = 自动探测）。
+     * 同时写回系统属性 {@code zbot.skills.platform}，让静态的 {@code SkillLoader} 判定看到它。
+     */
+    public String getSkillsPlatformOverride() {
+        return trim(rawProps.getProperty("skills.platform.override"));
+    }
+
     private static String orDefault(String v, String d) {
         return v.isEmpty() ? d : v;
     }

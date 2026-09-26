@@ -2,8 +2,12 @@ package com.zifang.z.bot.slash;
 
 import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.center.BotCenterClient;
+import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.session.SessionManager;
+import com.zifang.z.bot.skill.SkillCommands;
+import com.zifang.z.bot.skill.SkillLoader;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -20,6 +24,13 @@ import java.util.Map;
 public final class SlashRegistry {
 
     private final Map<String, SlashCommand> commands = new LinkedHashMap<String, SlashCommand>();
+
+    /** 由技能派生出来的命令（key → 计划条目）；叠加载入按这张表解析，不再扫盘。 */
+    private final Map<String, SkillCommands.Entry> skillCommands =
+            new LinkedHashMap<String, SkillCommands.Entry>();
+
+    /** "为什么这条技能没进命令表"的账本 —— 跳过必须留痕，不许静默。 */
+    private final List<SkillCommands.Skipped> skillSkips = new ArrayList<SkillCommands.Skipped>();
 
     /**
      * 注册命令；同名重复直接拒绝。
@@ -420,7 +431,176 @@ public final class SlashRegistry {
                 return agent.describeAgents();
             }
         });
+        r.register(new SlashCommand() {
+            @Override
+            public String name() {
+                return "/skill";
+            }
+
+            @Override
+            public String description() {
+                return "显式加载技能: /skill <name> [指令]（绕过相关性门，并说明为什么它没进命令表）";
+            }
+
+            @Override
+            public String execute(BotAgent agent, String args) {
+                return agent.invokeSkillByName(args);
+            }
+        });
+        // 技能 → 斜杠命令：这是 javadoc 早就承诺过、但一直没有兑现的那一步。
+        // 注册进的还是这同一张表（终端补全池与 /help 都从它派生），不开第二份命令清单。
+        r.registerSkillCommands(defaultSkillsForCommands());
+        LIVE = r;
         return r;
+    }
+
+    /**
+     * 进程内最近构建的那张命令表（hermes 的 {@code _skill_commands} 也是模块级缓存）。
+     * {@code /skills sync|install} 之后靠它把技能那一段重算，仍然不产生第二份表。
+     */
+    private static volatile SlashRegistry LIVE;
+
+    public static SlashRegistry live() {
+        return LIVE;
+    }
+
+    /** 核心命令名（不含技能派生的那些）—— "撞核心名就跳过" 的判据来自这里，不另立清单。 */
+    public List<String> coreCommandNames() {
+        List<String> out = new ArrayList<String>();
+        for (String key : commands.keySet()) {
+            if (!skillCommands.containsKey(key)) {
+                out.add(key);
+            }
+        }
+        return out;
+    }
+
+    /** 重扫技能根、只替换技能那一段命令（核心命令一动不动）。 */
+    public synchronized SlashRegistry refreshSkillCommands() {
+        for (String key : new ArrayList<String>(skillCommands.keySet())) {
+            commands.remove(key);
+            skillCommands.remove(key);
+        }
+        skillSkips.clear();
+        registerSkillCommands(defaultSkillsForCommands());
+        return this;
+    }
+
+    /**
+     * 把技能编译成斜杠命令并注册（撞核心名跳过、撞同一个 slug 保第一个）。
+     *
+     * <p>可增不可改：核心命令集一行没动，这里只在表尾追加技能命令，
+     * 因此"命令表只有一张"这条 P10d 的不变量仍然成立。</p>
+     */
+    public SlashRegistry registerSkillCommands(List<SkillLoader.Skill> skills) {
+        SkillCommands.Plan plan = SkillCommands.plan(skills,
+                slug -> find("/" + slug) != null);
+        for (final SkillCommands.Entry e : plan.entries()) {
+            final String key = e.key;
+            final SkillLoader.Skill skill = e.skill;
+            register(new SlashCommand() {
+                @Override
+                public String name() {
+                    return key;
+                }
+
+                @Override
+                public String description() {
+                    String d = skill.description == null ? "" : skill.description.trim();
+                    if (d.length() > 60) {
+                        d = d.substring(0, 60) + "…";
+                    }
+                    return "[skill " + skill.name + "] " + (d.isEmpty() ? "调用该技能" : d);
+                }
+
+                @Override
+                public String execute(BotAgent agent, String args) {
+                    return runSkillCommand(agent, key, args);
+                }
+            });
+            skillCommands.put(key, e);
+        }
+        skillSkips.addAll(plan.skipped());
+        return this;
+    }
+
+    /** 一条技能命令的真执行：叠加载入（≤5）→ 拼注入消息 → 走 chat 跑一轮。 */
+    private String runSkillCommand(BotAgent agent, String key, String args) {
+        SkillCommands.Entry first = skillCommands.get(key);
+        if (first == null) {
+            return "未找到技能命令 " + key;
+        }
+        List<SkillLoader.Skill> skills = new ArrayList<SkillLoader.Skill>();
+        skills.add(first.skill);
+        SkillCommands.Stack stack = SkillCommands.splitStacked(args, this::resolveSkillCommandKey);
+        for (String k : stack.keys) {
+            SkillCommands.Entry e = skillCommands.get(k);
+            if (e != null) {
+                skills.add(e.skill);
+            }
+        }
+        return agent.invokeSkills(skills, stack.instruction);
+    }
+
+    /** 令牌 → 已注册的技能命令 key（不是技能命令就返回 null）。 */
+    public String resolveSkillCommandKey(String token) {
+        if (token == null) {
+            return null;
+        }
+        String t = token.trim().toLowerCase();
+        String key = t.startsWith("/") ? t : "/" + t;
+        return skillCommands.containsKey(key) ? key : null;
+    }
+
+    /** 命令表里的技能命令（终端补全 / 命令表口径断言用）。 */
+    public List<String> skillCommandKeys() {
+        return new ArrayList<String>(skillCommands.keySet());
+    }
+
+    /** "为什么这条技能没进命令表"的账本。 */
+    public List<String> skillCommandSkips() {
+        List<String> out = new ArrayList<String>();
+        for (SkillCommands.Skipped s : skillSkips) {
+            out.add(s.toString());
+        }
+        return out;
+    }
+
+    /**
+     * 默认技能根下的<b>全部</b>技能（含被门藏掉的）：门控与记账都在 {@link SkillCommands#plan}
+     * 里做，这样"为什么没进命令表"才留得下痕，而不是在扫盘阶段就被静默过滤掉。
+     *
+     * <p>根解析：{@code -Dzbot.skills.dir} &gt; {@code ZBOT_SKILLS_DIR} &gt;
+     * {@code <configDir>/skills}；关掉技能命令用 {@code -Dzbot.skills.commands=false}。</p>
+     */
+    public static List<SkillLoader.Skill> defaultSkillsForCommands() {
+        if ("false".equalsIgnoreCase(trimmed(System.getProperty("zbot.skills.commands")))) {
+            return new ArrayList<SkillLoader.Skill>();
+        }
+        return SkillLoader.scan(defaultSkillsRoot());
+    }
+
+    /** 默认技能根下真正该被供货的那批（prompt 口径与命令表口径共用同一套判定）。 */
+    public static List<SkillLoader.Skill> defaultOfferableSkills() {
+        if ("false".equalsIgnoreCase(trimmed(System.getProperty("zbot.skills.commands")))) {
+            return new ArrayList<SkillLoader.Skill>();
+        }
+        return SkillLoader.scanOffers(defaultSkillsRoot());
+    }
+
+    static File defaultSkillsRoot() {
+        String dir = trimmed(System.getProperty("zbot.skills.dir"));
+        if (dir.isEmpty()) {
+            dir = trimmed(System.getenv("ZBOT_SKILLS_DIR"));
+        }
+        if (!dir.isEmpty()) {
+            return new File(dir);
+        }
+        return new File(BotConfig.defaultConfigDir(), "skills");
+    }
+
+    private static String trimmed(String v) {
+        return v == null ? "" : v.trim();
     }
 
     private static String join(List<String> items) {
