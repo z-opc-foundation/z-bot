@@ -4,16 +4,26 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -22,10 +32,15 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 钉钉消息通道（基础形态）：入站 webhook + 加签校验，
- * 出站走钉钉群机器人 webhook（用 {@code access_token} 直接 POST）。
+ * 钉钉消息通道：入站 webhook + 加签校验，出站<b>真发 HTTP</b> 到钉钉群机器人 webhook。
  *
- * <p>stub：签名校验 + 消息分发逻辑完整，**没有真发 HTTP 给钉钉**（仅日志 + outbound 队列）。</p>
+ * <p>P18 起 {@link #send(OutboundMessage)} 真的朝 {@link #signedWebhookUrl()} POST
+ * {@code {"msgtype":"text","text":{"content":…}}}，并按响应里的 {@code errcode}/{@code errmsg}
+ * 分类失败（此前是 stub：只打日志 + 进 outbound 队列）。缺 {@code webhook-url} 时抛
+ * {@link ChannelConfigException} 写明缺哪个键，<b>不</b>静默降级成"看起来发成功了"。</p>
+ *
+ * <p>安全：{@code webhook-url} 里带着 {@code access_token}，加签用 {@code secret} ——
+ * 两者都不进日志、不进异常文案（见 {@link #scrubUrl}）。</p>
  *
  * <p>钉钉签名规则：</p>
  * <ol>
@@ -38,6 +53,11 @@ public final class DingTalkChannel implements Channel {
 
     private static final Logger LOG = LoggerFactory.getLogger(DingTalkChannel.class);
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final MediaType JSON_MEDIA = MediaType.parse("application/json; charset=utf-8");
+
+    /** manifest 里 {@code channel.<name>.config.<key>} 的键名（也是缺键报错里写的名字）。 */
+    public static final String KEY_WEBHOOK_URL = "webhook-url";
+    public static final String KEY_SECRET = "secret";
 
     private final ChannelBus bus;
     private final int port;
@@ -45,6 +65,13 @@ public final class DingTalkChannel implements Channel {
     private final String secret;
     /** null/空 = 只绑回环；显式写地址才暴露到别的网卡。 */
     private final String host;
+
+    private final OkHttpClient http = new OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build();
+    private volatile long lastHttpStatus;
+    private volatile int lastErrcode;
 
     private HttpServer server;
     private ExecutorService workers;
@@ -94,6 +121,12 @@ public final class DingTalkChannel implements Channel {
         if (warning != null) {
             LOG.warn("[dingtalk] 警告: {}", warning);
         }
+        List<String> lacking = missingCredentialKeys();
+        if (!lacking.isEmpty()) {
+            // 不许静默：把"缺哪几个键"在启动期就喊出来（URL 本身带 access_token，只报键名不报值）
+            LOG.warn("[dingtalk] 出站不可用 —— 缺配置键 {}；send() 会抛 ChannelConfigException，"
+                    + "不会假装已送达", lacking);
+        }
     }
 
     /** 实际监听的地址 — 守卫测试据此确认缺省没有绑到通配。 */
@@ -109,6 +142,13 @@ public final class DingTalkChannel implements Channel {
         }
         if (workers != null) {
             workers.shutdownNow();
+        }
+        // OkHttp 的工作线程缺省非守护且 60s 空闲才收；网关 stop() 之后不该拖着一个不走的 JVM
+        try {
+            http.dispatcher().executorService().shutdown();
+            http.connectionPool().evictAll();
+        } catch (RuntimeException e) {
+            LOG.debug("[dingtalk] 出站连接池收尾异常: {}", e.getMessage());
         }
         termination.countDown();
     }
@@ -127,16 +167,139 @@ public final class DingTalkChannel implements Channel {
     }
 
     @Override
-    public void send(OutboundMessage message) {
+    public void send(OutboundMessage message) throws IOException {
         if (message == null) {
             return;
         }
-        LOG.info("[dingtalk:stub] reply_to={} text={}", message.replyTo, abbreviate(message.text));
+        List<String> lacking = missingCredentialKeys();
+        if (!lacking.isEmpty()) {
+            throw new ChannelConfigException("dingtalk 出站缺配置键: " + String.join(", ", lacking)
+                    + " —— 群机器人需要一个带 access_token 的 webhook-url"
+                    + (secret == null || secret.trim().isEmpty()
+                            ? "（可选：再配 " + KEY_SECRET + " 开加签）" : ""), lacking);
+        }
+        String url = signedWebhookUrl();
+        String body = buildMessageBody(message);
+        Request req = new Request.Builder()
+                .url(url)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .post(RequestBody.create(body, JSON_MEDIA))
+                .build();
+        int status;
+        String respBody;
+        try (Response resp = http.newCall(req).execute()) {
+            status = resp.code();
+            ResponseBody rb = resp.body();
+            respBody = rb == null ? "" : rb.string();
+        } catch (IOException e) {
+            // 传输层失败：原因里不能带 URL（access_token 就在 query 上）
+            throw new IOException(scrub("dingtalk 出站传输失败: " + e.getClass().getSimpleName()
+                    + ": " + scrubUrl(String.valueOf(e.getMessage()))), e);
+        }
+        lastHttpStatus = status;
+        Map<String, Object> parsed = parseObject(respBody);
+        int errcode = intOf(parsed.get("errcode"), status == 200 ? 0 : -1);
+        String errmsg = str(parsed.get("errmsg")).toLowerCase(Locale.ROOT);
+        lastErrcode = errcode;
+        if (status < 200 || status >= 300 || errcode != 0) {
+            throw new IOException(describeFailure(status, errcode, errmsg));
+        }
         Map<String, Object> payload = new HashMap<String, Object>();
         payload.put("chatId", message.replyTo);
         payload.put("text", message.text);
         payload.put("kind", message.kind == OutboundMessage.Kind.ERROR ? "error" : "text");
+        // P18：不再是 stub —— delivered=true 只在 errcode=0 之后才写得进来
+        payload.put("delivered", Boolean.TRUE);
+        payload.put("errcode", Integer.valueOf(errcode));
         outbound.offer(payload);
+        LOG.info("[dingtalk] 已投递 chatId={} errcode=0 text={}",
+                message.replyTo, abbreviate(message.text));
+    }
+
+    /** 出站请求体：钉钉群机器人 text 消息的形状。 */
+    String buildMessageBody(OutboundMessage message) throws IOException {
+        Map<String, Object> text = new HashMap<String, Object>();
+        text.put("content", message.text == null ? "" : message.text);
+        Map<String, Object> body = new HashMap<String, Object>();
+        body.put("msgtype", "text");
+        body.put("text", text);
+        if (message.kind == OutboundMessage.Kind.ERROR) {
+            Map<String, Object> at = new HashMap<String, Object>();
+            at.put("atUserIds", Collections.singletonList(
+                    message.replyTo == null ? "" : message.replyTo));
+            body.put("at", at);
+        }
+        return JSON.writeValueAsString(body);
+    }
+
+    /**
+     * 出站缺哪些配置键：{@code webhook-url} 是硬门槛（access_token 就在它上面）。
+     * {@code secret} 可空（未开加签的机器人），所以它不进 requires，只在日志里提示。
+     */
+    public List<String> missingCredentialKeys() {
+        List<String> lacking = new ArrayList<String>();
+        if (webhookUrl == null || webhookUrl.trim().isEmpty()) {
+            lacking.add(KEY_WEBHOOK_URL);
+        }
+        return lacking;
+    }
+
+    /**
+     * 把钉钉报回来的错归一成 {@link DeadTargets#classifySendError} 认得的口径。
+     *
+     * <p>群机器人 webhook 是"整会话级"的：token 失效／机器人被移出群都意味着这个 chat
+     * 再也发不出去 ⇒ 归一成正则认识的串；其余原样带出 errmsg（不含 URL）。</p>
+     */
+    static String describeFailure(int httpStatus, int errcode, String errmsg) {
+        String m = errmsg == null ? "" : errmsg.toLowerCase(Locale.ROOT);
+        if (m.contains("token is not exist") || m.contains("bot is not exist")
+                || m.contains("chat not found") || m.contains("not exist")) {
+            return "dingtalk chat not found (errcode=" + errcode + ")";
+        }
+        if (m.contains("banned") || m.contains("keywords not in content")
+                || m.contains("no permission") || m.contains("forbidden") || m.contains("sign")) {
+            return "dingtalk not a member (errcode=" + errcode + ")";
+        }
+        return "dingtalk send failed http=" + httpStatus + " errcode=" + errcode + " errmsg=" + m;
+    }
+
+    /** 最近一次出站的 HTTP 状态码；0 = 还没发过。 */
+    public long lastHttpStatus() {
+        return lastHttpStatus;
+    }
+
+    /** 最近一次出站的钉钉侧 {@code errcode}；未发过时为 0。 */
+    public int lastErrcode() {
+        return lastErrcode;
+    }
+
+    private static int intOf(Object v, int dflt) {
+        if (v instanceof Number) {
+            return ((Number) v).intValue();
+        }
+        try {
+            return v == null ? dflt : Integer.parseInt(v.toString().trim());
+        } catch (NumberFormatException e) {
+            return dflt;
+        }
+    }
+
+    /** 把 URL 里的 {@code access_token}/{@code sign} 值洗掉 —— 任何文案都不许带着它们。 */
+    static String scrubUrl(String urlOrText) {
+        if (urlOrText == null) {
+            return "";
+        }
+        return urlOrText
+                .replaceAll("(?i)(access_token=)[^&#]*", "$1***")
+                .replaceAll("(?i)(sign=)[^&#]*", "$1***");
+    }
+
+    private String scrub(String s) {
+        String out = scrubUrl(s);
+        if (secret != null && !secret.isEmpty() && out.contains(secret)) {
+            out = out.replace(secret, "***");
+        }
+        return out;
     }
 
     private void handleInbound(HttpExchange ex) throws IOException {
@@ -199,7 +362,7 @@ public final class DingTalkChannel implements Channel {
             return webhookUrl + (webhookUrl.contains("?") ? "&" : "?")
                     + "timestamp=" + ts + "&sign=" + sign;
         } catch (Exception e) {
-            LOG.warn("[dingtalk] 加签失败: {}", e.getMessage());
+            LOG.warn("[dingtalk] 加签失败: {}", scrub(String.valueOf(e.getMessage())));
             return webhookUrl;
         }
     }
