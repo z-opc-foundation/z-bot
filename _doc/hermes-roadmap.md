@@ -781,3 +781,85 @@ _(W1 起逐期追加)_
 **待收口**：P25（ACP）与 P28（控制台对等）的收口棒 p25b/p28b **又各自死于 150 轮**，
 `w12-p25`/`w13-p28` 上仍有未提交的实现与验收目录 ⇒ 这两支没并进 main，下一轮第一动作是保现场再跑四杠。
 P19（命令表单源多端）未派（等 P28 的 `WIRING.md` 接缝）；P29（README×7 + 抬号 `0.2.0→0.3.0` + 发 Central + 对外拉取验证）未开工。
+
+---
+
+## 8.10 第六期：p25b/p28b 并入后的目标树复测 + 一条被并行会话抢先推送的修复（09-26 20:27:56+0800，主编亲测）
+
+**这一轮量的是哪棵树**：`w12-p25`（`0b06595`）与 `w13-p28`（`3b4e725`）已并进来，上一节末尾那两条
+"死于 150 轮未并"已了结。测量起点 `2034975`（三把 E2E 尺的量测对象修正），终点 `fb80e6d`
+（tree `6acc67f2ad25b8520b6dbad024f3097d2d800a18`）—— 中间还夹了三笔不是我写的提交，见下。
+
+**杠① 第一遍判红，而且是真红**：`LABEL=final1133 … HEAD=2034975` 三跑里
+`run=1 rc=0 module_sum=1130 class_sum=1130`、`run=2 rc=1 … E=1 build=FAILURE`、
+`run=3 rc=1 … E=1 build=FAILURE`，判词 `TOKEN=BAR1_NOT_GREEN_3OF3`（这条 token 是量具自己打的，
+不是我改口后的说法）。红的是同一个具名用例：
+`McpRealStdioServerTest.zbotTransportHonoursItsOwnDeadlineWhileKernelBlocksInReadLine:366`
+→ `Runtime mcp connect failed: mcp 请求超时（900ms，method=initialize）`。
+
+**根因不在被测产品的那半，在尺的形状里**：`ZBotStdioMcpTransport` 拿同一个 `timeoutMillis`
+既管 `initialize` 握手又管之后的每次调用。握手等的是 stdio server 冷启动（exec + 解释器 + import SDK），
+load average 11 时 python 参照 server 起不动 900ms ⇒ 这条"验 deadline 真的生效"的守卫，
+实际把"机器这一刻有多忙"当成了验收条件，空机必绿、忙时必红。**两头都是缺陷**：产品侧一个短的单请求
+上限会把正常要 1 秒起来的 server 永久挡在门外；尺侧一条只在负载下才红的守卫不叫守卫。
+
+**修法**：握手预算独立（新增 `DEFAULT_HANDSHAKE_TIMEOUT_MILLIS=30_000` + `Options#handshakeTimeoutMillis`，
+`requestRaw` 多一个显式 `budgetMillis` 形参），`initialize` 走握手预算、其余调用仍走 `timeoutMillis`。
+
+**这条修复是被并行会话推掉的，不是我**：20:15:50 另一会话的 `67123e8 "chore: 提交工作树现有改动并推送"`
+把我**当时仍未提交**的 `ZBotStdioMcpTransport.java` 连着它自己扫到的 `p17/out/lockprobe/LockProbe.java`
+一起 commit 并推送 —— 内容逐字节就是我写的（`git diff HEAD -- <该文件>` 空），但它带着"未验证构建/测试"
+的自述进了远端，而且**它的成对守卫还不在树里**。我不 amend 已推送的东西，改为把守卫单独落地成
+`fb80e6d`，并在这节把过程记清楚：共享工作树里"我只改 src/main 不上台"这件事不由我决定。
+
+**杠② 成对注入（只在 `git archive` 的隔离副本里动手，`~/.cache/zbot-mutpair/`）**：
+基线 `baseline rc=0 reds=0`；
+`mutA`（把 `initialize` 换回吃 `timeoutMillis`）→ `rc=1 reds=3 red_cases=handshakeOutlivesATightRequestTimeout,requestStillDiesOnItsOwnTightTimeout verdict=KILLED`；
+`mutB`（把单请求也抬到握手预算）→ `rc=1 reds=2 red_cases=requestStillDiesOnItsOwnTightTimeout verdict=KILLED`；
+两次还原 `md5=4b430510c40c57730eebff22cce14bc8` 与原件相同。
+**mutA 的判别力要打折说**：它两例皆红是走同一个 `open()` 辅助函数一起挂的，说明不了"握手那一侧的断言抓到了"；
+真正干净的方向判别是 mutB —— 只红调用那一例。夹具只吃 stdlib，不引官方 SDK。
+
+**杠① 复测（全 reactor，不 `-pl`）×3**：`LABEL=handshake1132 WT=… HEAD=fb80e6d` 三跑
+`rc=0 parse_rc=0 module_lines=1 class_lines=105 module_sum=1132 class_sum=1132 F=0 E=0 S=0 build=SUCCESS socket_hits=0`，
+判词 `TOKEN=BAR1_GREEN_3OF3 green_runs=1,2,3 notgreen_or_fatal=0 socket_bad_runs=0`，
+`DIRTY_AFTER src_main=0 src_test=0 total=0`（逐字读数 `~/.cache/zbot-integrate/handshake1132/SUMMARY.txt`）。
+
+**"第三把尺"这个说法要订正**：同一轮 `TESTCOUNT committed_at=1135` 而实跑 `1132`，差 3。
+逐条对完不是丢用例：3 处偏移全部定值可归因 —— `P26RetryPolicyTest.java:37` 的 javadoc 里写了个字面 `@Test`、
+`memory/MemoryE2eDriver.java` 与 `ui/RawTerminalVerdictProbe.java` 各 1 个 `@Test` 但类名不以 `Test` 结尾
+（surefire 按命名排除，是刻意的驱动/探针）。我改用按 (class, method) 名字集合对账：
+`executed_cases=1132 classes=105 / annotated=1132 / MISSING_FROM_EXECUTION=0 / EXECUTED_NOT_ANNOTATED=0`。
+⇒ `git grep -c '@Test'` 与实跑之间**不是两把独立的尺**，它有一个随注释和命名走的定值偏移；
+上一节拿 1060/1133 这类静态数当"双尺对账"的一半，口径写错了。
+
+**杠③ 目标树跨期普查（`bar3_all.sh`，起点 HEAD=b49da9f）**：`BAR3ALL_DONE runs=23 nonzero_rc=2 missing=3 series=17`。
+p25/p26/p27 三支在修掉硬编码写手根之后**第一次真的量到目标树**，各 3 跑全 `rc=0`：
+p25 `checks=19 pass=19 fail=0 llm_hits=1 result=OK`、p26 `scenes=10 failed_checks=0`、p27 `CHECKS=20 FAILED=0`
+（+ `java_side_all_checks_green PASS`）。两处红都不记产品缺陷：
+① `p24 failed_checks=1 ['前置：被测树 z-bot-core/src 无未提交改动（量的是提交树）']` —— 抓的是我本人
+正在改 `src/main`，这条守卫有效、该红；
+② `p11b FAIL E5b 终端设置被恢复（stty -g 前后一致）` —— **未归因**，而且它的消息把 before/after
+各截到 28 字符、两边共用 `gfmt1:cflag=4b00:iflag=2b02:` 前缀 ⇒ 从日志里看不出差在哪个 flag。
+这是 p11b 自己的取证缺陷，下一棒要先把差值按 token 打印出来再判它是不是产品问题。
+`missing=3` 全部是同一件事：`E2E_MISSING p28（无 harness ⇒ 杠③ NO-RUN）` —— P28 至今没有 E2E 尺，
+不许读成"已通过"。
+
+**杠④**：`B4 entries=8 cfg=2dadaed0 db=690ddbc0` 在杠① 两遍的 t0/t_end、杠③ 的 t0/三个中点/tend
+全部逐格相同；真 key 全程只量长度（125），值未被读取。
+
+**新记两笔账（都不当已完成）**
+- **E2E 现场被提交进仓库**：`git ls-files '_doc/acceptance/*/out/*'` 实测 35 个（含 3 个 `state.db` 二进制）
+  + `__pycache__` 4 个，是并行会话 `b49da9f`/`f90b1f5`/`67123e8` 三笔推上去的；同一支
+  `p17/out/lockprobe/LockProbe.java` 在三笔里加了删、删了加。后果是**每跑一次 E2E 工作树必脏**，
+  于是 p24 那条"量的是提交树"前置从此长期红。要不要 untrack + 补 `.gitignore` 等用户点头
+  （那是改别人正在写的共享状态）。凭证我扫过：全树 `≥80` 位 hex 的文件数 `0`、
+  真 key 精确搜 `rc=1`（不在树里）、阳性对照 `stub-key` 命中 45 个文件证明扫描有牙。
+- **E2E 不回收自己的子进程**：`ps` 抓到 2h24m 前起的 `java -jar z-bot-core.jar gateway`
+  仍活着（p16/p17/p18/p23 的 profile 目录，端口 61003/61004/61006/61007/61016/61017/62618…），
+  这一轮 load average 8—15 有一部分是它们贡献的 ⇒ 负载型假红的源头之一在 harness 的收尾，不在产品。
+
+**待收口**：p28c（补 `p28_e2e.py`，让 P28 的杠③ 从 NO-RUN 变成有数）与 p19a（命令表单源多端，
+输入 `WIRING.md`/`ROUTES.tsv` 已在 main）两票已写好待派；P29 未开工；D-2 裁定、P12 §12.5 那 5 支
+部分覆盖变异、p27b 交下来的两条尺缺陷（0 字节锁走 `unlink` 接管、`p27_e2e.py` 不取锁）仍未动；
+`w2-p20` 永不并；内核 0.2.1 与 z-bot 0.3.0 发 Central 各需单独点头。
