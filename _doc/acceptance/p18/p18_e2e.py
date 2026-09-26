@@ -518,10 +518,15 @@ def section_a(base_url, fake_base):
     ok = gw.listening(gw.http_port)
     check("A1 gateway 进程起来且控制台端口在听（按 pid 过滤 lsof）", ok,
           "pid=%d listening=%d alive=%s" % (gw.pid(), ok, gw.alive()))
-    st, body = http_get("http://127.0.0.1:%d/index.html" % gw.http_port)
+    try:
+        st, body = http_get("http://127.0.0.1:%d/index.html" % gw.http_port)
+        a2_detail = "status=%d len=%d 前 40=%s" % (st, len(body), body[:40].replace("\n", " "))
+    except Exception as exc:  # 变异/崩了时连接被拒 ⇒ 记成 FAIL 行，不让量具自己栈炸在半路
+        st, body = None, ""
+        a2_detail = "GET 直接被拒（端口没人听）: %r" % (exc,)
     check("A2 控制台 web 面不回归：GET /index.html 判状态码+形状",
           st == 200 and ("<html" in body.lower() or "z-bot" in body.lower()),
-          "status=%d len=%d 前 40=%s" % (st, len(body), body[:40].replace("\n", " ")))
+          a2_detail)
     txt = gw.text()
     check("A3 真进程读到第四层 manifest（sources 里就是我给的临时文件）",
           "通道声明来源" in txt and os.path.basename(man) in txt,
