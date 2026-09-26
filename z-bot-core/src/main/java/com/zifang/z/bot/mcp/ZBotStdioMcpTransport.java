@@ -63,12 +63,22 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
     /** 默认单请求超时；比内核那个"写着 30s 其实不生效"的值短，且这次真的生效。 */
     public static final long DEFAULT_TIMEOUT_MILLIS = 15_000L;
 
+    /**
+     * {@code initialize} 握手自己的预算 —— 与 {@link #DEFAULT_TIMEOUT_MILLIS} 分开。
+     *
+     * <p>stdio server 的握手等的是<b>冷启动</b>：exec、解释器起来、import SDK。把这条
+     * 也塞进单请求超时里，等于让"机器这一刻有多忙"决定能不能连上：配置里写 900ms 做
+     * 单次调用上限，就会连一个正常要 1s 才 import 完的 python server 都永远连不上。</p>
+     */
+    public static final long DEFAULT_HANDSHAKE_TIMEOUT_MILLIS = 30_000L;
+
     /** 传输配置。不可变，避免 bridge 与 transport 之间共享可变状态。 */
     public static final class Options {
         String serverName = "stdio";
         List<String> command = new ArrayList<String>();
         Map<String, String> environment = new LinkedHashMap<String, String>();
         long timeoutMillis = DEFAULT_TIMEOUT_MILLIS;
+        long handshakeTimeoutMillis = DEFAULT_HANDSHAKE_TIMEOUT_MILLIS;
         boolean parentWatchdog = true;
         String clientName = "z-bot";
         String clientVersion = "0.2.0";
@@ -92,6 +102,19 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         public Options timeoutMillis(long v) {
             this.timeoutMillis = v <= 0 ? DEFAULT_TIMEOUT_MILLIS : v;
             return this;
+        }
+
+        public Options handshakeTimeoutMillis(long v) {
+            this.handshakeTimeoutMillis = v <= 0 ? DEFAULT_HANDSHAKE_TIMEOUT_MILLIS : v;
+            return this;
+        }
+
+        public long getTimeoutMillis() {
+            return timeoutMillis;
+        }
+
+        public long getHandshakeTimeoutMillis() {
+            return handshakeTimeoutMillis;
         }
 
         public Options parentWatchdog(boolean v) {
@@ -187,7 +210,8 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         params.put("protocolVersion", McpWire.PROTOCOL_VERSION);
         params.put("capabilities", new LinkedHashMap<String, Object>());
         params.put("clientInfo", clientInfo);
-        String resp = requestRaw(id, McpWire.request(id, "initialize", params));
+        String resp = requestRaw(id, McpWire.request(id, "initialize", params),
+                options.handshakeTimeoutMillis);
         JsonNode node = McpWire.read(resp);
         JsonNode result = node == null ? null : node.get("result");
         if (result == null || result.isNull()) {
@@ -393,6 +417,10 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
     }
 
     private String requestRaw(long id, String requestJson) throws Exception {
+        return requestRaw(id, requestJson, options.timeoutMillis);
+    }
+
+    private String requestRaw(long id, String requestJson, long budgetMillis) throws Exception {
         if (!isOpen()) {
             throw new IllegalStateException("transport not open");
         }
@@ -410,11 +438,11 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
             throw e;
         }
         try {
-            return future.get(options.timeoutMillis, TimeUnit.MILLISECONDS);
+            return future.get(budgetMillis, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             pending.remove(Long.valueOf(id));
             String method = inflightMethod.get(Long.valueOf(id));
-            throw new TimeoutException("mcp 请求超时（" + options.timeoutMillis
+            throw new TimeoutException("mcp 请求超时（" + budgetMillis
                     + "ms，method=" + method + "）");
         } catch (java.util.concurrent.ExecutionException e) {
             pending.remove(Long.valueOf(id));
