@@ -663,3 +663,70 @@ $ git ls-files _doc/acceptance/p20b/
 4. `_doc/acceptance/p20b/LEDGER.tsv`（21 行）+ `LEDGER_RESTORE.tsv`（21 行，还原取证）—— 均为脚本产物。
 5. 本文 `EVIDENCE.md`。
 
+
+# 9. 本棒 p20d —— 把 §2.2 那 7 条非 RED-OK 逐条落地
+
+> 工单：`~/.cache/zbot-p17/dispatch_p20d.md`。接手 HEAD `84ca7b9`（工作树里另有上一棒 p20c
+> 没提交的 EVIDENCE 增补 §1.2/§8.1，本棒第一件事就是把那 33 行**原样提交**、不覆盖历史）。
+> 写域：`z-bot-core/src/test/**` + `_doc/acceptance/p20b/**` + 一行授权（`Toolsets.java:16` 注释里的路径）。
+> **产品行为一字未动。** 上面 §0–§8 是"本棒前"的账，一律不改写；本节只往后加。
+
+## 9.0 起手实测（不采信简报）
+
+| 项 | 命令 | 读数 |
+| --- | --- | --- |
+| 接手 HEAD / 分支 | `git rev-parse --short HEAD` / `rev-parse --abbrev-ref HEAD` | 接手时 `84ca7b9` / `w2-p20b`；量这张表时本棒已把上一棒那 33 行增补提交为 `15a07ac` ⇒ 读数行 HEAD=`15a07ac` |
+| 在途状态 | `git status --porcelain` | 接手时 **不为空**：` M _doc/acceptance/p20b/EVIDENCE.md`（上一棒 p20c 死在收尾前，那 33 行没提交）⇒ 本棒第一笔提交 `15a07ac` 原样收下，不改写 |
+| `~/.zbot` 三数 | `ls -A ~/.zbot \| wc -l`; `md5 -q ~/.zbot/config.properties \| cut -c1-8`; `md5 -q ~/.zbot/state.db \| cut -c1-8` | `8` / `2dadaed0` / `690ddbc0` ⇒ 与 §0 逐字同，红线未被上一棒破坏 |
+| 邻居的 maven 真身 | `python3 -c "…import p20b_mutation as m; print(m.foreign_mvn_running())"`（**不用 `grep mvn`**，§6(5) 的坑） | 当场 `FOREIGN_MVN_HITS=4`（别的仓的 maven 真身，pid 85209 起）⇒ 本棒先把测试写完，注入跑等窗口；锁当场 `FREE` |
+| 锁的落点 | `git rev-parse --git-common-dir` | `/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git` ⇒ 锁文件同 §0 |
+| 起点静态对拍 | `git diff --name-only c3ab4da HEAD -- '*/src/*' \| wc -l` / `git grep -c '@Test' HEAD -- 'z-bot-core/src/test/**' \| awk -F: '{s+=$NF} END{print s}'` | `0` / `525` ⇒ 与 §1.2 一致，本棒从 525 起加用例 |
+
+## 9.1 七行总账（本棒前 ⇒ 本棒后）
+
+| 行 | 本棒前 | 本棒后 | 本棒动作（一句话） | 支撑读数在 |
+| --- | --- | --- | --- | --- |
+| TS4 | PARTIAL 4/5 | 待填 | 待填 | §9.2 |
+| TK3 | PARTIAL 3/7 | 待填 | 待填 | §9.3 |
+| TK5 | GREEN-BUT-MUTATED 0/1 | 待填 | 待填 | §9.4 |
+| TK9 | GREEN-BUT-MUTATED 0/0 | 待填 | 待填 | §9.5 |
+| MB2 | GREEN-BUT-MUTATED 0/0 | 待填 | 待填 | §9.6 |
+| MB3 | PARTIAL 8/8 | 待填 | 待填 | §9.7 |
+| TK11 | PARTIAL 13/13 | 待填 | 待填 | §9.8 |
+
+tally 并排（原账不许覆盖）：
+```
+本棒前：RED-OK 14 / PARTIAL 4 / GREEN-BUT-MUTATED 3 / BROKEN 0
+本棒后：待填
+```
+
+## 9.2 TS4 —— 期望与实测同源（`ToolsetsManifestTest.java:128`）
+待填：改法 / 命令 / 读数。
+
+## 9.3 TK3 —— 注点从 accessor 改到快照键
+待填。
+
+## 9.4 TK5 —— 等价变异的实测确认 + 换成不等价注点 + 用例补活猎物
+待填。
+
+## 9.5 TK9 —— `$ZBOT_HOME` 那一级要有真猎物（起带 env 的子 JVM）
+待填。
+
+## 9.6 MB2 —— 桥级"注册表有、桥没记住"的现场
+待填。
+
+## 9.7 MB3 —— 保留 PARTIAL 的因果
+待填。
+
+## 9.8 TK11 —— 差集机械补进期望集
+待填。
+
+## 9.9 收尾重出（杠② 全量 21 个 / 杠① 串行三跑 / 杠③ 全量三阶段 / 杠④ 三数）
+待填。
+
+## 9.10 本棒仍未覆盖的
+待填。
+
+## 9.11 本棒复算命令
+待填。
+
