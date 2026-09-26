@@ -1,8 +1,10 @@
 # P16 验收证据（杠①②③④）
 
 * 分支 / worktree：`w2-p16ev` @ `/private/tmp/zbot-wt-p16ev`，基线 `235a9a7`（= `w2-p16`，未动）
-* 产出人：杠①② = 写手代理 `p16ev`（工单 `dispatch_p16evidence.md`，被 150 轮截断，产物由主编封存成
-  `ea538b9`）；杠③④ + 杠① 真三跑 + M07 处置 = 续棒 `p16ev2`（工单 `dispatch_p16ev2.md`）。
+* 产出人：杠①② 首跑 = 写手代理 `p16ev`（工单 `dispatch_p16evidence.md`，被 150 轮截断，产物由主编封存成
+  `ea538b9`）；杠③④ + 杠① 真三跑 + M07 处置 + **杠② 换最终脚本字节重跑两轮** = 续棒 `p16ev2`
+  （工单 `dispatch_p16ev2.md`）。杠② 重跑的两轮判定与上一棒那封账**逐字节相同**（只差生成时刻一行），
+  见「杠②」节的 `LEDGER_ROWS_IDENTICAL_TO_SEALED_PREV_BATON` 对拍。
   日期 2026-09-26（本机 darwin 25.5，java 1.8/25 混用无碍，mvn -o 离线，python 3.14）
 * **两棒加起来一条产品代码都没改**：`git diff --name-only 235a9a7..HEAD` 只有 `_doc/acceptance/p16/`
   里的四个交付物 + 一支 `.gitignore`（见「全树未被改动」那节的 md5 与 `git log` 对拍）；
@@ -235,6 +237,8 @@ diff logs/locktest_status_before.txt logs/locktest_status_after.txt → STATUS_I
 
 ② 邻居松开后本脚本照常拿得到锁：`kill 9165` 之后再跑 ⇒ 24 轮全部执行完，
 `logs/mutation_full_r2.log` 末行 `EXIT=0`，`SRC_MD5_STABLE=yes`。
+（上面 ①② 是上一棒的读数，且"邻居"是**同一支脚本另起一个进程**扮的（`--hold-lock`）；
+真·兄弟编队攥锁的复测见下面 ③。）
 
 （附：第一次"拒跑"读数差点被记错 —— 那条命令里用了 `timeout 60`，本机没有这个命令，
 `EXIT_WHEN_BUSY=127` 是"命令没跑成"而不是"被锁挡下"。已复测成上面的 4。这条按
@@ -345,6 +349,32 @@ Supervisor     235a9a7=9edd95d3fc7ce1c070894668e3d53a93 disk=9edd95d3fc7ce1c0708
 本目录的运行捕获（`logs/`、`out/`）按 `_doc/acceptance/p16/.gitignore` 不入版本库
 （`*.log` 本来就被根 `.gitignore:5` 挡着，`out/` 是 2.7MB+ 的 db/jvm 捕获）⇒
 `git status --porcelain` 收尾是空的，而结论读数全在本文件里。
+
+### 收口时刻的复测（本棒最后一次跑的命令，全在 commit 之后）
+
+```
+$ git log --oneline 235a9a7..HEAD
+7261ceb p16ev2 杠② 复跑收口：…          ← 本棒最后一笔
+a7c6880 p16ev2: EVIDENCE 补杠③/杠④ 两节 + 杠① 真三跑原文；mutation 量具回归修正
+fecf63b p16ev2 杠③ 量具修好：全段一次跑完 33/33，两次独立复跑结论一致（产品代码零改动）
+ea538b9 wip(p16ev): 封存被 150 轮截断的验收棒产物（杠②已跑完，杠③全段未过），未验收
+
+$ git diff --name-only 235a9a7..HEAD
+_doc/acceptance/p16/.gitignore  _doc/acceptance/p16/EVIDENCE.md  _doc/acceptance/p16/LEDGER.tsv
+_doc/acceptance/p16/p16_e2e.py  _doc/acceptance/p16/p16_mutation.py
+
+$ git status --porcelain        → （空）      STATUS_EMPTY=yes
+
+$ md5 -q z-bot-core/src/main/java/com/zifang/z/bot/channel/{ChannelBus,Gateway,DeliveryLedger,DeadTargets,Supervisor}.java
+7929741fc6206d82b62ad7f0f39c206e  cf258ce1496dccfa3a2039a42cb0fb02  8318d1f95eff1342845917cda5c078f4
+f9f227fedd8bba6e8451736b63b4d7a6  9edd95d3fc7ce1c070894668e3d53a93   ← 与上面「基线 blob」五个值一字不差
+
+$ echo "项数=$(ls -A ~/.zbot | wc -l) config=$(md5 -q ~/.zbot/config.properties | cut -c1-8) state=$(md5 -q ~/.zbot/state.db | cut -c1-8)"
+项数=8 config=2dadaed0 state=690ddbc0        ← 与主编给的基线一致（杠④ 收工后复量）
+```
+
+`__pycache__/` 已删（且被本目录 `.gitignore` 挡着，不会污染 `git status`）。
+本棒改动面自始至终只有 `_doc/acceptance/p16/` 下的 5 个路径（4 个交付物 + 1 个 `.gitignore`）。
 
 ### LEDGER.tsv 的复算式（`#` 注释尾会让裸 `csv.DictReader` 出垃圾行）
 
@@ -564,5 +594,6 @@ PASS X5 每个真 JVM 的 --config-dir / ZBOT_HOME 都指在自己的临时 prof
    `--full 24` 整跑写出（`at 2026-09-26T04:00:38+0800`）。
 7. **没动 `~/.zbot`、没动内核仓、没动兄弟工作树**（`w2-p20b` / `w2-p12` / `w1-p15b`）：
    撞锁那次（03:40:11）也只是**等邻居松开**，没有去解对方的锁、没有 `kill` 邻居进程。
-8. **没 push、没合分支**：本棒只在本 worktree 里 commit（`fecf63b` → 本棒最后一笔），
+8. **没 push、没合分支**：本棒只在本 worktree（`w2-p16ev`）里 commit ——
+   `fecf63b`（杠③ 量具）→ `a7c6880`（杠①/杠③/杠④ 文档）→ `7261ceb`（杠② 复跑收口）→ 最后一笔纯文档收口；
    `w2-p16` 的合并是主编的事。
