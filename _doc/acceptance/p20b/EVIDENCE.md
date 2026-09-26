@@ -682,23 +682,46 @@ $ git ls-files _doc/acceptance/p20b/
 | 锁的落点 | `git rev-parse --git-common-dir` | `/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git` ⇒ 锁文件同 §0 |
 | 起点静态对拍 | `git diff --name-only c3ab4da HEAD -- '*/src/*' \| wc -l` / `git grep -c '@Test' HEAD -- 'z-bot-core/src/test/**' \| awk -F: '{s+=$NF} END{print s}'` | `0` / `525` ⇒ 与 §1.2 一致，本棒从 525 起加用例 |
 
+### 9.0.1 本棒接手时是"第二棒实例"（简报说的 HEAD 与 status 都不成立，实测为准）
+
+§9.0 那张表是 p20d **第一个实例**量的。它写完 §9 骨架（`9f400b3`）与四条补网（`3ffe03f`）之后，
+在 10:22 的一次**子集诊断跑**之后死在权威跑之前。本棒（p20d 第二个实例）接手实测：
+
+| 项 | 命令 | 读数 |
+| --- | --- | --- |
+| 接手 HEAD / 分支 | `git rev-parse --short HEAD` / `--abbrev-ref HEAD` | `3ffe03f` / `w2-p20b` ⇒ **不是简报写的 `84ca7b9`**（第一个实例已提交两笔） |
+| 在途状态 | `git status --porcelain` | ` M LEDGER.tsv` ` M LEDGER_RESTORE.tsv` ` M p20b_mutation.py` ⇒ **不是空**：那两份是 10:20-10:22 的 8 行子集诊断跑产物 |
+| 诊断跑留档 | `cp LEDGER*.tsv logs/…` + `md5 -q` | `logs/LEDGER_subset_1022.tsv`（9 行 = 表头 + TS4/TK3/TK4/TK5/TK7/TK9/TK11/MB2，md5 `2a3b3828`）⇒ **原样留档不覆盖**；交付位 `LEDGER.tsv`/`LEDGER_RESTORE.tsv` 用 `git show HEAD:` 字节写回等值校验（`cf7d680d` / `f5ef5586`，`equal=True`）后交还给脚本重生成 |
+| 四个被测源文件 | `python3 -c "…disk_md5 vs git_md5(HEAD)…"` | `Toolsets f1d8195f / Toolkit 4ae1a491 / McpBridge 2938f85b / McpManager 37a14145`，四个 `True` ⇒ 第一个实例死时没留已 mutate 的源文件（§6(6) 那个坑没重犯） |
+| `~/.zbot` 三数 | 同 §9.0 | `8` / `2dadaed0` / `690ddbc0` ⇒ 红线仍在 |
+| 锁与邻居 | `--want-lock` / `foreign_mvn_running()` | 10:41 当场 `FATAL 锁被占`（兄弟 worktree 的 mutator，锁文件里 `pid=53499 tag=mutator`）；本机今晚六棒同跑，`ps` 里 maven 真身常在 3-15 个 ⇒ 本棒所有注入都走"拿不到锁就不跑"的路径，等待期间只写 `_doc`，一个源文件都不碰 |
+
+
 ## 9.1 七行总账（本棒前 ⇒ 本棒后）
 
 | 行 | 本棒前 | 本棒后 | 本棒动作（一句话） | 支撑读数在 |
 | --- | --- | --- | --- | --- |
-| TS4 | PARTIAL 4/5 | 待填 | 待填 | §9.2 |
-| TK3 | PARTIAL 3/7 | 待填 | 待填 | §9.3 |
-| TK5 | GREEN-BUT-MUTATED 0/1 | 待填 | 待填 | §9.4 |
-| TK9 | GREEN-BUT-MUTATED 0/0 | 待填 | 待填 | §9.5 |
-| MB2 | GREEN-BUT-MUTATED 0/0 | 待填 | 待填 | §9.6 |
-| MB3 | PARTIAL 8/8 | 待填 | 待填 | §9.7 |
-| TK11 | PARTIAL 13/13 | 待填 | 待填 | §9.8 |
+| TS4 | PARTIAL 4/5 | 待填 | 期望换成测试侧字面量表，不再与 `toolsetForTool` 同源 | §9.2 / §9.9 |
+| TK3 | PARTIAL 3/7 | 待填 | 注点从 accessor 挪到快照键那一行，期望集按"先暖过快照"的出处收窄 | §9.3 / §9.9 |
+| TK5 | GREEN-BUT-MUTATED 0/1 | 待填 | 实测确认原注点是等价变异 ⇒ 换不等价注点 + 用例补两把钥匙（正反腿） | §9.4 / §9.9 |
+| TK9 | GREEN-BUT-MUTATED 0/0 | 待填 | 起真带 `$ZBOT_HOME` 的子 JVM 探针（带假 `user.home` 笼子），正反两把 | §9.5 / §9.9 |
+| MB2 | GREEN-BUT-MUTATED 0/0 | 待填 | 桥级"注册表有、桥没记住"现场（同名第二个桥实例 + 僵尸槽 + 旁观 server） | §9.6 / §9.9 |
+| MB3 | PARTIAL 8/8 | 待填 | **不动**（工单明写"保留 PARTIAL、不硬凑"），只把因果写明 | §9.7 / §9.9 |
+| TK11 | PARTIAL 13/13 | 待填 | 差集机械补进期望集（4 条，每条注明是哪一跑钉的） | §9.8 / §9.9 |
 
 tally 并排（原账不许覆盖）：
 ```
-本棒前：RED-OK 14 / PARTIAL 4 / GREEN-BUT-MUTATED 3 / BROKEN 0
-本棒后：待填
+本棒前：RED-OK 14 / PARTIAL 4 / GREEN-BUT-MUTATED 3 / BROKEN 0        （21 个变异体，§2 交付态那一跑）
+本棒后：待填                                                          （R2 交付跑，§9.9.6）
 ```
+
+### 9.1.1 连带影响：本棒新写的用例让另外两条从 RED-OK 变成"多红未点名"
+
+本棒往 `unboundedSentinelMeansNoTruncationAtAll` 里加的反向腿、以及新写的
+`zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot`，让 **TK4 / TK7** 这两条上一棒记 RED-OK 的行
+出现了"红了但没点名"（它们本来的猎物照样红）。处理口径与 TK11 一致：按实跑读数**机械补集**，
+不改判定文本、不改注点，逐条注明是哪一跑钉的 ⇒ 见 §9.9.2。
+
 
 ## 9.2 TS4 —— 期望与实测同源（`ToolsetsManifestTest.java:128`）
 
@@ -865,11 +888,116 @@ TK11 的期望集从 13 条补到 17 条，**每一条补进来的都来自实�
 
 
 ## 9.9 收尾重出（杠② 全量 21 个 / 杠① 串行三跑 / 杠③ 全量三阶段 / 杠④ 三数）
-待填。
 
-## 9.10 本棒仍未覆盖的
-待填。
+### 9.9.1 两轮跑的口径（为什么有两轮，以及各自能拿来当什么证据）
+
+| | R1 取证跑 | R2 交付跑 |
+| --- | --- | --- |
+| 期望集是哪一份 | `cde236b` 冻结的那一份（本棒第一笔把量具连同四条补网一起入库，**先提交再跑**） | R1 之后按 §9.9.2 补过差集的那一份 |
+| 用来证什么 | 七条非 RED-OK 的现状 + "红了但没点名"的**差集取证** | 交付台账（`LEDGER.tsv` 21 行 + tally），本文所有"本棒后"的数都取自它 |
+| 台账留档 | `logs/LEDGER_R1.tsv` / `logs/LEDGER_RESTORE_R1.tsv`（脚本产物原样复制） | `_doc/acceptance/p20b/LEDGER.tsv` / `LEDGER_RESTORE.tsv`（覆盖式重生成，历史账在 §2 与本节） |
+
+纪律核对：
+- **期望集先写死再跑**：R1 用的期望集在 `cde236b` 就进库了；R1→R2 之间只允许两类改动
+  （① TK11/TK4/TK7 的差集**机械补集**，每条来自 R1 台账 `tests_that_went_red` 与 `MUTANTS` 的差；
+  ② TK3 摘掉一条没出处的期望），**判定文本、判定逻辑（`p20b_mutation.py:582-601`）、注点语义、测试字节都没动**。
+- **测试字节在 R1 与 R2 之间一字未改**：`git diff --name-only 3ffe03f..HEAD -- '*/src/*'` 里除
+  `Toolsets.java:16` 那一行授权注释外没有 `src/test` 改动〔读数待填：R2 之前现场再量一次并粘原文〕。
+- 中途 kill 过一次探针（本棒自己杀的，10:4x）：杀在 `wait_for_quiet` 阶段、**写盘之前**，
+  事后四个被测源文件 md5 与 `git show HEAD:` 逐字节同（读数见 §9.0.1 最后一行）⇒ §6(6) 那个坑没重犯。
+
+### 9.9.2 期望集的机械补集清单（每条注明是哪一跑钉的，不猜）
+
+| 行 | 动作 | 补/摘的用例 | 是哪一跑钉的 |
+| --- | --- | --- | --- |
+| TK3 | 摘（收窄） | `deregisterActuallyRemovesTheSlotFromEveryView` | R1 `TK3 … 点名=4/5`；出处见 §9.3 的三行源码 |
+| TK11 | 补 | `bridgeRegistersAnAvailabilityProbeBackedByTheConnection`、`reloadDropsTheDeadServersToolNamesFromGetToolNames`、`repavingWithTheSameToolNameWorksAfterUnregister` | 上一棒 p20b 交付态全量跑 `84ca7b9`（§2.2(6) 的差集） |
+| TK11 | 补 | `unregisterAllCleansSlotsTheBridgeNeverRecorded` | 第一个实例 10:2x 子集诊断跑（`logs/LEDGER_subset_1022.tsv` TK11 行）+ R1 复核 |
+| TK4 | 补 | 〔待填：R1 `多红未点名` 原文〕 | R1 |
+| TK7 | 补 | 〔待填：R1 `多红未点名` 原文〕 | R1 |
+| MB3 | **不补** | —（工单明写保留 PARTIAL） | — |
+| 其余 13 行 | 〔待填：若 R1 出现新的多红未点名，逐条列到这里，注明 R1 读数〕 | | R1 |
+
+### 9.9.3 杠① —— `mvn -o test` 串行三跑（本棒自跑，不引用别人那一跑）
+
+```
+〔待填：三跑的起止时刻、rc、Tests run 原文行、BUILD SUCCESS 原文行〕
+```
+- `@Test` 求和〔待填〕（第一个实例加了两条用例 ⇒ 525 → 527；基线 `13027f4` 465）
+- 产品行为对拍：`git diff --name-only c3ab4da HEAD -- '*/src/main/*'` ⇒ 只应有 `Toolsets.java` 一行注释〔待填原文〕
+
+### 9.9.4 杠③ —— 真进程三阶段全量重跑一次（动了测试与一行注释 ⇒ 结论要在新字节上重出）
+
+```
+〔待填：p20b_e2e.py 全量汇总行原文 + 三段起止时刻 + rc〕
+```
+M4/M5 的裁决结论**沿用 §3.4 不改**（工单明写"这三段结论都不要动"）；本节只重出"在新字节上仍然 PASS"。
+
+### 9.9.5 杠④ —— `~/.zbot` 三数（跑后）
+
+```
+〔待填：ls -A ~/.zbot | wc -l / md5 -q config.properties / md5 -q state.db〕
+```
+
+### 9.9.6 杠② tally 并排 + 台账自洽核对
+
+```
+〔待填：R2 的 cut -f2 LEDGER.tsv | tail -n +2 | sort | uniq -c 原文
+        与 cut -f5/-f7 LEDGER_RESTORE.tsv 的统计、LEDGER.tsv 行数、SRC_MD5_STABLE、控制台原文〕
+```
+
+## 9.10 本棒仍未覆盖的（别当成做了）
+
+1. **TK5 只换了"能判的那一种坏法"**：`摘掉 `cap == UNBOUNDED ||` 这个析取项` 仍是**等价变异**
+   （V1 那把的读数），单测层永远判不出来 ⇒ 想让它可判要么改产品语义、要么把它当"不可判"记账；
+   本棒按后者记（§9.4）。
+2. **MB3 仍是 `PARTIAL`**：工单明写不硬凑，本棒连它的期望集都没补（§9.7）。⇒ 账在台账 note 里挂着。
+3. **注入 × 真进程这个乘积本期仍然没有**（§7(4)）：本棒没把变异体注入到 `p20b_e2e.py` 的跑里，
+   两边仍是两把尺。
+4. **杠② 的 21 个变异体仍然只打到单测层**：`check_fn` 的真时间（TTL 30 s / 宽限 60 s）依旧只有杠③ M4-M7 兜着（§2.5）。
+5. **`McpBridge.registerAll:65` 的无超时 `connect()` 本棒没做**（主编已定"本棒不做，要另立一期"）。
+6. **TK9 的补网是子 JVM 探针，不是进程内注入**：`-Duser.home=<假 home>` 只保证"改回写死 `~/.zbot`"会被判红，
+   它不覆盖"第三级解析被改成读别的 env 名"这类形状（那种注点本棒没试）。
+7. **MB2 的新用例是替身级**（`InMemoryMcpTransport`）：真进程侧仍只有 §3.3 的 M11/M12。
+8. **本棒没集成、没合并、没 push**；`w2-p20b` 停在本地，`main` 一字未动。
 
 ## 9.11 本棒复算命令
-待填。
+
+```
+# 起手对拍（§9.0.1）
+git rev-parse --short HEAD && git status --porcelain
+python3 -c "import sys;sys.path.insert(0,'_doc/acceptance/p20b');import p20b_mutation as m;\
+for k,rel in sorted(m.SRC.items()):print(k,rel,m.disk_md5(rel)==m.git_md5('HEAD',rel))"
+
+# TK5 等价变异取证（§9.4）
+P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20d_tk5_equiv_probe.py          # V0/V1/V2 三把
+P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20d_tk5_equiv_probe.py --only=V1
+
+# 杠② R1（取证跑，期望集 = cde236b 那份）与 R2（交付跑）
+P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20b_mutation.py                  # console: logs/p20d_r1_console.log
+P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20b_mutation.py                  # 同一份命令，期望集不同
+cut -f2 _doc/acceptance/p20b/LEDGER.tsv        | tail -n +2 | sort | uniq -c
+cut -f5 _doc/acceptance/p20b/LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c
+cut -f7 _doc/acceptance/p20b/LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c
+
+# 差集复算（哪一行了红、哪一条没被点名 —— 机器算，不是我读印象）
+python3 - <<'PY'
+import io,csv,ast,re
+src=io.open('_doc/acceptance/p20b/p20b_mutation.py',encoding='utf-8').read()
+mut=ast.literal_eval(re.search(r'MUTANTS\s*=\s*\[.*?\n\]',src,re.S).group(0).split('=',1)[1].strip())
+exp={m[0].split()[0]:set(m[5]) for m in mut}
+for r in list(csv.reader(io.open('_doc/acceptance/p20b/LEDGER.tsv',encoding='utf-8'),delimiter='\t'))[1:]:
+    if not r: continue
+    red=set(x for x in r[4].split(',') if x)
+    print(r[0], r[1], '未点名红=', ','.join(sorted(red-exp[r[0].split()[0]])) or '-', '| 点名没红=', ','.join(sorted(exp[r[0].split()[0]]-red)) or '-')
+PY
+
+# 杠①（串行三跑）
+rm -rf z-bot-core/target/surefire-reports && mvn -o test          # ×3，原文进 logs/p20d_gate1_run{1,2,3}.log
+
+# 杠③ / 杠④
+python3 -u _doc/acceptance/p20b/p20b_e2e.py
+ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/.zbot/state.db | cut -c1-8
+```
+
 
