@@ -718,20 +718,25 @@ $ git ls-files _doc/acceptance/p20b/
 
 | 行 | 本棒前 | 本棒后（R1 取证跑，11:08:50） | 本棒后（R2 交付跑） | 本棒动作（一句话） | 支撑读数在 |
 | --- | --- | --- | --- | --- | --- |
-| TS4 | PARTIAL 4/5 | **RED-OK 5/5** | 待填 | 期望换成测试侧字面量表，不再与 `toolsetForTool` 同源 | §9.2 / §9.9 |
-| TK3 | PARTIAL 3/7 | PARTIAL 4/5（点名=4/5，红的正是那 4 条；没出处的那 1 条 R2 前摘掉） | 待填 | 注点从 accessor 挪到快照键那一行，期望集按"先暖过快照"的出处收窄 | §9.3 / §9.9 |
-| TK5 | GREEN-BUT-MUTATED 0/1 | **RED-OK 1/1** | 待填 | 实测确认原注点是等价变异 ⇒ 换不等价注点 + 用例补两把钥匙（正反腿） | §9.4 / §9.9 |
-| TK9 | GREEN-BUT-MUTATED 0/0 | **RED-OK 1/1** | 待填 | 起真带 `$ZBOT_HOME` 的子 JVM 探针（带假 `user.home` 笼子），正反两把 | §9.5 / §9.9 |
-| MB2 | GREEN-BUT-MUTATED 0/0 | **RED-OK 1/1** | 待填 | 桥级"注册表有、桥没记住"现场（同名第二个桥实例 + 僵尸槽 + 旁观 server） | §9.6 / §9.9 |
-| MB3 | PARTIAL 8/8 | PARTIAL 8/8（+3 条多红未点名，**故意不回填**） | 待填 | **不动**（工单明写"保留 PARTIAL、不硬凑"），只把因果写明 | §9.7 / §9.9 |
-| TK11 | PARTIAL 13/13 | **RED-OK 17/17** | 待填 | 差集机械补进期望集（4 条，每条注明是哪一跑钉的） | §9.8 / §9.9 |
+| TS4 | PARTIAL 4/5 | **RED-OK 5/5** | **RED-OK 5/5** | 期望换成测试侧字面量表，不再与 `toolsetForTool` 同源 | §9.2 / §9.9 |
+| TK3 | PARTIAL 3/7 | PARTIAL 4/5（点名=4/5，红的正是那 4 条；没出处的那 1 条 R2 前摘掉） | **RED-OK 4/4** | 注点从 accessor 挪到快照键那一行，期望集按"先暖过快照"的出处收窄 | §9.3 / §9.9 |
+| TK5 | GREEN-BUT-MUTATED 0/1 | **RED-OK 1/1** | **RED-OK 1/1** | 实测确认原注点是等价变异 ⇒ 换不等价注点 + 用例补两把钥匙（正反腿） | §9.4 / §9.9 |
+| TK9 | GREEN-BUT-MUTATED 0/0 | **RED-OK 1/1** | **RED-OK 1/1** | 起真带 `$ZBOT_HOME` 的子 JVM 探针（带假 `user.home` 笼子），正反两把 | §9.5 / §9.9 |
+| MB2 | GREEN-BUT-MUTATED 0/0 | **RED-OK 1/1** | **RED-OK 1/1** | 桥级"注册表有、桥没记住"现场（同名第二个桥实例 + 僵尸槽 + 旁观 server） | §9.6 / §9.9 |
+| MB3 | PARTIAL 8/8 | PARTIAL 8/8（+3 条多红未点名，**故意不回填**） | **PARTIAL 8/8（+3 条多红未点名）** | **不动**（工单明写"保留 PARTIAL、不硬凑"），只把因果写明 | §9.7 / §9.9 |
+| TK11 | PARTIAL 13/13 | **RED-OK 17/17** | **RED-OK 17/17** | 差集机械补进期望集（4 条，每条注明是哪一跑钉的） | §9.8 / §9.9 |
+
+> R2 那一栏是交付台账（`LEDGER.tsv`，md5 `90dda63c…`）的 `named_hit/named_expected` 原文。
+> **另外 14 行（本棒没碰的）在 R2 全部仍是 RED-OK 且点名全中**（TS1 1/1、TS2 2/2、TS3 2/2、TS5 2/2、TS6 3/3、
+> TK1 4/4、TK2 6/6、TK6 1/1、TK8 1/1、TK10 1/1、MB1 1/1、E1 3/3）⇒ 本棒补的网没有把上一棒的网碰坏。
 
 tally 并排（原账不许覆盖）：
 ```
 本棒前：RED-OK 14 / PARTIAL 4 / GREEN-BUT-MUTATED 3 / BROKEN 0        （21 个变异体，§2 交付态那一跑）
 R1 取证跑：RED-OK 17 / PARTIAL 4 / GREEN-BUT-MUTATED 0 / BROKEN 0     （11:08:50，logs/LEDGER_R1.tsv，md5 7258d957…；
               仍 PARTIAL 的 4 条 = TK3（期望集宽了 1 条，§9.3）+ TK4/TK7（本棒新用例的多红未点名，§9.1.1）+ MB3（不回填，§9.7））
-本棒后：待填                                                          （R2 交付跑，§9.9.6）
+本棒后：RED-OK 20 / PARTIAL 1 / GREEN-BUT-MUTATED 0 / BROKEN 0        （R2 交付跑 11:34:53，LEDGER.tsv md5 90dda63c…，
+              剩下那 1 条 PARTIAL = MB3，工单明写保留；原文核对见 §9.9.6）
 ```
 
 ### 9.1.1 连带影响：本棒新写的用例让另外两条从 RED-OK 变成"多红未点名"
@@ -865,6 +870,11 @@ grep -rn "assert[A-Za-z]*(Toolsets\.\|assert[A-Za-z]*(Toolkit\.\|assert[A-Za-z]*
 ⇒ 这是**量具的账**（期望集写宽了），不是产品的红；判定文本与注点语义一字未改，只把没出处的那条摘掉。
 **摘名发生在 R1 之后、R2（交付跑）之前**，见 §9.9.1 的两轮口径。
 
+判定：`PARTIAL 3/7`（上一棒，注点还在 accessor 上）⇒ R1 `PARTIAL 4/5` ⇒ **R2 交付跑 `RED-OK 4/4`**
+（`LEDGER.tsv` TK3 行：`named_expected=4 / named_hit=4`、`tests_that_went_red` = 上面那 4 条、note 无"多红未点名"；
+mvn 原文 `logs/mut_TK3.log`：`Tests run: 527, Failures: 4`；还原取证 `injection_landed=yes(disk!=git show)`、`restored=ok`）。
+⇒ 这一条的红是**量具的账**，不是产品的问题：产品侧代际进缓存键这件事，R2 之后由 4 条有出处的用例判得住。
+
 ## 9.4 TK5 —— 等价变异的实测确认 + 换成不等价注点 + 用例补活猎物
 
 **先把上一棒那句"这是等价变异，不是测试没猎物"拿实跑证实**（不照抄推理）。
@@ -915,7 +925,7 @@ V2 本棒注点：        → if (content.length() <= (cap == ToolDescriptor.UNB
 
 判定：`GREEN-BUT-MUTATED 0/1` ⇒ **R1 取证跑 `RED-OK 1/1`**（`logs/LEDGER_R1.tsv` TK5 行：
 `named_expected=1 / named_hit=1 / tests_that_went_red=unboundedSentinelMeansNoTruncationAtAll / restored=ok`；
-mvn 原文 `r1_mut_TK5.log`：`Tests run: 527, Failures: 1`，红的就是这一条），R2 交付数见 §9.9.6。
+mvn 原文 `r1_mut_TK5.log`：`Tests run: 527, Failures: 1`，红的就是这一条），R2 交付跑（11:34:53，`LEDGER.tsv` md5 `90dda63c…`）判同 **RED-OK**，点名全中且零多红；核对原文见 §9.9.6。
 记账口径要留一句：**这条现在判的是"哨兵被当成零上限"这一种坏法**；
 "摘掉析取项"那一种仍是等价变异、仍不可判（§9.10(1)）。
 
@@ -943,7 +953,7 @@ mvn 原文 `r1_mut_TK5.log`：`Tests run: 527, Failures: 1`，红的就是这一
 mvn 原文 `r1_mut_TK9.log`：`Tests run: 527, Failures: 1`，红的正是
 `ToolkitResultCapTest.zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot`）。
 R1 之后 `~/.zbot` 三数当场复量 = `8` / `2dadaed0` / `690ddbc0`（§9.0.2 那行 + §9.9.5 注入前那一格）⇒
-子 JVM 那把假 home 笼子真的把溢出关在了临时根里。R2 交付数见 §9.9.6。
+子 JVM 那把假 home 笼子真的把溢出关在了临时根里。R2 交付跑（11:34:53，`LEDGER.tsv` md5 `90dda63c…`）判同 **RED-OK**，点名全中且零多红；核对原文见 §9.9.6。
 
 ## 9.6 MB2 —— 桥级"注册表有、桥没记住"的现场
 
@@ -968,7 +978,7 @@ R1 之后 `~/.zbot` 三数当场复量 = `8` / `2dadaed0` / `690ddbc0`（§9.0.2
 判定：`GREEN-BUT-MUTATED 0/0` ⇒ **R1 取证跑 `RED-OK 1/1`**（`logs/LEDGER_R1.tsv` MB2 行；
 mvn 原文 `r1_mut_MB2.log`：`Tests run: 527, Failures: 1`，红的正是
 `McpBridgeDeregisterTest.unregisterAllCleansSlotsTheBridgeNeverRecorded`，且**只有**这一条红 ⇒
-"拿记住的名字当结论"这一刀被这一条真判红，没有靠别的用例蒙）。R2 交付数见 §9.9.6。
+"拿记住的名字当结论"这一刀被这一条真判红，没有靠别的用例蒙）。R2 交付跑（11:34:53，`LEDGER.tsv` md5 `90dda63c…`）判同 **RED-OK**，点名全中且零多红；核对原文见 §9.9.6。
 
 ## 9.7 MB3 —— 保留 PARTIAL 的因果（工单明写"不硬凑"）
 
@@ -986,6 +996,12 @@ mvn 原文 `r1_mut_MB2.log`：`Tests run: 527, Failures: 1`，红的正是
   本棒**故意不回填 MB3 的期望集** —— 工单对这一行的指令是"保留 PARTIAL、把因果写明、不硬凑"。
   这与 TK11/TK4/TK7 的机械补集是两种处理，**差别来自工单指令，不是来自读数**；
   哪些用例额外红了，R2 台账的 note 列原样挂着（`| 多红未点名: …`）。
+- R2 交付跑复核（原文）：`MB3 … PARTIAL 点名=8/8`、`tests_that_went_red` 11 条 =
+  8 条点名（含 `unregisteringIsNotStubOverwrite`、`oldServerToolNamesAreGoneAfterUnregisterInsideTheSameJvm`、
+  `unregisterLeavesNoPlaceholderBehindInAnyListView`）+ 3 条未点名（`bridgeOnlyNukesItsOwnToolset`、
+  `serverNamesWithDashesGetUnambiguousToolsets`、`unregisterAllCleansSlotsTheBridgeNeverRecorded`）；
+  mvn 原文 `logs/mut_MB3.log`：`Tests run: 527, Failures: 11`；差集复算 `ROWS_WITH_DELTA=1`（全表只剩这一行有差集，§9.9.6）。
+  ⇒ 记账口径不变：**这 3 条多红本棒知道是哪三条、为什么红（都是"留桩占名额/占清单"这一族），但按工单不回填。**
 
 ## 9.8 TK11 —— 差集机械补进期望集
 
@@ -1002,7 +1018,7 @@ TK11 的期望集从 13 条补到 17 条，**每一条补进来的都来自实�
 判定：`PARTIAL 13/13` ⇒ **R1 取证跑 `RED-OK 17/17`**（`logs/LEDGER_R1.tsv` TK11 行，`named_expected=17 / named_hit=17`、
 note 里已无"多红未点名"；mvn 原文 `r1_mut_TK11.log`：`Tests run: 527, Failures: 5, Errors: 12` ⇒ 5+12=17，
 与台账 17 条红逐一对上，`Errors` 是 owner 校验抛的 `IllegalStateException` 而不是断言失败，判定按具名 testcase 取，
-不按 mvn 退出码取）。R2 交付数见 §9.9.6。
+不按 mvn 退出码取）。R2 交付跑（11:34:53，`LEDGER.tsv` md5 `90dda63c…`）判同 **RED-OK**，点名全中且零多红；核对原文见 §9.9.6。
 
 
 ## 9.9 收尾重出（杠② 全量 21 个 / 杠① 串行三跑 / 杠③ 全量三阶段 / 杠④ 三数）
@@ -1083,23 +1099,89 @@ BASE13027f4=465
 
 ### 9.9.4 杠③ —— 真进程三阶段全量重跑一次（动了测试与一行注释 ⇒ 结论要在新字节上重出）
 
+命令与位置（本树、`ZBOT_HOME` 指向临时 profile，真 `~/.zbot` 只读数不写）：
 ```
-〔待填：p20b_e2e.py 全量汇总行原文 + 三段起止时刻 + rc〕
+$ cd /private/tmp/zbot-wt-p20b && python3 -u _doc/acceptance/p20b/p20b_e2e.py   # 三阶段一次跑完
+控制台：start 2026-09-26 11:34:53 → rc=0 end 2026-09-26 11:36:00（`~/.cache/zbot-p17/p20d/gate_console.log`）
+原文日志：`_doc/acceptance/p20b/logs/p20d_e2e_full.log`
 ```
-M4/M5 的裁决结论**沿用 §3.4 不改**（工单明写"这三段结论都不要动"）；本节只重出"在新字节上仍然 PASS"。
+汇总行原文：
+```
+== ~/.zbot 跑前: 8 项 {'config.properties': '2dadaed0', 'state.db': '690ddbc0'}
+== 阶段 toolsets (home=/var/folders/…/zbot-p20b-e2e-tf627czi)
+  P0 toolsets 阶段驱动退出码 0                                      PASS rc=0 TRACE	PHASE_RETURNED=toolsets +30ms
+== 阶段 cap (home=…tf627czi)
+  P0 cap 阶段驱动退出码 0                                           PASS rc=0 TRACE	PHASE_RETURNED=cap +50ms
+== 阶段 mcp (home=…tf627czi)
+  P0 mcp 阶段驱动退出码 0                                           PASS rc=0 TRACE	PHASE_RETURNED=mcp +60620ms
+== ~/.zbot 跑后: 8 项 {'config.properties': '2dadaed0', 'state.db': '690ddbc0'}
+== 合计 38 条判定，PASS=38 FAIL=0
+```
+⇒ 三阶段 **38/38 PASS、0 FAIL**，跑在 HEAD `1c13c0e`/`1c1737d` 之后的同一批字节上（`src` 字节 = `3ffe03f`，§9.9.1 那条 `0` 读数）。
+
+M4/M5 那两条（§3.4 已裁决完毕，**结论一字不改**，这里只重出"在新字节上仍然 PASS"的读数）：
+```
+  M4 首探的出处可指：取一次 schema ⇒ 该桥每个槽位探一次（alpha 发了 2 个工具就是 2 次），TTL 窗内再取一次一条都不许多（真时间） PASS alpha_tools=2 anchor=2 second_read=2 samples=[(58, True, 2), (1565, True, 2)]
+  M5 越过 TTL 后每轮都重探（失败不写缓存，斜率恰为该桥槽位数）、但宽限窗内一条都不摘（真时间）         PASS 30-60s 样本=20 条 probes=[4, 6, 8, 10, 12, 14] 每轮增量=[2] exposed={True}
+```
+与 §3.3/§3.4 的读数量纲一致（`anchor=2` = 该桥槽位数；M5 每轮增量恰为槽位数 2）。
+
+凭证红线三条（工单点名"负向断言要反向钉住 stub key 真进了产物"）原文：
+```
+  K0 尺的自证：125 字符合成诱饵被同一条正则抓到                                 PASS 抓到 1 个文件
+  K1 产物/临时 profile 里没有任何 60+ 字符 api.key（真 key 125 字符）泄漏      PASS
+  K2 同一条反向钉住活的猎物：stub key 就是 config.properties 里 minimax.api.key 的值（该文件确实在扫描面里，长度只报不印） PASS 临时 profile 命中 1 次/1 个 key 行，长度=17，产物侧 10 次/1 个 key 行
+```
+⇒ 真 key 一个字节都没读/没印/没复制；E2E 全程 `ZBOT_HOME=<临时目录>`。
 
 ### 9.9.5 杠④ —— `~/.zbot` 三数（跑后）
 
+命令：`ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/.zbot/state.db | cut -c1-8`
 ```
-〔待填：ls -A ~/.zbot | wc -l / md5 -q config.properties / md5 -q state.db〕
+杠① 三跑之后 / 注入之前（11:24:01）：8 / 2dadaed0 / 690ddbc0
+杠② R2 全量 21 个注入跑完之后        ：（脚本内 SRC_MD5_STABLE=yes，四个被测源文件与 git show 逐字节同）
+杠③ 真进程三阶段之后（11:36:00）    ：8 / 2dadaed0 / 690ddbc0
 ```
+⇒ 与 §0/§4/§9.0/§9.0.2 逐字同 ⇒ **本期四个实例加起来跑了 ~50 次注入 + 3 次真进程 E2E，真 `~/.zbot` 一个字节都没多**。
 
 ### 9.9.6 杠② tally 并排 + 台账自洽核对
 
+**并排（原账在前，本棒账在后，都不覆盖）**：
 ```
-〔待填：R2 的 cut -f2 LEDGER.tsv | tail -n +2 | sort | uniq -c 原文
-        与 cut -f5/-f7 LEDGER_RESTORE.tsv 的统计、LEDGER.tsv 行数、SRC_MD5_STABLE、控制台原文〕
+本棒前（§2 交付态那一跑，HEAD 84ca7b9 的台账）：
+  RED-OK 14 / PARTIAL 4 / GREEN-BUT-MUTATED 3 / BROKEN 0     （21 个变异体）
+R1 取证跑（11:08:50，期望集 = cde236b 那份；logs/LEDGER_R1.tsv，md5 7258d957555c642b9a93b2194b2f60da）：
+      RED-OK             17
+      PARTIAL            4
+      GREEN-BUT-MUTATED  0
+      BROKEN             0
+R2 交付跑（11:34:53，期望集 = 1c1737d 那份；LEDGER.tsv md5 90dda63ce5c8ae2ea6d9ca572602d779，
+                 同字节留档 logs/LEDGER_R2.tsv）：
+      RED-OK             20
+      PARTIAL            1
+      GREEN-BUT-MUTATED  0
+      BROKEN             0
 ```
+七条非 RED-OK 的落点：**TS4/TK3/TK5/TK9/TK11/MB2 六条进 RED-OK，只剩 MB3 一条 PARTIAL**
+—— 而 MB3 这一条是工单明写"保留 PARTIAL、不硬凑"的那一条（§9.7），它的 8 条点名全红、0 条点名没红。
+
+自洽核对（都是机器算的，命令见 §9.11）：
+```
+$ cut -f2 LEDGER.tsv | tail -n +2 | sort | uniq -c
+   1 PARTIAL
+  20 RED-OK
+$ awk 'END{print NR-1}' LEDGER.tsv            ⇒ 21 行
+$ awk 'END{print NR-1}' LEDGER_RESTORE.tsv    ⇒ 21 行
+$ cut -f5 LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c   ⇒ 21 yes(disk!=git show)   （21 把注入全部真进盘，没有 no-op）
+$ cut -f7 LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c   ⇒ 21 ok                     （21 次还原后与 git show 逐字节同）
+控制台尾：SRC_MD5_STABLE=yes / rc=0（`[r2 attempt 1] rc=0 end 2026-09-26 11:34:53`）
+差集复算（LEDGER.tsv 的 tests_that_went_red 与 p20b_mutation.py 的 MUTANTS 期望集做集合差）：
+  MB3 PARTIAL 未点名红= bridgeOnlyNukesItsOwnToolset,serverNamesWithDashesGetUnambiguousToolsets,unregisterAllCleansSlotsTheBridgeNeverRecorded | 点名没红= -
+  ROWS_WITH_DELTA=1
+```
+⇒ **除 MB3 之外，20 行都是"点名的全红 + 一个都没多红"**；TK3 收窄之后 4/4 全红、TK4 2/2、TK7 5/5 全对上。
+还原取证列（`restored`）21 行全 `ok` ⇒ §2.3 那笔"标签反了"的账没在本期重犯。
+
 
 ## 9.10 本棒仍未覆盖的（别当成做了）
 
@@ -1135,11 +1217,18 @@ P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20d_tk5_equiv_probe.py       
 P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20d_tk5_equiv_probe.py --only=V1
 
 # 杠② R1（取证跑，期望集 = cde236b 那份）与 R2（交付跑）
-P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20b_mutation.py                  # console: logs/p20d_r1_console.log
-P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20b_mutation.py                  # 同一份命令，期望集不同
+P20B_MVN_WAIT=420 python3 -u _doc/acceptance/p20b/p20b_mutation.py                  # R1：console ~/.cache/zbot-p17/p20d/r1_console.log
+P20B_MVN_WAIT=600 python3 -u _doc/acceptance/p20b/p20b_mutation.py                  # R2：同一份命令，期望集 = 1c1737d 那份；console …/r2_console.log
 cut -f2 _doc/acceptance/p20b/LEDGER.tsv        | tail -n +2 | sort | uniq -c
 cut -f5 _doc/acceptance/p20b/LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c
 cut -f7 _doc/acceptance/p20b/LEDGER_RESTORE.tsv | tail -n +2 | sort | uniq -c
+# 台账里"哪几行挂着多红未点名"（§9.9.2 的那三行就是这么数出来的，不是读出来的）
+awk -F'\t' 'NR>1 && $6 ~ /多红未点名/ {print $1, $2}' _doc/acceptance/p20b/logs/LEDGER_R1.tsv
+# 逐行点名/命中对照（§9.1 表里 R2 那一栏的取数命令）
+awk -F'\t' 'NR>1 {print $1" | "$2" | "$4"/"$3}' _doc/acceptance/p20b/LEDGER.tsv
+
+# 杠①/杠③/杠④ 一条链串行跑完（本棒第三实例用的就是这份，无并发 mvn）：
+bash ~/.cache/zbot-p17/p20d/chain3.sh    # 控制台 …/gate_console.log（杠①③④）与 …/r2_console.log（杠②）
 
 # 差集复算（哪一行了红、哪一条没被点名 —— 机器算，不是我读印象）
 python3 - <<'PY'
