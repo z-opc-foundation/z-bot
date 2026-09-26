@@ -109,6 +109,10 @@ public class BotAgent {
 
     private final BotConfig config;
     private final LlmProvider provider;
+    /** P26：本次任务累计的 cache 读命中（provider 报了多少就记多少，无 cache 字段 ⇒ 0）。 */
+    private final java.util.concurrent.atomic.AtomicLong CACHE_READ = new java.util.concurrent.atomic.AtomicLong();
+    /** P26：本次任务累计的 cache 写命中。 */
+    private final java.util.concurrent.atomic.AtomicLong CACHE_WRITE = new java.util.concurrent.atomic.AtomicLong();
     private final String providerCode;
     private final String model;
     private final Toolkit toolkit;
@@ -189,6 +193,23 @@ public class BotAgent {
         this.budgetLedger = new BudgetLedger(this.context.budget());
         this.provider = b.provider != null ? Builder.wrapResilient(b.provider, b.config)
                 : Builder.wrapResilient(LlmRouter.create(b.config.activeProvider()), b.config);
+        // P26：换模型降级时重建在飞的 system 上下文 + 重置本侧记账（压缩侧计数需 context/ 给接口，见 §未做）
+        if (this.provider instanceof ResilientLlmProvider) {
+            ((ResilientLlmProvider) this.provider).setModelFallbackHook(
+                    new ResilientLlmProvider.ModelFallbackHook() {
+                        @Override
+                        public com.zifang.z.agent.kernel.llm.ChatCompletionsRequest rebuildContext(
+                                String fromModel, String toModel,
+                                com.zifang.z.agent.kernel.llm.ChatCompletionsRequest inFlight) {
+                            return BotAgent.this.rebuildForModel(fromModel, toModel, inFlight);
+                        }
+
+                        @Override
+                        public void resetCompressionState(String fromModel, String toModel) {
+                            BotAgent.this.resetModelSwitchState(fromModel, toModel);
+                        }
+                    });
+        }
         if (b.contextEngine != null) {
             this.compressor = b.contextEngine;
             this.summarizer = b.summarizer;
@@ -383,6 +404,12 @@ public class BotAgent {
     }
 
     private void recordUsage(IterationBudget budget, ChatCompletionsResponse response) {
+        // P26：cache 维度先归一再累加（kernel 目前不透传 cache 字段 ⇒ 恒为 0，见 EVIDENCE §0.8/§5）
+        com.zifang.z.bot.llm.ModelUsage.Record usage = com.zifang.z.bot.llm.ModelUsage.fromResponse(response);
+        if (usage != null) {
+            CACHE_READ.addAndGet(usage.getCacheReadTokens());
+            CACHE_WRITE.addAndGet(usage.getCacheWriteTokens());
+        }
         // kernel 会把缺失的 usage 归一成 TokenUsage.empty()（全 0），所以不能只判 != null，
         // 否则网关不回传 usage 时（如本地 bench 代理）估算分支永远进不去、压缩阈值永远不触发。
         boolean hasUsage = response != null && response.getUsage() != null
@@ -1580,7 +1607,65 @@ public class BotAgent {
             return;
         }
         String model = config == null ? null : config.getModel();
-        store.recordUsage(sessionManager.getCurrentSessionId(), model, promptTokens, completionTokens, apiCalls);
+        // P26：cache 读/写命中随本笔账一起交给 store（列在位才落库，见 StateStore#recordUsage）。
+        long cacheRead = takeAccumulated(CACHE_READ);
+        long cacheWrite = takeAccumulated(CACHE_WRITE);
+        store.recordUsage(sessionManager.getCurrentSessionId(), model, promptTokens, completionTokens, apiCalls,
+                Long.valueOf(cacheRead), Long.valueOf(cacheWrite));
+    }
+
+    private static long takeAccumulated(java.util.concurrent.atomic.AtomicLong counter) {
+        long v = counter.get();
+        counter.set(0L);
+        return v;
+    }
+
+    /** P26 降级链：换到 {@code toModel} 时重建在飞的 system 上下文（口径按新模型重算）。 */
+    private com.zifang.z.agent.kernel.llm.ChatCompletionsRequest rebuildForModel(
+            String fromModel, String toModel,
+            com.zifang.z.agent.kernel.llm.ChatCompletionsRequest inFlight) {
+        if (inFlight == null || toModel == null) {
+            return inFlight;
+        }
+        // system 上下文按新模型重算：工具清单/记忆块口径不变，但系统提示里点名的是当前模型
+        String systemPrompt = memory.getSystemPrompt();
+        java.util.List<com.zifang.z.agent.kernel.message.Msg> msgs = new ArrayList<com.zifang.z.agent.kernel.message.Msg>();
+        for (com.zifang.z.agent.kernel.message.Msg m : inFlight.getMessages()) {
+            if (m == null) {
+                continue;
+            }
+            if (com.zifang.z.agent.kernel.types.MessageRole.SYSTEM == m.getRole()
+                    && systemPrompt != null && !systemPrompt.isEmpty()) {
+                msgs.add(Msg.system(systemPrompt));
+            } else {
+                msgs.add(m);
+            }
+        }
+        int maxTokens = inFlight.getMaxTokens() <= 0 ? configMaxTokens() : inFlight.getMaxTokens();
+        LOG.warn("[BotAgent] 降级链 {} -> {}：system 上下文已重建（{} 条消息，maxTokens={}）",
+                fromModel, toModel, msgs.size(), maxTokens);
+        return new com.zifang.z.agent.kernel.llm.ChatCompletionsRequest(toModel, msgs, inFlight.getTools(),
+                inFlight.getTemperature(), inFlight.getTopP(), maxTokens, inFlight.isStream(),
+                inFlight.getProviderParams());
+    }
+
+    /** P26 降级链：换模型后清掉本侧按旧模型口径攒下的字符估算与 cache 累加。 */
+    private void resetModelSwitchState(String fromModel, String toModel) {
+        lastRequestChars = 0;
+        CACHE_READ.set(0L);
+        CACHE_WRITE.set(0L);
+        // CompressorEngine 的 compressCount 没有对外重置口（context/ 归 w6-p14），
+        // 这里只能把"换模型 ⇒ 旧压缩账作废"记进日志；接口需求见 _doc/acceptance/p26/EVIDENCE.md §11。
+        LOG.warn("[BotAgent] 换模型 {} -> {}：本侧字符估算已清零；压缩计数重置待 context/ 提供 reset 接口",
+                fromModel, toModel);
+    }
+
+    private int configMaxTokens() {
+        try {
+            return config == null ? 0 : config.getMaxTokens();
+        } catch (RuntimeException e) {
+            return 0;
+        }
     }
 
     // ===== 装配 =====
@@ -1782,8 +1867,11 @@ public class BotAgent {
                 return provider;
             }
             LlmProvider pooled = KeyPoolLlmProvider.wrap(provider, config.activeProvider());
+            // P26：退避/看门狗策略走自家 RetryPolicyConfig（llm.retry.* / llm.stream.*），
+            // 底座指数档首值沿用 BotConfig 已有的 retry.backoff.ms，不抄第二份。
             return new ResilientLlmProvider(pooled, config.getRetryMaxAttempts(),
-                    config.getRetryBackoffMs(), config.getFallbackModels());
+                    config.getRetryBackoffMs(), config.getFallbackModels(),
+                    com.zifang.z.bot.llm.RetryPolicyConfig.of(config, null, config.getConfigDir()), null);
         }
 
         /**
