@@ -843,7 +843,7 @@ p25 `checks=19 pass=19 fail=0 llm_hits=1 result=OK`、p26 `scenes=10 failed_chec
 各截到 28 字符、两边共用 `gfmt1:cflag=4b00:iflag=2b02:` 前缀 ⇒ 从日志里看不出差在哪个 flag。
 这是 p11b 自己的取证缺陷，下一棒要先把差值按 token 打印出来再判它是不是产品问题。
 `missing=3` 全部是同一件事：`E2E_MISSING p28（无 harness ⇒ 杠③ NO-RUN）` —— P28 至今没有 E2E 尺，
-不许读成"已通过"。
+不许读成"已通过"。（**此句在 21:39 已被下一节作废**：P28 的杠③ 现在有数了，见 §8.11。）
 
 **杠④**：`B4 entries=8 cfg=2dadaed0 db=690ddbc0` 在杠① 两遍的 t0/t_end、杠③ 的 t0/三个中点/tend
 全部逐格相同；真 key 全程只量长度（125），值未被读取。
@@ -859,7 +859,42 @@ p25 `checks=19 pass=19 fail=0 llm_hits=1 result=OK`、p26 `scenes=10 failed_chec
   仍活着（p16/p17/p18/p23 的 profile 目录，端口 61003/61004/61006/61007/61016/61017/62618…），
   这一轮 load average 8—15 有一部分是它们贡献的 ⇒ 负载型假红的源头之一在 harness 的收尾，不在产品。
 
-**待收口**：p28c（补 `p28_e2e.py`，让 P28 的杠③ 从 NO-RUN 变成有数）与 p19a（命令表单源多端，
-输入 `WIRING.md`/`ROUTES.tsv` 已在 main）两票已写好待派；P29 未开工；D-2 裁定、P12 §12.5 那 5 支
+**待收口**：~~p28c（补 `p28_e2e.py`，让 P28 的杠③ 从 NO-RUN 变成有数）~~ **已结**（见 §8.11）；
+p19a/p19b（命令表单源多端，输入 `WIRING.md`/`ROUTES.tsv` 已在 main）已由写手落在 `w14-p19`
+（`147389f`/`11e2d4f`/`bff2ccc`）**待主编复测并树**；P29 未开工；D-2 裁定、P12 §12.5 那 5 支
 部分覆盖变异、p27b 交下来的两条尺缺陷（0 字节锁走 `unlink` 接管、`p27_e2e.py` 不取锁）仍未动；
 `w2-p20` 永不并；内核 0.2.1 与 z-bot 0.3.0 发 Central 各需单独点头。
+
+## 8.11 第七期：P28 杠③ 有数了（09-26 21:39:55+0800，主编亲测）
+
+**这一节只做一件事：把 §8.10 里"P28 至今没有 E2E 尺"这句话作废，并给出作废它的读数。**
+
+量具 `_doc/acceptance/p28/p28_e2e.py`（承 p28a 台账 + p28b 的 SSE/LEDGER 面，我在其上修了 9 处自身失真，
+逐条归属见 `_doc/acceptance/p28/EVIDENCE.md` 的 P28-lead-3）。目标树 main、**三轮整跑**、身份逐轮重打：
+
+```
+ROUND_START|1|20:59:38|head=9884059|harness_md5=9e783bbc|tree_dirty=0
+ROUND_END  |3|rc=0|21:34:02|head=9884059|harness_md5=9e783bbc|tree_dirty=0   （三轮 rc 全 0，每轮 688s）
+E2E|run=lead_v3_r1 checks=30 pass=30 fail=0 llm_hits=1 serve_port=50709 result=OK
+E2E|run=lead_v3_r2 checks=30 pass=30 fail=0 llm_hits=1 serve_port=59260 result=OK
+E2E|run=lead_v3_r3 checks=30 pass=30 fail=0 llm_hits=1 serve_port=63989 result=OK
+```
+
+30 条 = A 组 7（真 tty/fd0）＋ S 组 12（SSE 线字节）＋ T 组 7（台账/路由/文档派生）＋ U 组 4（不变量与卫生）。
+**跨轮一致性**：BAR4 九行去 tag 后 `uniq -c` = 9 条同一串；BUCKET 九格 r1/r2/r3 两两 `diff` 为空；
+三轮 `^CHECK|` 名字集合 md5 相同。守卫有牙性的离线自证 `SELFCHECK_DONE|lines=21 rc=0`（含 5 条正向对照）。
+
+**杠④**（同一次运行里量，不是另起一遍）：`dir_count=8 cfg_md5_8=2dadaed0 db_md5_8=690ddbc0 key_len_only=125`
+在 3 轮 × t0/t1/t2 共 9 个时点逐字节相同；真 key 全程只量长度。
+
+**这尺没量到的，别读成"已过"**（P28-lead-4 全文）：D-P28-2（`POST /api/skill/push` 推的是拉、
+`HttpChannel.java:687` 的 `ok` 无条件写死、`BotAgent` 里 `pushSkill` 0 命中）**仍未裁定**——本尺故意不钉，
+钉它要先定"应当做什么"；`/api/commands` 当时 0 命中（P19 正在补）；D-P28-1 的 GET/POST 双口径未闭合；
+真 tty 人机体验 NO-RUN；每轮 688s 的构成**未归因**（我上一轮说的"非 chunked 一律等 socket 超时"被本轮
+自己的 `wall=` 读数证伪：最大只有 12.32s）。
+
+**顺带两笔环境账**：① 我的三轮没留 serve（收口 `ps | grep "[j]ar serve"` 0 命中）；② 仍有 5 支
+`ppid=1` 的 gateway/repl 活着（p16/p17/p18/p23 的 E2E 收尾缺陷），全部只绑 `127.0.0.1`，
+属别的会话 ⇒ 只记账不杀。③ 我自己的 `~/.cache/zbot-p28-lead/w_diff.sh` 首行硬
+`cd /private/tmp/zbot-wt-p28` —— 与 p25/p26/p27 那三支同一个病（把量具指向写手树），
+被 p19b 写手实测指出；在把它改成"从入参取树"之前，**它派生的任何数都不许进台账**。

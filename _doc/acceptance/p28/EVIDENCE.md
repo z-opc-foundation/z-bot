@@ -373,3 +373,99 @@ BAR4_T3 names=[".stty.bak", "config.properties", "cron", "memories", "models-cac
   无 `pip install`/`npm i`，无守护进程，未打真厂商 API。
 - 收口提交序列（自旧到新）：`311b970` → `406a542` → `114b37f`(merge main) → `c0b693a` → `5e3b6e1` →
   `d8f914e`(WIRING.md) → `e449dc6`(SSE 帧切分修 + LEDGER.tsv)。
+
+---
+
+# P28-lead（主编亲测）—— 杠③ 从 NO-RUN 变成有数
+
+本节只写我在**目标树 main** 上量到的东西。上文 §0/§1（p28a 的台账与 D-P28-1..3）、
+P28b 的 p28b-0..8 未改一字。
+
+## P28-lead-0 身份与现场（逐轮重打，不是一次性声明）
+
+```
+ROUND_START|1|20:59:38|head=9884059|harness_md5=9e783bbc|tree_dirty=0
+ROUND_END  |1|rc=0|21:11:06|head=9884059|harness_md5=9e783bbc|tree_dirty=0
+ROUND_START|2|21:11:06|head=9884059|harness_md5=9e783bbc|tree_dirty=0
+ROUND_END  |2|rc=0|21:22:34|head=9884059|harness_md5=9e783bbc|tree_dirty=0
+ROUND_START|3|21:22:34|head=9884059|harness_md5=9e783bbc|tree_dirty=0
+ROUND_END  |3|rc=0|21:34:02|head=9884059|harness_md5=9e783bbc|tree_dirty=0
+```
+
+`tree_dirty` 是 `git status --porcelain | wc -l` ⇒ 三轮全程量的是提交树；`harness_md5` 相同 ⇒ 三轮跑的是
+同一份尺的字节。每轮墙钟 688s（三轮到秒相同）。
+
+## P28-lead-1 三轮 tally（原文）
+
+```
+E2E|run=lead_v3_r1 checks=30 pass=30 fail=0 llm_hits=1 serve_port=50709 result=OK
+E2E|run=lead_v3_r2 checks=30 pass=30 fail=0 llm_hits=1 serve_port=59260 result=OK
+E2E|run=lead_v3_r3 checks=30 pass=30 fail=0 llm_hits=1 serve_port=63989 result=OK
+```
+
+30 条的构成按名字前缀数：A 组 7（真 tty/fd0 面）+ S 组 12（SSE 线字节面）+ T 组 7（台账/路由/文档派生面）
++ U 组 4（不变量与卫生）。`llm_hits=1` 是假供应商真收到过那一轮请求的计数，不是"打了真 API"。
+
+## P28-lead-2 有牙性复核（跨轮 + 离线）
+
+- **BAR4 九行**（3 轮 × t0/t1/t2）去掉 `tag=` 后 `sort | uniq -c` ⇒ `9` 条逐字节同一串：
+  `dir_count=8 cfg_md5_8=2dadaed0 db_md5_8=690ddbc0 key_len_only=125 names=[…]`（names 列实测就是那 8 个，
+  `.stty.bak` 与空 `cron` 都在，一个没删）。
+- **BUCKET 九格**：r1 vs r2、r1 vs r3 的 `diff` 都为空 ⇒ 文档派生尺的读数跨轮稳定，不是碰巧绿。
+- **CHECK 名集合**三轮 `md5 -q` 相同（`59706288…`）⇒ 没有"这轮少跑几条"。
+- **离线自证**（`~/.cache/zbot-p28-lead/selfcheck_v2.py`，直接喂三轮落盘的 `SSE_raw_wire.bin` 与真 `index.html`）：
+  `SELFCHECK_DONE|lines=21 rc=0`。其中 5 条是**正向对照**（证明"修完"没有把守卫修哑）：
+  `S4_regex_has_teeth_on_bare_newline`、`S4_regex_has_teeth_on_trailing_newline`、
+  `S0b_accepts_both_loopbacks`、`S0b_rejects_wildcard_and_lan`、`T7_expectation_still_rejects_a_wrong_header`。
+
+## P28-lead-3 前一轮 `lead_r1` 那 10 条红的归属
+
+结论先说：**10 条全是量具自身的失真，没有一条指到产品行为**；而且其中 3 条我第一版给的成因是**编的**
+（见第 7/8/12 行）。"当时读数"抄自 `~/.cache/zbot-integrate/p28r1.log`。
+
+| # | CHECK | 当时读数（原文片段） | 复算判定 | 修法 |
+|---|-------|--------------------|---------|------|
+| 1 | S0b | `sockets=31 offenders=['rapportd 632 … TCP *:49236 (LISTEN)']` | `lsof` 没加 `-a` ⇒ `-p` 与 `-iTCP` 成 OR，把**别人进程**的监听塞进被审集（`sockets=31` 里 30 条不是我的） | `lsof -nP -a -p %d -iTCP -sTCP:LISTEN`；违规只看地址列 |
+| 2 | S4 | `frames=3 解析出=0 … has_cr=False` | 切帧正则用 `$`（python 里它 additionally 匹配"最后一个 `\n` 之前"）⇒ 合法帧被判不匹配 | 锚 `\Z`；另加两条对照：data 里出裸换行必不匹配、结尾多一个 `\n` 必不匹配 |
+| 3 | S5 | `vocabulary=10 seen=[] unknown=[]` | 依赖 #2 的解析 ⇒ 输入为空；"空输入判无违规"是假绿形状，它当时报红是另一处口径 | 先修 #2；解析数为 0 时 FATAL，不再 PASS |
+| 4 | S6 | `final=[] 帧数=3` | 同因（同一个解析） | 同上 |
+| 5 | S7 | `done='' step_frames=0 final_len=0` | done 帧的数字当时拿**我自己拼的字符串**当被测对象，且正则组索引取错 | `served_text = fake.hits[-1]["content"]`，断言 `count/total` 等于**服务端真吐出的字节**的长度 |
+| 6 | T1 | `disk C=['/clear', '/confirm', '/help', '/new', '/status', …]` | 抓盘上清单的函数在收尾行 **break 在 append 之前** ⇒ 广告清单整段丢掉 `/exit`（最后一条广告和 `` `) `` 同在 `index.html:1197` 一行） | `p28_e2e.py:448-453`：遇 `` `) `` 先 `seg.append(line)` 再 `break`（先收进行再停） |
+| 7 | T2 | `drift=['3.4 web 广告了但没有分支接住: WIRING=1 重算=0', …]` | **文档是对的、尺错**（09-26 21:38 复算）：`grep -n "exit" web/index.html` 全文件只 1 处命中＝`:1197` 的 `/help` 文案；`git log -S"cmd === '/exit'" -- <该文件>` **0 命中** ⇒ 历史上任何一版都没有 `/exit` 分支 | 修 #6 后 `wiring=1 recomputed=1 members=/exit` 自然对上 |
+| 8 | T3 | `drift=["3.4 …: 文档=['/exit'] 重算=[]"]` | 同因（同一次抓取坏） | 同上 |
+| 9 | T7 | `offenders=["/bot/stop code=405 allow='POST, OPTIONS' declared=['POST']", …]` 9 条 | 期望值当时用 `endswith` 贴在**状态行**上比 ⇒ 方法集合真一致也判红 | `allow == sorted(set(declared) | {"OPTIONS"})`；再加逐路径 `OPTIONS` 必须 204 的探针（`opt_offenders`） |
+| 10 | U4 | `cfg=/Users/zifang/.cache/…/lead_r1/cfg files=['config.properties', 'cron', …]` | 判定式靠"临时 profile 里没有 `state.db`"这种偶然形状 ⇒ 换成真家目录同样能过，等于没测 | `real_cfg != real_home and not real_cfg.startswith(real_home + os.sep)` ＋ stub-key/isfile/isdir 合取 |
+
+另外两条不在那 10 条里、但同属量具缺陷，一并记账：
+
+- **11｜崩在起跑线**：`p28e2e_lead_r1.log` 尾部 `E2E-EXC NameError("name 'free_port' is not defined")`
+  （`:614`）⇒ A 组之后 S/T/U 一条都没跑。这条不是"红"，是**整跑没发生**，比红更该记。
+- **12｜我上一轮的归因是编的**：我把 T2/T3 的红写成"`web/index.html` 里 `/exit` 的分支被补上了 ⇒ 文档漂"，
+  并把这句话转进了 p19 的票。复算见第 7 行：那个分支从来不存在。错因已在 p19 第二张票的 §1′ 里撤回。
+
+## P28-lead-4 这尺**没有**量到的（不许把 30/30 读成"P28 没问题"）
+
+- **D-P28-2 未裁定，本尺故意不钉**：钉它要先定"`POST /api/skill/push` 应当做什么"，那是裁定不是测量。
+  复算三条（09-26 21:38，HEAD `9884059`）：`HttpChannel.java:412-413` 两条路由共用同一个 `skillSyncResult()`；
+  `:685-692` 里 `resp.put("ok", true)` 在 `:687` **无条件**写死，`:688` 的 `installed` 来自
+  `agent.syncSkillsFromCenter()`（下行拉取）；`grep -c pushSkill …/agent/BotAgent.java` = `0` ⇒ 没有上行能力。
+- **`/api/commands` 仍是"不存在"**：`grep -rn "api/commands" --include='*.java' --include='*.html' z-bot-core/src | wc -l` = `0`。
+  归 P19（写手在 `w14-p19` 已落 `147389f` 补 WEB/ACP 消费端 + 一致性守卫、`11e2d4f` 让 ACP 只对已 initialize 的连接发）。
+- **D-P28-1 的双方法面没闭合**：`index.html:1391` 用 GET、`HttpChannelTest.java:427` 用 POST、
+  `HttpChannel.java:278/283` 两行都登记。本尺 T5/T6/T7 只保证"登记的都活着、方法不匹配必 405＋Allow"，
+  不裁哪一个口径是对的。
+- **真 tty 人机体验**：NO-RUN（沿用 P28b-4 的理由：A 组是 `openpty` 驱动的机器判词，不是人眼验收）。
+- **688s/轮的构成没有逐项时间戳**。我上一轮口头归因"非 chunked 响应一律等到 socket 超时 ⇒ 慢"，
+  本轮被自己的读数证伪：r3 全部 `wall=` 里最大只有 `12.32s`（A7 那条假 stty），不存在 60s 级等待 ⇒
+  慢的成因**未归因**，不许作为下一次归因的输入。
+
+## P28-lead-5 环境账
+
+- 三轮各自 `U3 serve_process_reaped PASS`，收口时 `ps -eo args | grep "[j]ar serve"` **0 命中** ⇒ 本尺没留 serve。
+- 此刻仍在跑的 5 支**不是本尺漏的**：`3657/3689/3699/12799`（gateway，profile 分别指向
+  `_doc/acceptance/p16/out/runtime/A-profile-r1`、`/tmp/p17-e2e-*`、`zbot-p18-e2e-*`、p16 profile）、
+  `4026`（repl，profile 指向 `~/.cache/zbot-p23-lead/e2e/…`）；全部 `ppid=1`、etime 2h30m—3h49m、
+  **全部只绑 127.0.0.1**（`lsof -nP -a -iTCP -sTCP:LISTEN` 逐条可查：61003/61004/61006/61007/61014/61015/61016/62618/62619）。
+  它们是 p16/p17/p18/p23 那几支 E2E 收尾缺陷留下的，属于别的会话 ⇒ **只记账，不杀**（杀别人的进程不在我的授权里）。
+- 持久产物在 `~/.cache/zbot-p28-lead/e2e_p28c/lead_v3_r{1,2,3}/` 与 `~/.cache/zbot-integrate/p28v3r{1,2,3}.log`；
+  `.log` 被 gitignore ⇒ 决定性读数原样贴进本节。
