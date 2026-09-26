@@ -8,6 +8,8 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
@@ -109,24 +111,41 @@ public class CompressorEngineTest {
         final AtomicInteger realRuns = new AtomicInteger();
         final CountDownLatch started = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
+        final AtomicBoolean summaryReturned = new AtomicBoolean(false);
         ContextEngine.Summarizer slowSummarizer = msgs -> {            realRuns.incrementAndGet();
             started.countDown();
             try {
-                release.await();
+                // 有界等待（P14b 测试卫生）：主线程若在中途断言失败没走到 release，
+                // 这个 worker 线程也必须在有限时间内自己收身，不许留活线程拖死 JVM。
+                release.await(30, TimeUnit.SECONDS);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
             }
+            summaryReturned.set(true);
             return "锁内摘要";
         };
         List<Msg> history = history(20);
         Thread first = new Thread(() -> e.compress(history, slowSummarizer));
         first.start();
-        started.await();
-        // 第一个还在压缩时第二个进来 → 拿原样历史，不阻塞、不重复压缩
-        List<Msg> second = e.compress(history, sum("不该被用到"));
+        // 有界等待 + 显式判词（P14b 修永挂）：旧代码这里是不带超时的 started.await()，
+        // 一旦「门被摘掉」（如 threshold 钉成 1.0）摘要器永不被调，整个量具挂死在这里
+        // （存档 ~/.cache/zbot-p14-lead/m2_hang_jstack.txt）。现在 30 s 内必报红。
+        boolean entered;
+        List<Msg> second = history;
+        try {
+            entered = started.await(30, TimeUnit.SECONDS);
+            assertTrue("摘要器 30 s 内没被调到 = 压缩门根本没开（阈值/门被改死的典型症状）。引擎自述: "
+                    + e.describe(), entered);
+            // 第一个还在压缩时第二个进来 → 拿原样历史，不阻塞、不重复压缩
+            second = e.compress(history, sum("不该被用到"));
+        } finally {
+            release.countDown();
+            first.join(30_000L);
+        }
+        assertFalse("release 之后第一线程必须收身（还活着=压缩路径里有不归还的等待）",
+                first.isAlive());
+        assertTrue("第一线程必须真的走完了摘要调用", summaryReturned.get());
         assertSame(history, second);
-        release.countDown();
-        first.join(5000);
         assertEquals("真实摘要只跑一次", 1, realRuns.get());
     }
 
