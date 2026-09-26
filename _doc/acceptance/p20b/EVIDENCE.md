@@ -122,6 +122,26 @@ $ git diff --name-only c3ab4da HEAD -- '*/src/*' | wc -l
 **别的仓**的 maven 进程（不是编队里那三支 z-bot worktree）。它与我不同 reactor、不同 `target/`，
 只共享 CPU；三跑都在 15s 内完成，没有被迫放宽任何东西。
 
+### 1.2 交付态三跑（杠②③ 全部改动落库之后，HEAD `84ca7b9`）
+
+同一命令，跑前删报告；日志 `logs/gate1_run{4,5,6}.log`：
+```
+rm -rf z-bot-core/target/surefire-reports && mvn -o test
+```
+
+| 跑 | 汇总行原文（行号） | BUILD SUCCESS | rc | Total time |
+| --- | --- | --- | --- | --- |
+| run4 | `392:[INFO] Tests run: 525, Failures: 0, Errors: 0, Skipped: 0` | 1 | 0 | `15.681 s` |
+| run5 | `373:[INFO] Tests run: 525, Failures: 0, Errors: 0, Skipped: 0` | 1 | 0 | `14.753 s` |
+| run6 | `373:[INFO] Tests run: 525, Failures: 0, Errors: 0, Skipped: 0` | 1 | 0 | `14.486 s` |
+
+⇒ 6 跑（§1 的 3 跑 + 交付态 3 跑）读数为 525/0/0/0，中间夹着 22 次注入跑与 2 次全量 E2E，
+**产品码与测试码本棒一字未动**：
+```
+$ git diff --name-only c3ab4da HEAD -- '*/src/*' | wc -l
+0
+```
+
 
 ## 2. 杠② —— 注入自证（p20b_mutation.py → LEDGER.tsv）
 
@@ -434,7 +454,7 @@ ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/
 | 杠③ 全量 E2E 跑前（04:0x，原文） | `== ~/.zbot 跑前: 8 项 {'config.properties': '2dadaed0', 'state.db': '690ddbc0'}` |
 | 杠② 全量注入跑到第 9 个变异体时（04:03:00，即 ~10×525 条单测已经跑过之后） | `n=8 cfg=2dadaed0 db=690ddbc0` |
 | 杠③ 全量 E2E 跑后（同一次跑的收尾，原文） | `== ~/.zbot 跑后: 8 项 {'config.properties': '2dadaed0', 'state.db': '690ddbc0'}` |
-| 收工前（最后再量一次，原文见本节末尾） | `8` / `2dadaed0` / `690ddbc0` |
+| 收工前（全部门跑完、`git status --porcelain` 已空之后） | `n=8 cfg=2dadaed0 db=690ddbc0` |
 
 E2E 自己的两条判定（`p20b_e2e.py` 的 `finally` 里，跑没跑红都要量）：
 ```
@@ -630,4 +650,16 @@ cd /Users/zifang/.hermes/hermes-agent && git rev-parse --short HEAD && grep -cE 
 # §5.1 的开关与栈取证（有界 50 s；命令原文见 §5.1）
 git show c3ab4da:_doc/acceptance/p20b/mcp_stub_server.py | grep -c STUB_PRETTY     # 2
 ```
+
+### 8.1 交付物五件（工单口径）在库状态
+
+```
+$ git ls-files _doc/acceptance/p20b/
+```
+1. 产品代码 + 单测：`tool/Toolsets.java`（本期新建）+ `Toolkit.java` / `McpBridge.java` / `McpManager.java`
+   + 7 个新测试类，525 条全绿（§1）。**本棒对这些文件一字未改**（§1.2 的 `git diff` 读数为 0）。
+2. `_doc/acceptance/p20b/p20b_mutation.py` —— 21 个变异体，期望集跑前写死（`438ea50` 入库）。
+3. `_doc/acceptance/p20b/p20b_e2e.py`（+ `P20bToolDriver.java`、`mcp_stub_server.py`）—— 真进程三阶段 38 条判定。
+4. `_doc/acceptance/p20b/LEDGER.tsv`（21 行）+ `LEDGER_RESTORE.tsv`（21 行，还原取证）—— 均为脚本产物。
+5. 本文 `EVIDENCE.md`。
 
