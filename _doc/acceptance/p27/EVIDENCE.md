@@ -695,7 +695,7 @@ STATUS: **p27b 收口完成** —— 工单 §3 的 1—6 全部落到实测量�
 
 | 项 | 实测 |
 |---|---|
-| 分支 / HEAD | `w11-p27` @ **`44d9af6`**；链：`07f25a8`（前棒 wip）→ `558900b`（保存现场，前棒 4M+2?? 全进历史）→ `5d0fc25`（证伪 5 支 + §0.2/§5/§10）→ `44d9af6`（杠②③④ + 修两处尺的错） |
+| 分支 / HEAD | `w11-p27`；链：`07f25a8`（前棒 wip）→ `558900b`（保存现场，前棒 4M+2?? 全进历史）→ `5d0fc25`（证伪 5 支 + §0.2/§5/§10）→ `44d9af6`（杠②③④ + 修两处尺的错）→ **本节所在那一笔 = 收口时的 HEAD**（`git log -1 --format=%h`，本文件不自指哈希，免得每改一次就过期）；收口时 `git status --porcelain` 为**空** |
 | 现场 | `git status --porcelain` = **空**；`git status --porcelain -- z-bot-core/src/main z-bot-core/src/test` = **0 条** ⇒ 21 支变异零残留 |
 | committed `@Test` | `git grep -c '@Test' HEAD -- z-bot-core/src/test` 求和 = **789**（开工实测 784，本棒 +5 支证伪用例） |
 | 杠① | `mvn -o test` 全 reactor ×3 全绿：**789 / F0 E0 S0**，双尺（模块级求和 == 类级 `-- in` 求和）同数，socket 类错误 0；被外来 `pkill -f surefire` 杀掉的那一跑单列为环境事故（P27b-G1），**不记成间歇率**（§5） |
