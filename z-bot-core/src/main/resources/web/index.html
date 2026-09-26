@@ -1127,10 +1127,27 @@
             $confirmBar.classList.add('show');
         } else if (type === 'done') {
             removeTyping(typingId);
+        } else if (type === 'steer') {
+            // 服务端在中途插入了转向指令，界面必须显式回应，不能像旧版那样吞帧
+            removeTyping(typingId);
+            appendMsg('assistant', '🧭 已注入转向：' + stripPrefix(text, '[steer]'), 'steer');
+        } else if (type === 'compact') {
+            removeTyping(typingId);
+            appendMsg('assistant', '🗜 上下文压缩：' + stripPrefix(text, '[compact]'), 'compact');
         } else if (type === 'error') {
             removeTyping(typingId);
             appendMsg('assistant', '❌ ' + text, 'error');
+        } else {
+            // 未知事件名 = 服务端词汇表又长了而这里没跟上。宁可显式报出来，
+            // 也不要静默丢帧（静默丢弃正是 D-P28-3 的成因）。
+            removeTyping(typingId);
+            appendMsg('assistant', '❔ 未处理的事件 ' + type + '：' + text, 'error');
         }
+    }
+
+    // 事件帧的 data 带 "[name] " 前缀（服务端 HttpChannel#frame 约定），显示时脱掉。
+    function stripPrefix(text, prefix) {
+        return text.indexOf(prefix) === 0 ? text.substring(prefix.length).trim() : text;
     }
 
     function parseToolCall(data) {
@@ -1158,12 +1175,18 @@
             await loadStatus();
             appendMsg('assistant', '✅ 状态已刷新');
         } else if (cmd === '/tools') {
-            const tools = [
-                'echo, time, counter, health, sysinfo',
-                'read_file, write_file, exec, search',
-                'exec 高危命令需要 /confirm 审批'
-            ].join('\n');
-            appendMsg('assistant', '🔧 可用工具：\n' + tools);
+            // 工具表必须来自后端 /bot/tools（Toolkit 单源）。旧版在这里硬编码了五个工具名，
+            // 其中 exec/search 根本不在本实例的 Toolkit 里 —— 广告出去的字段没有兑现路径。
+            try {
+                const r = await fetch('/bot/tools');
+                const tools = await r.json();
+                const lines = tools.map(t => `  ${t.name} — ${t.description}`);
+                appendMsg('assistant', `🔧 本实例可用工具 ${tools.length} 个：\n` +
+                    (lines.length ? lines.join('\n') : '  （无）') +
+                    '\n高危工具需 /confirm 审批');
+            } catch (e) {
+                appendMsg('assistant', '❌ 读取 /bot/tools 失败：' + e.message, 'error');
+            }
         } else if (cmd === '/help') {
             appendMsg('assistant', `📋 命令列表：
 /new       — 新建会话
