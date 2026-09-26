@@ -785,7 +785,32 @@ def section_creds():
     # 才写的，所以扫不到它们自己的尾部 —— 那正是自锁的断点。真凭证要是泄了，
     # 一定是先落到本跑写的产物（out/llm-requests/、logs/e2e-*.log、out/profile-*/），
     # 那些都在面上；读数只是它们的转述，不当第二次扫描对象。
-    artifacts, skipped = [], []
+    def is_readings_dump(pth):
+        """结构判定：这份 json 是不是本量具自己写的「读数转述」。
+
+        只按形状认，不按文件名猜（G12 的教训：按名字排除既挡不住别的工具往
+        logs/ 落读数，也会随命名漂移）。形状 = 顶层恰好 only/checks/llm_calls/
+        home_before/home_after 五键，且 checks 每条恰好 name/status/detail/
+        section 四字段 —— 这是本文件 check() + main(--json) 与 p12_mutation.py
+        的写出形状；bot 运行期产物（out/llm-requests/*.headers.json、
+        out/profile-*/）不长这样。
+        """
+        if not pth.endswith(".json"):
+            return False
+        try:
+            with open(pth, encoding="utf-8") as fh:
+                d = json.load(fh)
+        except Exception:
+            return False
+        if not isinstance(d, dict) or sorted(d) != ["checks", "home_after", "home_before",
+                                                   "llm_calls", "only"]:
+            return False
+        cs = d["checks"]
+        return bool(cs) and all(isinstance(c, dict) and sorted(c) == ["detail", "name",
+                                                                     "section", "status"]
+                                for c in cs)
+
+    artifacts, skipped, readings = [], [], []
     for root, dirs, files in os.walk(HERE):
         dirs[:] = [d for d in dirs if d not in (".git",)]
         for f in files:
@@ -799,7 +824,18 @@ def section_creds():
                 touched_by_this_run = os.stat(pth).st_mtime >= RUN_START - 0.5
             except OSError:
                 touched_by_this_run = False
-            (artifacts if touched_by_this_run else skipped).append(pth)
+            if not touched_by_this_run:
+                skipped.append(pth)
+            elif is_readings_dump(pth):
+                # 连续两跑之间 mtime 只有 1s 粒度：上一跑收尾写的读数会和这一跑
+                # 的起跑撞进同一秒（实测 run1.json mtime=13:09:24 == run2 起跑
+                # 13:09:24，判据 st_mtime >= RUN_START-0.5 ⇒ 进窗），于是 K3 被
+                # **自己标题里的字面词 "minimax"** 钉成间歇假红。读数是真产物的
+                # 转述、且本跑是先扫后写（自锁断点），从来不是被扫对象 —— 这里把
+                # 转述请出面，被扫的 bot 运行期产物一个没少，判据没放松。
+                readings.append(pth)
+            else:
+                artifacts.append(pth)
     bearer, hits = set(), []
     for p in artifacts:
         try:
@@ -825,8 +861,10 @@ def section_creds():
           "扫了 %d 个运行期产物（本跑新建/改动过的；另有 %d 个本跑没碰过的既有文件不在面上）；"
           "见到的 key 值=%s" % (len(artifacts), len(skipped), sorted(bearer)), "creds")
     check("K3 运行期产物里不出现真配置的痕迹（grep minimax 或真 ~/.zbot 绝对路径）",
-          not hits, "扫描面=%d 个；命中=%s；本跑没碰过、故不在面上的既有文件=%s"
-          % (len(artifacts), hits, [os.path.relpath(x, HERE) for x in skipped][:6]), "creds")
+          not hits, "扫描面=%d 个；命中=%s；本跑没碰过、故不在面上的既有文件=%s；"
+          "未纳入扫描的 harness 读数文件=%s"
+          % (len(artifacts), hits, [os.path.relpath(x, HERE) for x in skipped][:6],
+             [os.path.relpath(x, HERE) for x in readings]), "creds")
 
 
 def re_iter(pattern, text):
