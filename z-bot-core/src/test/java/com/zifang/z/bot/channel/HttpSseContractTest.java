@@ -435,7 +435,12 @@ public class HttpSseContractTest {
                 pending.write(c);
                 byte[] b = pending.toByteArray();
                 if (endsWithBlankLine(b)) {
-                    return Frame.of(new String(b, 0, b.length - 1, StandardCharsets.UTF_8));
+                    // p28a 原样是 `new String(b, 0, b.length - 1, ...)`：把帧分隔符的最后一个
+                    // \n 当"切分用的开销"砍掉了。可那一个字节正是服务端
+                    // HttpChannel#frame() 真正写上线的收尾（"event: X\ndata: Y\n\n"），
+                    // 砍掉之后 :101 的逐字节等式在结构上不可能成立 ⇒ 该断言恒红，
+                    // 而且恒红的正是"帧到底有没有以空行结束"这一件事。
+                    return Frame.of(new String(b, 0, b.length, StandardCharsets.UTF_8));
                 }
                 if (b.length > 200000) {
                     throw new AssertionError("单帧超过 200KB，八成是帧分隔符没了");
