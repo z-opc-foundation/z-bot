@@ -1202,26 +1202,6 @@ $ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
 
 ### 8.13.9 浏览器层 `/help` 实输出 == `/api/commands` 的 web 段（09-27 04:16:01–04:18:47，主编亲测）
 
-`P28-lead-11` 的结论搬到这一层：**真进程 + 真页面 + 真 `keydown` 监听链路**（`serve` 起在 `bind(0)` 取的 64461、
-临时 profile + `stub-key-not-real`），DOM 里那条 `/help` 气泡与 API 的 web 段**逐字、逐序相同**
-（`COMMANDS|rows=29 web_rows=6` → `VERDICT|same=YES`），且对照落在"必须 False"那一侧：
-`web_equals_all=False`、`dom_vs_all: 6 vs 26 equal=False`、`dom_vs_tui equal=False` ⇒ 这不是"两张空表相等"也不是"整张表都被广告出去"。
-`~/.zbot` 三值首尾相同（`BAR4_ASSERT|cfg_same=True db_same=True`），serve 进程回收、端口无残留 listener。
-
-- **§8.13.6 至此只剩 P29 一条**（三篇 README + `<revision>` 抬号 + 发 Central；后两件在 z-bot 的 push 授权之外）。
-- **这节没证的三样**（写在 `P28-lead-11` 末段，别外推）：物理按键与窗口焦点、视觉样式/布局、窗口可见时的点击路径。
-  成因是本机 `browser-use` 报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE … viewport=0x0, visibilityState=hidden`
-  ⇒ 触发改用页内 `dispatchEvent(KeyboardEvent)`，并以"`dispatchEvent` 返回 `false`（`preventDefault()` 生效）+ 气泡进 DOM"作为
-  "页面自己的 handler 真跑了"的读数，而不是直接调 `handleSlash()`（那会绕开监听器这一环，也就绕开了我要量的东西）。
-- **尺先被验再用**：`dom_compare.py` 上四份合成 DOM 自证（齐/少一/多一/无块）⇒ 第一遍就抓出自己 `line[3:]`
-  把前导斜杠吃掉这个 bug；另避掉一个假不一致的坑：`serve_up.py` 的 `web_names` 不滤别名行，
-  而 DOM 的规则是 `!aliasOf && endpoints 含 web` ⇒ 判等尺按 **DOM 同一条规则**从原始 `rows` 现算期望集，
-  并打印 `api_web_with_alias` 与 `api_web_no_alias` 两个数（本次都是 6，说明这批没有别名混进 web 段）。
-  这与 §13.5 那把"过滤器把 22 行全筛掉却报 0 格不同"的尺是同一个病的第三种现形：**凡"两边比一比"的尺，
-  期望集必须由被比那一侧的规则现算，且分母要打印。**
-
-### 8.13.9 浏览器层 `/help` 实输出 == `/api/commands` 的 web 段（09-27 04:16:01–04:18:47，主编亲测）
-
 `P28-lead-11` 的结论搬到这一层：起**真 serve**（`bind(0)` 取到 64461、临时 profile + `stub-key-not-real`）＋开**真页面**，
 在 `#msg-input` 里输入 `/help` 走页面自己的 `keydown` 监听（`index.html:1538`）⇒ DOM 那条气泡与 API 的 web 段
 **逐字逐序相同**：`COMMANDS|rows=29 web_rows=6` → `A|help_blocks=1 … B|dom=6 api_web_no_alias=6 … VERDICT|same=YES`。
@@ -1229,6 +1209,7 @@ $ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
 `CTRL_RUNTIME|dom_vs_all: dom=6 all=26 equal=False`、`dom_vs_tui: tui=26 equal=False`。
 收尾 `KILLED|pid_gone=True listener_on_port=''` + `BAR4_ASSERT|cfg_same=True db_same=True`。
 
+- **§8.13.6 至此只剩 P29 一条**（三篇 README + `<revision>` 抬号 + 发 Central；后两件在 z-bot 的 push 授权之外，见 §8.13.10 之后的记账）。
 - **这节没证的三样**（本机 `browser-use` 报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE … viewport=0x0, visibilityState=hidden`）：
   物理按键与窗口焦点、视觉样式与布局、窗口可见时的点击路径。触发方式换成页内 `dispatchEvent(KeyboardEvent)`，
   并**以"`dispatchEvent` 返回 `false`（`index.html:1540` 的 `preventDefault()` 生效）+ 气泡进 DOM"作为"页面自己的 handler 真跑了"的读数** ——
