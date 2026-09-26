@@ -3,15 +3,42 @@
 棒：p12c（续 p12b / p12）。分支 `w2-p12`。基线 commit：`809b927`（起）。
 本文件是**唯一入仓的证据载体**——`*.log` 被 `.gitignore:5` 排除，所有决定性读数原文粘在下面，并附产生它的命令。
 
-> 状态：骨架（写作中）。每一节填完后当场 commit；未填一节写 `UNKNOWN`，不写推测数字。
+> 状态：四杠读数、台账、缺陷与"没做的"都已落地（不再有 UNKNOWN 节）。每一节填完当场 commit。
 
 ---
 
 ## 0. 起讫与盘上状态
 
-- 起：`809b927`
-- 讫：UNKNOWN（收尾时回填 `git rev-parse --short HEAD`）
-- `git status --porcelain`：UNKNOWN（收尾时须为空）
+- 起：`809b927`（主编封存的 p12b 在途产物：+16 条守卫 + 两支量具，未验收）。
+- 讫：**`9acc05a`**（本棒最后一笔含读数/量具/台账的改动）。**本节自己的回填在它的下一笔里**，
+  那一笔只动 `EVIDENCE.md` 的 §0 与文件头三行文字，不动任何判据、量具、台账、Java
+  （复算：`git show --stat HEAD -- _doc/acceptance/p12/EVIDENCE.md` 且
+  `git diff 9acc05a..HEAD --name-only` ⇒ 只有本文件）。
+- 本棒在 `809b927..9acc05a` 之间动过的文件（**产品码 `src/main` 一字节未动**）：
+  `git log --format="" --name-only 809b927..9acc05a | sort | uniq -c | sort -rn` ⇒
+
+  ```
+    10 _doc/acceptance/p12/EVIDENCE.md
+     4 _doc/acceptance/p12/p12_mutation.py
+     2 _doc/acceptance/p12/p12_e2e.py
+     2 _doc/acceptance/p12/LEDGER.tsv
+     1 z-bot-core/src/test/java/com/zifang/z/bot/agent/P12RefundAndSteerGuardTest.java
+     1 _doc/acceptance/p12/p12_k2_probe.py
+  ```
+
+- `git status --porcelain`（收尾实测）⇒ **无已跟踪文件的改动**，只剩两个跑产目录未跟踪：
+
+  ```
+  ?? _doc/acceptance/p12/logs/
+  ?? _doc/acceptance/p12/out/
+  ```
+
+  `logs/` 里的 `*.log` 被 `.gitignore:5` 挡住（决定性读数已全部粘进本文件），
+  非 `.log` 的索引文件（`*_index.txt`、`lock_probe.txt`）与本棒故意留在盘上的跑产一起不入仓；
+  `out/` 是 stub 落盘请求 / profile / E2E 与注入的 JSON 读数，同理。⇒ **人留下的只有本文件与 `LEDGER.tsv`（脚本产物）**。
+- 四杠在交付字节上的落点：杠① §1+§1b（`483/0/0/0`×6 跑、`BUILD SUCCESS`、rc=0），
+  杠② §2.1b/§2.1c（三遍全量 19 支、判定列零漂移、`SRC_MD5_STABLE=yes`、锁双向 PASS §2.4），
+  杠③ §3.2/§3.3b（K2 改后 20/20、交付字节 5 连跑 25/25 rc=0），杠④ §4（8 / `2dadaed0` / `690ddbc0`）。
 
 ---
 
