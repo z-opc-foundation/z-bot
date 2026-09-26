@@ -39,7 +39,7 @@ import java.util.concurrent.Callable;
 @Command(name = "z-bot", mixinStandardHelpOptions = true, version = "z-bot 0.2.0",
         subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, GatewayCommand.class,
                 StatusCommand.class, SessionsCommand.class, SendCommand.class, PairCommand.class,
-                McpCommand.class},
+                McpCommand.class, com.zifang.z.bot.cli.AcpCommand.class},
         description = "本地 agent 应用（ReAct + 工具 + 沙箱 + 会话）")
 public class ZBot implements Callable<Integer> {
 
