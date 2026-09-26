@@ -769,6 +769,8 @@ _(W1 起逐期追加)_
 **四杠之外的账（不当已通过）**
 - p24d 台账 `27 KILLED / 1 SURVIVED / 1 PARTIAL`；p27b 台账 21 支 `8 RED-OK / 10 PARTIAL / 3 SURVIVED`（检出 85.7%），
   三处 SURVIVED 已点名（M13 ATOMIC_MOVE 单进程不可观测、M17 并发闸只数 RUNNING、M19 关 reconcile 的双写覆盖）⇒ 并发测试仍缺。
+  **（此行 09-27 已被订正，别按它下结论：M17/M19 各补了一支确定性捕手并在 `31be6c7` 整批复跑里判 RED-OK，
+  SURVIVED 降到 1 支（只剩 M13，按 §8.12 判等价变异）；"并发测试仍缺"这个结论作废。见 §8.12 与 `p27/EVIDENCE.md` §12。）**
 - p27b 交接两条**尺的缺陷**未改：`p27_mutation.py` 的锁文件 0 字节时 `int()` 抛错 → 走 `unlink` 接管别人的锁
   （真持有者活着时闸形同虚设）；`p27_e2e.py` 实测完全不取锁。
 - p24d 报"我自己四枚提交从 `w10-p24` 消失"：那四个 SHA 在本仓对象库 `git cat-file -t` 全部
@@ -898,3 +900,108 @@ E2E|run=lead_v3_r3 checks=30 pass=30 fail=0 llm_hits=1 serve_port=63989 result=O
 属别的会话 ⇒ 只记账不杀。③ 我自己的 `~/.cache/zbot-p28-lead/w_diff.sh` 首行硬
 `cd /private/tmp/zbot-wt-p28` —— 与 p25/p26/p27 那三支同一个病（把量具指向写手树），
 被 p19b 写手实测指出；在把它改成"从入参取树"之前，**它派生的任何数都不许进台账**。
+
+---
+
+## 8.12 第八期：p27b 的杠② 欠账在合并树上清掉，P28 的杠② 量具搬进仓（09-27 01:10:12+0800 起笔，主编亲测）
+
+这一期落进树的一共四笔：`d8a3e43`（P28-lead-7：三跑逐字对账 + **T1 篡改对照 v1 判作废**）、
+`31be6c7`（delegate：三处 SURVIVED 里两处补上确定性捕手）、`10c74d8`（p27 §12 复跑记账）、
+`7dc51ba`（web 控制台接线卫兵 + `p28_mutation.py` 搬进仓并在目标树重测）。
+
+### 8.12.1 §8.11 那句"并发测试仍缺"作废 —— 但要连着它的**新账**一起读
+
+p27b 台账原来的三处 SURVIVED 里，M17（并发闸只数 RUNNING）、M19（关 reconcile 的旧副本覆盖）
+各补了一支**确定性**捕手（不是"多起几个线程赌一把"）后，整族 21 支在合并树复跑：
+
+```
+旧（p27b 交接，写手树）  21 支 8 RED-OK / 10 PARTIAL / 3 SURVIVED
+新（31be6c7 目标树，10c74d8 记账）21 支 10 RED-OK / 10 PARTIAL / 1 SURVIVED
+```
+（不写"检出率 %"：§8.11 那个 85.7% 到底是 18/21 还是 8/21 没有任何尺说得清，分子口径一对不上就是编数。）
+
+唯一 SURVIVED 是 M13（state 写非原子）：按 §11.4 判**等价变异**——单进程观测不到半写状态，
+不是我漏了测试。**这条判定是待证断言，不是证据**；要推翻它就照 P27c-G1 的路子重推归属再整批复跑。
+
+### 8.12.2 杠①：两笔里程碑各 ×3 串行（`rm -rf z-bot-core/target/surefire-reports && mvn -o test`，全 reactor 不 `-pl`）
+
+```
+BAR1_SERIES|dir=/Users/zifang/.cache/zbot-integrate/bar1_270030 start=2026-09-27 00:30:18 HEAD=31be6c7
+ROUND|r=1 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1154, Failures: 0, Errors: 0, Skipped: 0] class_sum=1154 f=0 e=0 s=0 files=107 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 00:31:27
+ROUND|r=2 rc=0 … Tests run: 1154 … files=107 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=00:32:34
+ROUND|r=3 rc=0 … Tests run: 1154 … files=107 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=00:33:36
+BAR1_DONE|end=2026-09-27 00:33:36 dir=…/bar1_270030 HEAD=31be6c7 dirty_tracked=0 src_md5_delegate=fd1652b3
+
+BAR1_SERIES|dir=/Users/zifang/.cache/zbot-integrate/bar1_270101 start=2026-09-27 01:01:19 HEAD=7dc51ba
+ROUND|r=1 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1158, Failures: 0, Errors: 0, Skipped: 0] class_sum=1158 f=0 e=0 s=0 files=108 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 01:02:44
+ROUND|r=2 rc=0 … Tests run: 1158 … files=108 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=01:04:00
+ROUND|r=3 rc=0 … Tests run: 1158 … files=108 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=01:05:09
+BAR1_DONE|end=2026-09-27 01:05:09 dir=…/bar1_270101 HEAD=7dc51ba dirty_tracked=1 src_md5_delegate=fd1652b3
+```
+
+`1154→1158`、`files=107→108` 与 `7dc51ba` 的内容对得上：新增 1 个测试文件、4 条 `@Test`。
+"文本里有 1161 个 `@Test` 却只跑 1158 条"这个差我 01:08 当场对掉，不是推的：
+
+```
+OCCUR_TEST=1161      # grep -ro '@Test' --include='*.java' z-bot-core/src/test | wc -l
+OCCUR_COMMENT=3      # 落在注释行上的 3 处：RawTerminalVerdictProbe.java:7 / P26RetryPolicyTest.java:37 / MemoryE2eDriver.java:16（三处原文都在说"我没有 @Test / 不占分母"）
+MAIN_TREE=0          # src/main 里 @Test 0 命中
+                     # 另测"同一行写两支 @Test"= 0 例 ⇒ 按行计数不会少算
+1161 - 3 = 1158      # == surefire 的 Tests run，三轮皆然
+```
+
+### 8.12.3 杠②：三族变异此刻全部**可从仓里重生成**，分族读数（marker 分布由我现在重算 `LEDGER.tsv` 字节，不抄台账头部）
+
+| 族 | 尺（已进仓） | 目标树读数 | 分母来源 |
+|---|---|---|---|
+| P19 命令表单源 | `_doc/acceptance/p19/p19_mutate.py` | 8 支 **8 KILLED / 0 其他**，77 s | `$2` marker 列 |
+| P27 delegate | `_doc/acceptance/p27/p27_mutation.py` | 21 支 **10 RED-OK / 10 PARTIAL / 1 SURVIVED** | `$3` outcome 列 |
+| P28 通道/控制台 | `_doc/acceptance/p28/p28_mutation.py`（本期新入仓） | 14 支 **13 RED-OK / 1 SURVIVED** | `$5` marker 列 |
+
+P28 那 1 支 SURVIVED 是 **M5，我故意注入的等价变异阳性对照**（`isSttyAvailable` 那一支），
+不是漏抓 —— 它的作用正是证明"这一族里 SURVIVED 这一格是会亮的"。三族的 SURVIVED 都不是"检不出产品缺陷"。
+
+本期把 P28 的杠② 从"只有写手树能跑"变成"目标树可重生成"，顺带修掉两处**尺的缺陷**（细节与逐支读数在
+`p28/EVIDENCE.md` 的 `P28-lead-8`）：
+- **`-Dtest=` 点名不存在的用例 ⇒ 旧版记成 SURVIVED**。M6/M7 的旧选择器（`HttpRouteShapeTest#unknownPath…`、
+  `…Gets405WithAllowHeader`）在合并树上根本没有那两个名字 ⇒ `mvn rc=0`、0.6 s 收工，被读成"检不出"。
+  现在读 surefire 的 `-- in <类>` 汇总行，`ran==0` 一律记新档 **`NO-RUN`**（"尺没跑"从此不等于"没抓到"），
+  修完两支各自**红在所点名的方法上**：M6 `expected:<404> but was:<405>`、M7 `Allow` 头变 `null`。
+- **锚点随 P19 单源化漂移 ⇒ 只能记 INJECTION_NOT_APPLIED**。M10 旧锚在 `RawTerminalReader.java` 里出现 **0 次**；
+  重锚到 `TerminalChannel` 的 `/theme` 派发分串后判 RED-OK，红在 `CommandSurfaceConsistencyTest.tuiHandlesExactlyTheChannelLocalSegment`。
+- 旧的 P28 台账出自 `~/.cache/zbot-p28-lead/p28b_mutation.py`，其第 25 行硬 `WT="/private/tmp/zbot-wt-p28"`
+  （与 §8.11 末尾那条 `w_diff.sh` 是同一个病）。仓内版 `REPO` 由 `__file__` 派生 + 双重目标树自证，
+  不满足就 `rc=6` 拒绝开跑。
+
+### 8.12.4 新增的守卫长什么样（以及它和 T9 的重叠，别读成"白多一份"）
+
+`WebConsoleWiringTest`（4 条）量的是 **classpath 里真被 serve 的那份字节**
+（`HttpChannel.class.getResourceAsStream("/web/index.html")`，`serveConsole` 每请求现读），随杠① 每次跑；
+判据三条：同名函数不得声明两次、声明了却没有任何名字出现点的函数不得存在、内联 `on*="…()"` 点名的函数必须存在。
+判据自己带牙口对照（四份合成页：三种病灶各一支 + 健康页不许被冤枉 + 只写在注释里的接线不许让尺闭嘴）。
+杠② 侧对应 M11–M14 四支注入，全部 RED-OK 且各自点名对应方法。
+`HttpRouteLedgerTest.consoleRouteServesExactlyTheBundledResource` 从"长度相等"收紧成 `assertArrayEquals`
+（长度只证明没截断，不证明 serve 出去的就是那一份）。
+
+与 T9 的关系说清：T9 住在 `p28_e2e.py`，量**盘上 `src` 那份 HTML**，要起真 serve、约 10 分钟、只在杠③ 跑；
+`WebConsoleWiringTest` 量 **classpath 字节**，在 `mvn test` 里跑。**前两条判据故意重叠**（一份 CI、一份真进程；
+JS 逻辑无法跨语言共用），**只有第三条（内联处理器点名）是 JUnit 层新增的覆盖**。
+
+### 8.12.5 这期欠的账（不装作已过）
+
+- **P27c-G1**：p27 台账的 `expected_red` 列在合并树上**双向陈旧**——"预期红却没红"4 条、"预期外变红"58 条，
+  35 个名字逐个已解析到宿主文件与最后提交时刻（`p27/EVIDENCE.md` §12.3）。按红线"预期红集跑之前写死、不许回填"，
+  我**没有**动那张表；要动必须按"谁读这个值"重推归属、改完**整族 21 支复跑**再记账。
+  ⇒ 这一族真正的"漏抓"是 0（除 M13 外每支都有具名测试变红），但**这族现在只有 outcome 可信、expect 集合不可信**。
+- **T1 的注入阳性对照 v1 是空跑**（`d8a3e43` 已判作废）：v1 在 E2E 起跑**之前**篡改 `target/classes`，
+  而每一跑开头就是 `mvn -o -pl z-bot-core test-compile`，resources 插件把 `src` 又拷了一遍 ⇒
+  篡改被构建抹掉（classes mtime 回到注入后 2 s、md5 回到 `bb3ff2e6`），`run_B` 32/32 全绿**没有真猎物**。
+  v2 改在构建之后注入（等日志出现 `BUILD|classpath_file=` 再动那一字节），并加 `ORDER_PROOF` 行把
+  "注入有没有进被读到的那条路"和"T1 红没红"分开判 ⇒ **本节写下时 v2 仍在跑，读数收口后另立 `P28-lead-9`；
+  在那之前 T1 的牙口仍是未证，不许读成"有牙"。**
+- **杠③ 没在新树上重跑过**：`31be6c7` 改了 `src/main`（`DelegateManager.java`），而最近三次整跑（`lead_t9_r1..r3`，
+  23:09–23:45）跑在它之前。盘上 HTML 的字节没漂（`bb3ff2e6`，最后一次改 `index.html` 是 22:50 的 `4417a5e`），
+  但**"HTML 没变"不等于"杠③ 已在新树上成立"** —— 待补：当前树 ×3 整跑。
+- 旧账不变：D-P28-2（`POST /api/skill/push` 推的是拉）仍未裁定；`/api/agent/register` 200-vs-501、
+  `/api/models` tmpdir 缓存、web 那 17 条"转发-缺"命令是否进 WEB 段，都等点头；
+  真 tty 人机体验 NO-RUN；P29（README×7 + 抬号 + 发 Central）未开工。

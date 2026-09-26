@@ -626,3 +626,99 @@ v2 的改法（`~/.cache/zbot-integrate/t1_tamper_v2.sh`，读数待下一节）
 （23:24:01 起，P28-lead-6 浏览器取证那一跑没收线）⇒ `kill` 后 `lsof` 复扫 0 个 LISTEN，
 `~/.zbot` 三值复测不变。别的会话那 5 支 gateway/repl 仍只记账不杀。
 
+
+## P28-lead-8 · 控制台接线的 JUnit 层守卫 + 杠② 量具搬进仓，在目标树重测（09-27 00:5x–01:05，主编亲测）
+
+### 1. 量具身份（先钉"哪把尺量的哪棵树"）
+
+旧台账是**写手树**的产物：`P28-lead-3` 那批由 `~/.cache/zbot-p28-lead/p28b_mutation.py` 生成，
+而那支尺第 25 行硬 `WT = "/private/tmp/zbot-wt-p28"` —— 与 p25/p26/p27 三支同一个病（工单里记作"未跟踪 + 指错树"）。
+写手树被扫掉后台账在目标树上没法重生成 ⇒ 本轮把尺搬进仓：`_doc/acceptance/p28/p28_mutation.py`，
+`REPO` 从 `__file__` 派生 + 双重目标树自证（"尺与被量的树同仓" + "那棵树真的是仓根"），读数行：
+
+```
+p28_mut_final_270057.log
+TARGET|repo=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot head=10c74d8 dirty_lines=7
+LOCK_ACQUIRED /Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock
+BACKUP _doc/acceptance/p28/ROUTES.tsv md5=809b33e7 -> /Users/zifang/.cache/zbot-p28-mutation/mutbak/_doc__acceptance__p28__ROUTES.tsv
+BACKUP z-bot-core/src/main/java/com/zifang/z/bot/channel/HttpChannel.java md5=20cc3f4a -> /Users/zifang/.cache/zbot-p28-mutation/mutbak/z-bot-core__src__main__java__com__zifang__z__bot__channel__HttpChannel.java
+BACKUP z-bot-core/src/main/java/com/zifang/z/bot/channel/TerminalChannel.java md5=10b4f9a4 -> /Users/zifang/.cache/zbot-p28-mutation/mutbak/z-bot-core__src__main__java__com__zifang__z__bot__channel__TerminalChannel.java
+BACKUP z-bot-core/src/main/java/com/zifang/z/bot/ui/RawTerminalReader.java md5=7e4c33c5 -> /Users/zifang/.cache/zbot-p28-mutation/mutbak/z-bot-core__src__main__java__com__zifang__z__bot__ui__RawTerminalReader.java
+BACKUP z-bot-core/src/main/resources/web/index.html md5=bb3ff2e6 -> /Users/zifang/.cache/zbot-p28-mutation/mutbak/z-bot-core__src__main__resources__web__index.html
+RESTORED_ALL {'ROUTES.tsv': '809b33e7', 'HttpChannel.java': '20cc3f4a', 'TerminalChannel.java': '10b4f9a4', 'RawTerminalReader.java': '7e4c33c5', 'index.html': 'bb3ff2e6'}
+LEDGER=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/_doc/acceptance/p28/LEDGER.tsv mtime=01:00:36 harness_mtime=00:57:35
+TALLY {'RED-OK': 13, 'SURVIVED': 1} TOTAL=14
+```
+
+### 2. 14 支逐支（`LEDGER.tsv` 字节，本轮 marker 分布 `{'RED-OK': 13, 'SURVIVED': 1} TOTAL=14`）
+
+```
+M1   RED-OK    摘掉 stty 子进程的 fd 0 继承       verdict raw=NONZERO_EXIT restore=DONE rc=0 wall=0.21
+M2   RED-OK    把有界等待的时限抬成 Long.MAX        verdict raw=None restore=None rc=KILLED wall=40.14
+M3   RED-OK    非零退出也报 DONE（判词揉成一团）        verdict raw=DONE restore=DONE rc=0 wall=0.00
+M4   RED-OK    waitFor 返回真值时反判成超时         verdict raw=<null> restore=<null> rc=0 wall=0.11
+M5   SURVIVED  【阳性对照·等价变异】isSttyAvailable verdict raw=DONE restore=DONE rc=0 wall=0.17
+M6   RED-OK    摘掉台账的 404 门                mvn rc=1 ran=1 具名红=['[ERROR]   HttpRouteLedgerTest.unknownPathStillFourOhFourWithJsonErrorShape:176 expected:<404> but was:<405>']
+M7   RED-OK    摘掉 405 的 Allow 头           mvn rc=1 ran=1 具名红=['[ERROR]   HttpRouteLedgerTest.unadvertisedMethodGetsFourOhFiveWithAllowHeader:186 expected:<GET, OPTIONS> but was:<null>']
+M8   RED-OK    SSE 帧里裸换行不再转义              mvn rc=1 ran=9 具名红=['[ERROR]   HttpSseContractTest.newlineInsideModelTextIsEscapedAndDoesNotBreakFraming:147 正文里的裸换行必须被转义成 \\\\n，实到 event: final\\ndat
+M9   RED-OK    台账文件与代码漂移一个字               mvn rc=1 ran=1 具名红=['[ERROR]   HttpRouteLedgerTest.routesTsvIsInSyncWithLedger:133 ROUTES.tsv 与 HttpChannel.routes() 不同源了。逐字节差异已写到 target/p28/ROUTES.t
+M10  RED-OK    终端 /theme 派发分串漂移（台账说它有、代码里 mvn rc=1 ran=1 具名红=['[ERROR]   CommandSurfaceConsistencyTest.tuiHandlesExactlyTheChannelLocalSegment:220->assertSameNames:299 TerminalChannel 分支 ⇄ Com
+M11  RED-OK    摘掉启动时的 loadCommands() 接线（0 mvn rc=1 ran=1 具名红=['[ERROR]   WebConsoleWiringTest.everyDeclaredConsoleFunctionHasACallSite:196 这些函数定义了却没有任何第二个名字出现点（当年 loadCommands/autoResize 就是这个形
+M12  RED-OK    在真 newSession 之前塞一份同名空壳（09 mvn rc=1 ran=1 具名红=['[ERROR]   WebConsoleWiringTest.noFunctionIsDeclaredTwiceOnTheConsolePage:189 同名函数声明了两次 ⇒ 后一份静默赢、前一份变死代码，而界面照常渲染。重复声明=[newSession]
+M13  RED-OK    把输入框 autoResize 的监听摘掉（09-2 mvn rc=1 ran=1 具名红=['[ERROR]   WebConsoleWiringTest.everyDeclaredConsoleFunctionHasACallSite:196 这些函数定义了却没有任何第二个名字出现点（当年 loadCommands/autoResize 就是这个形
+M14  RED-OK    内联处理器指向一个不存在的函数            mvn rc=1 ran=1 具名红=['[ERROR]   WebConsoleWiringTest.everyInlineHandlerNamesAnExistingConsoleFunction:203 内联 on* 处理器点名了不存在的函数 ⇒ 点下去就是 ReferenceError。重复
+```
+
+要点三条，都是可复核的：
+- **新增 M11–M14 = 控制台页"接线"面的四支阳性对照**，全部 RED-OK，且各自点名的方法就是
+  `WebConsoleWiringTest` 里对应那条（M11/M13 打孤儿、M12 打同名重复声明、M14 打内联处理器指向不存在的函数）。
+  这三类正是 P28-lead-6 在浏览器层实测出的病灶形状。
+- **M6/M7 从假 SURVIVED 翻成 RED-OK**：旧选择器点名的 `HttpRouteShapeTest#unknownPath…` /
+  `#unadvertisedMethodGets405WithAllowHeader` 在合并树上**不存在**（前者实际住在 `HttpRouteLedgerTest`，
+  后者真名是 `…FourOhFive…`）。`-Dtest=` 匹配不到 ⇒ `mvn rc=0`、0.6 s 收工，旧版把"没跑"记成"检不出"。
+  现在加了 `ran==0 ⇒ NO-RUN` 分档（读 surefire 的 `-- in <类>` 汇总行，读不到就不许出检出结论）+ 修选择器，
+  两支各自红在所点名的方法上（`expected:<404> but was:<405>`、`Allow` 头变 `null`）。
+- **M10 的锚点随 P19 单源化搬走了**：旧锚 `'"/status", "/theme", …"'` 在 `RawTerminalReader.java` 出现 **0 次**
+  ⇒ 旧版只能记 INJECTION_NOT_APPLIED。重锚到 `TerminalChannel` 的 `/theme` 派发分串后判 RED-OK，
+  红在 `CommandSurfaceConsistencyTest.tuiHandlesExactlyTheChannelLocalSegment`（分支名 ⇄ 台账不同名）。
+
+### 3. 与 `P28-lead-6` 的 T9 是什么关系（重叠要说清，别装作是新增覆盖）
+
+- T9 住在 `p28_e2e.py`，量的是**盘上 `src` 那份 HTML**，要起真 serve、整跑约 10 分钟，只在杠③ 里跑。
+- `WebConsoleWiringTest` 住在 `z-bot-core/src/test`，量的是 **classpath 里真被 serve 的那份字节**
+  （`HttpChannel.class.getResourceAsStream("/web/index.html")`），随 `mvn test` 每次杠① 都跑。
+- 两条判据（同名重复、声明了没人接）**故意重叠** —— 一份在 CI、一份在真进程；JS 逻辑没法跨语言共用，
+  所以这里必然有两份实现，重叠是设计而不是疏忽。**只有第三条（内联 `on*` 点名的函数必须存在）是 JUnit 层新增的**。
+- 判据自身带四份合成页做牙口对照（`auditToolRejectsTheThreeHistoricalDefects`）：三种病灶各一支，
+  外加"健康页不许被冤枉"与"只写在注释里的接线不许让尺闭嘴"两支阴性/边界对照。
+
+### 4. 杠①（`7dc51ba`，`rm -rf z-bot-core/target/surefire-reports && mvn -o test` ×3 串行）
+
+```
+BAR1_SERIES|dir=/Users/zifang/.cache/zbot-integrate/bar1_270101 start=2026-09-27 01:01:19 HEAD=7dc51ba
+BAR1_TREE|dirty_total=3 dirty_tracked=1 src_md5_delegate=fd1652b3
+BAR1_SRC_MD5_START|index.html=bb3ff2e6 p28_e2e.py=2e8134bb
+ROUND_START|r=1 ts=2026-09-27 01:01:20 bar4=8/2dadaed0/690ddbc0
+ROUND|r=1 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1158, Failures: 0, Errors: 0, Skipped: 0] class_sum=1158 f=0 e=0 s=0 files=108 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 01:02:44
+ROUND_START|r=2 ts=2026-09-27 01:02:44 bar4=8/2dadaed0/690ddbc0
+ROUND|r=2 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1158, Failures: 0, Errors: 0, Skipped: 0] class_sum=1158 f=0 e=0 s=0 files=108 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 01:04:00
+ROUND_START|r=3 ts=2026-09-27 01:04:00 bar4=8/2dadaed0/690ddbc0
+ROUND|r=3 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1158, Failures: 0, Errors: 0, Skipped: 0] class_sum=1158 f=0 e=0 s=0 files=108 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 01:05:09
+BAR1_SRC_MD5_END|index.html=bb3ff2e6 p28_e2e.py=2e8134bb
+BAR1_CLASSES|src=bb3ff2e6 classes=bb3ff2e6 src_len=53093 cls_len=53093
+BAR1_DONE|end=2026-09-27 01:05:09 dir=/Users/zifang/.cache/zbot-integrate/bar1_270101 HEAD=7dc51ba dirty_tracked=1 src_md5_delegate=fd1652b3
+```
+
+`1154 → 1158` 恰好等于新增的 4 条 `@Test`，`files=107 → 108` 恰好等于新增的那一个测试文件；
+三轮 `F=E=S=0`、`socket_hits=0`、`build_success_rows=1`。跑期间唯一受跟踪的在途改动是
+`_doc/hermes-roadmap.md`（文档，不参与编译），读数行里 `dirty_tracked=1` 就是它。
+
+### 5. 杠④ 与还原
+
+- `index.html` 本轮被注入过 4 次，收尾 `RESTORED_ALL` 打印 `bb3ff2e6` == 本轮开工前的 md5；
+  `TerminalChannel.java 10b4f9a4`、`HttpChannel.java 20cc3f4a`、`RawTerminalReader.java 7e4c33c5`、
+  `ROUTES.tsv 809b33e7` 同样逐支回到本次运行前 `cp` 的那份字节（还原只从副本 `cp`，未用 `git checkout/restore`）。
+- 共享锁 `zbot-mutlock` 由尺自己 `LOCK_UN + close(fd)`，未 `unlink`；杠② 全程与杠③ 串行走（没有并发）。
+- 杠④ 在杠① 的 6 个采样点逐格 `8 / 2dadaed0 / 690ddbc0`；真 minimax key 全程只量长度（125），值未被读取。
+
+_再生成本节两支读数：`python3 _doc/acceptance/p28/p28_mutation.py`（要抢锁）与 `bash ~/.cache/zbot-integrate/bar1_x3.sh`；原始日志 `~/.cache/zbot-integrate/p28_mut_final_270057.log`、`bar1_7dc51ba.log`。_
