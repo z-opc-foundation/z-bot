@@ -14,7 +14,10 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * MCP client 工厂 — 把 {@link BotConfig.McpServerEntry} 转成 {@link McpClient}.
  *
- * <p>目前只支持 stdio transport（启动子进程跑 MCP server）。HTTP+SSE 留到后续版本。</p>
+ * <p>按 {@link BotConfig.McpServerEntry#getTransport()} 派发两条真实通道：
+ * {@code stdio} → {@link ZBotStdioMcpTransport}（起子进程），{@code http} →
+ * {@link StreamableHttpMcpTransport}（POST JSON-RPC + {@code mcp-session-id}，吃 JSON 与 SSE 两种响应）。
+ * 未知 transport 或缺必需字段一律抛，不静默降级成 stdio。</p>
  */
 public final class McpClientFactory {
 

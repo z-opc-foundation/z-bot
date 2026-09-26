@@ -685,3 +685,98 @@ real_label= R155427-p83247 predicate= True
 | ④ | 四时点同读数 | `8 / 2dadaed0 / 690ddbc0` |
 
 **P21 具备并入 main 的门禁面。** 合并后仍需在**目标树**（main）复测杠①③④（这一条是 P18 那期"少打一杠"的账，本期不许再欠）。
+
+---
+
+# §17 合并后在**目标树 main** 复测杠①③④（被测树 = main `6c2c433` / tree `041f014`，`@Test` 面 735）
+
+STATUS: 已跑，四杠全绿（主编亲测，2026-09-26 16:16:36 起、16:22:54 止）
+
+为什么还要多这一节：`§16` 的四杠打在**源树**（p21 分支 `9c24c23`，`@Test` 661）上；
+合并树是 735 支的另一个盘面（P12/P16/P17/P18 的代码与 P21 的 MCP 面第一次同处一树，
+`BotAgent.java` / `BotConfig.java` 都在那次合并里被并过）。
+"源树绿 ⇒ 合并树绿"从来不是定理 ⇒ 这一条正是 P18 那期少打一杠欠下的账，本期不欠。
+
+复算命令（一把跑齐，量具在仓外 `~/.cache/zbot-p21-main/loop.sh`，读数落 `loop.out`）：
+```
+rm -rf z-bot-core/target/surefire-reports && mvn -o test          # ×3 串行，全 reactor，不加 -pl
+mvn -o package -DskipTests -pl z-bot-core
+python3 -u _doc/acceptance/p21/p21_e2e.py                         # ×3，各自独立 --config-dir 现场
+ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/.zbot/state.db | cut -c1-8
+```
+
+## 17.1 实测（`loop.out` 原样粘贴，未删一字）
+
+```
+START 2026-09-26 16:16:36 HEAD=6c2c433 TREE=041f014
+bar4_before items=8 cfg=2dadaed0 db=690ddbc0
+@TESTS_GITGREP=735
+MVN_RC_1=0
+run1 tests=[[INFO] Tests run: 735, Failures: 0, Errors: 0, Skipped: 0] build=1 socket=0 errlines=0 time=[INFO] Total time:  56.620 s
+MVN_RC_2=0
+run2 tests=[[INFO] Tests run: 735, Failures: 0, Errors: 0, Skipped: 0] build=1 socket=0 errlines=0 time=[INFO] Total time:  57.156 s
+MVN_RC_3=0
+run3 tests=[[INFO] Tests run: 735, Failures: 0, Errors: 0, Skipped: 0] build=1 socket=0 errlines=0 time=[INFO] Total time:  55.743 s
+=== 每类汇总行对账（surefire 目录级求和）===
+classes=      71
+sum=735 fail=0 err=0 skip=0
+PKG_RC=0 JAR=1e356fbd
+m_e2e_1 rc=0 PASS=59 FAIL=0 汇总=[  合计 59 条，失败 0 条: []] 现场=[工作根=/Users/zifang/.cache/zbot-p21/e2e/R161933-p33434]
+m_e2e_2 rc=0 PASS=59 FAIL=0 汇总=[  合计 59 条，失败 0 条: []] 现场=[工作根=/Users/zifang/.cache/zbot-p21/e2e/R162040-p36221]
+m_e2e_3 rc=0 PASS=59 FAIL=0 汇总=[  合计 59 条，失败 0 条: []] 现场=[工作根=/Users/zifang/.cache/zbot-p21/e2e/R162147-p38168]
+bar4_after items=8 cfg=2dadaed0 db=690ddbc0
+DIRTY_TRACKED=0
+NOW 2026-09-26 16:22:54
+P21_MAIN_LOOP_DONE
+```
+
+## 17.2 判词
+
+- **杠①**：合并树 `Tests run: 735, Failures: 0, Errors: 0, Skipped: 0` ×3 串行、rc 全 0、
+  socket 类报错 0、`[ERROR]` 行 0。`735` 不是 reactor 自己那一行的孤证——
+  71 个 surefire 汇总文件目录级求和同样是 `sum=735 fail=0 err=0 skip=0`，
+  且与 `git grep -c '@Test' HEAD` 机械求和的 735 三方对齐（§16.0 的 661+74 复算过一笔）。
+- **打包**：`PKG_RC=0`，`z-bot-core/target/z-bot-core.jar` sha256 前缀 `1e356fbd`。
+  （与 §16 里 `original-` 那个 `506c60d5` 不是同一个文件：那 repackage 前的裸 jar；两个都存在才算 repackage 真跑过。）
+- **杠③**：三整跑各自 `rc=0`、59/59、失败列表为空，现场目录三个互不相同
+  （`R161933-p33434` / `R162040-p36221` / `R162147-p38168`，`%H%M%S-pid` 复合命名 ⇒ 天然不重叠），
+  且都在 `~/.cache/zbot-p21/e2e/` 下 ⇒ 没有一处写到真实 `~/.zbot`。
+  注意 `§16.3` 那处 `--label` 假红已经修掉并且是在**这三次之前**修的 ⇒ 本节三次是修复后量具的连续绿。
+- **杠④**：`bar4_before` 与 `bar4_after` 逐字相同 `items=8 cfg=2dadaed0 db=690ddbc0`；
+  `DIRTY_TRACKED=0` = 这套测量自身不在仓里留痕（日志全在仓外 `~/.cache/`）。
+- **合并面成立**：P21 的 MCP 改动与 main 上其余 4 期改动同居一树后，四杠同时成立。
+
+## 17.3 本节之后又动了什么（为什么 push 前还要再打一杠）
+
+`16:2x` 我在 main 上改了**一处纯 javadoc**：`mcp/McpClientFactory.java:17`
+原文写着"目前只支持 stdio transport（启动子进程跑 MCP server）。HTTP+SSE 留到后续版本"——
+P21 已经把两条 transport 都接上（`create()` 按 `transport` 位派发 `ZBotStdioMcpTransport` /
+`StreamableHttpMcpTransport`），这句注释变成了**对已交付能力的否认**，留着会让下一棒把它当现状读。
+因为它落在 `src/main` 里（哪怕只是注释），17.1 的读数就与"将要 push 的树"差一个字节面 ⇒
+重跑杠① ×3（同一把量具，输出 `loop2.out`），读数记在下面 17.4，push 的是 17.4 那一棵树。
+
+## 17.4 改注释之后重跑的杠①（这一棵才是 push 出去的树）
+
+复算命令：同 17.1，只是把杠③/打包省掉（那一处改动是 `src/main` 里的 javadoc 文字，
+不影响任何行为面 ⇒ 但**字节面变了**，所以杠① 必须在新字节上重打，见判词最后一条）。
+量具 `~/.cache/zbot-p21-main/loop2.sh` 口径，输出 `loop2.out` 原样：
+
+```
+START2 2026-09-26 16:26:32 HEAD=6c2c433 TREE=041f014
+MVN_RC_1=0
+k_run1 tests=[[INFO] Tests run: 735, Failures: 0, Errors: 0, Skipped: 0] build=1 socket=0 errlines=0 time=[INFO] Total time:  01:00 min
+MVN_RC_2=0
+k_run2 tests=[[INFO] Tests run: 735, Failures: 0, Errors: 0, Skipped: 0] build=1 socket=0 errlines=0 time=[INFO] Total time:  01:01 min
+MVN_RC_3=0
+k_run3 tests=[[INFO] Tests run: 735, Failures: 0, Errors: 0, Skipped: 0] build=1 socket=0 errlines=0 time=[INFO] Total time:  56.026 s
+classes=71
+sum=735 fail=0 err=0 skip=0
+bar4_final items=8 cfg=2dadaed0 db=690ddbc0
+MD5_FACTORY=4e34e7fa
+K_LOOP_DONE
+```
+
+判词：注释改动后的树仍 `Tests run: 735 ×3` 全绿、socket/`[ERROR]` 均 0、目录级求和一致；
+杠④ 依旧 `8 / 2dadaed0 / 690ddbc0`。`MD5_FACTORY=4e34e7fa` 是这一棵树上
+`mcp/McpClientFactory.java` 的 md5 前缀——写在这里的唯一用处是：
+下一棒若发现"注释怎么又变回去了"，能一句话判"量的不是同一棵"。
