@@ -46,27 +46,54 @@ public final class McpManager {
     public synchronized void startAll() {
         if (prebuilt != null) {
             for (McpClient client : prebuilt) {
-                startOne(new McpBridge(client, toolkit), client.name(), true);
+                startOne(new McpBridge(client, toolkit), client.name(), null);
             }
             return;
         }
         for (BotConfig.McpServerEntry entry : config) {
-            McpBridge bridge = new McpBridge(McpClientFactory.createStdio(entry), toolkit);
-            startOne(bridge, entry.getName(), true);
+            McpBridge bridge;
+            try {
+                bridge = new McpBridge(McpClientFactory.create(entry), toolkit);
+            } catch (RuntimeException e) {
+                // 配置本身就错（未知 transport / http 缺 url）—— 报出来，不静默退成 stdio
+                String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                status.add(BridgeStatus.error(entry.getName(), scrub(msg, entry)));
+                LOG.warn("[mcp] server {} 配置无效: {}", entry.getName(), scrub(msg, entry));
+                continue;
+            }
+            startOne(bridge, entry.getName(), entry);
         }
     }
 
-    private void startOne(McpBridge bridge, String name, boolean stdio) {
+    private void startOne(McpBridge bridge, String name, BotConfig.McpServerEntry entry) {
         try {
             int count = bridge.registerAll();
+            if (count == 0) {
+                // "注册 0 工具却报 ok" 是负向断言的靶子：ok 必须带上"真的一个都没有"的可查痕迹
+                LOG.warn("[mcp] server {} 连上了但工具表为空", name);
+            }
             bridges.add(bridge);
-            status.add(BridgeStatus.ok(name, count));
-            LOG.info("[mcp] server {} 启动, 注册 {} 个工具", name, count);
+            status.add(BridgeStatus.ok(name, count, bridge.toolset(),
+                    entry == null ? "in-memory" : entry.getTransport(),
+                    bridge.notificationCapable(), bridge.registeredNames()));
+            LOG.info("[mcp] server {} 启动, transport={}, 注册 {} 个工具, listChanged={}",
+                    name, entry == null ? "in-memory" : entry.getTransport(), count,
+                    bridge.notificationCapable());
         } catch (RuntimeException e) {
-            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            status.add(BridgeStatus.error(name, msg));
+            String raw = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String msg = scrub(raw, entry);
+            status.add(BridgeStatus.error(name, msg,
+                    entry == null ? "in-memory" : entry.getTransport()));
             LOG.warn("[mcp] server {} 启动失败: {}", name, msg);
         }
+    }
+
+    /** 错误文本里可能带 url 的 query 或 header 原文 —— 出这个函数之前先脱敏。 */
+    private static String scrub(String raw, BotConfig.McpServerEntry entry) {
+        if (entry == null) {
+            return raw;
+        }
+        return SecretRedaction.scrub(raw, entry.getHeaders());
     }
 
     /** 关闭 + 重启所有 bridge。 */
@@ -110,6 +137,8 @@ public final class McpManager {
             m.put("ok", s.ok);
             m.put("toolCount", s.toolCount);
             m.put("tools", s.registeredNames);
+            m.put("transport", s.transport);
+            m.put("listChanged", s.listChanged);
             if (!s.ok) {
                 m.put("error", s.error);
             }
@@ -118,28 +147,52 @@ public final class McpManager {
         return out;
     }
 
+    /** 按 server 名取 bridge（reload / 验收读数用）。 */
+    public synchronized McpBridge bridge(String name) {
+        for (McpBridge b : bridges) {
+            if (b.serverName().equals(name)) {
+                return b;
+            }
+        }
+        return null;
+    }
+
     public static final class BridgeStatus {
         public final String name;
         public final boolean ok;
         public final int toolCount;
         public final List<String> registeredNames;
         public final String error;
+        /** {@code stdio} / {@code http} / {@code in-memory}（测试注入的 transport）。 */
+        public final String transport;
+        /** 真能收到 {@code notifications/tools/list_changed} 才为 true —— 这是对外广告位。 */
+        public final boolean listChanged;
 
         private BridgeStatus(String name, boolean ok, int toolCount,
-                             List<String> registeredNames, String error) {
+                             List<String> registeredNames, String error,
+                             String transport, boolean listChanged) {
             this.name = name;
             this.ok = ok;
             this.toolCount = toolCount;
             this.registeredNames = registeredNames;
             this.error = error;
+            this.transport = transport;
+            this.listChanged = listChanged;
         }
 
-        static BridgeStatus ok(String name, int count) {
-            return new BridgeStatus(name, true, count, new ArrayList<String>(), null);
+        static BridgeStatus ok(String name, int count, String toolset, String transport,
+                              boolean listChanged, List<String> registeredNames) {
+            return new BridgeStatus(name, true, count,
+                    registeredNames == null ? new ArrayList<String>() : new ArrayList<String>(registeredNames),
+                    null, transport, listChanged);
         }
 
         static BridgeStatus error(String name, String error) {
-            return new BridgeStatus(name, false, 0, new ArrayList<String>(), error);
+            return error(name, error, "unknown");
+        }
+
+        static BridgeStatus error(String name, String error, String transport) {
+            return new BridgeStatus(name, false, 0, new ArrayList<String>(), error, transport, false);
         }
     }
 }

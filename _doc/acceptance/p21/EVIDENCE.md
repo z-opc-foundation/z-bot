@@ -151,3 +151,41 @@ STATUS: 未跑
 STATUS: 未跑
 工单点名不做：OSV 依赖预检、sampling 与 elicitation 全链路 —— 理由待填。
 本期新增未做项：待填（越界才验收的一律不越，写"要动 X / 因为 Y / 会撞 Z"）
+
+---
+
+## §3 新增 transport 与注入缝 —— 里程碑 M1（能编译）
+
+STATUS: 已跑（编译 + 类产出）
+
+复算命令：
+```
+cd /private/tmp/zbot-wt-p21 && mvn -o -q -pl z-bot-core compile && ls z-bot-core/target/classes/com/zifang/z/bot/mcp/
+```
+
+实测（`ls z-bot-core/target/classes/com/zifang/z/bot/mcp/`，原样）：
+```
+McpBridge$1.class   McpBridge$2.class   McpBridge$ConnectionProbe.class   McpBridge.class
+McpClientFactory$StdIoMcpClient$1.class  McpClientFactory$StdIoMcpClient$2.class
+McpClientFactory$StdIoMcpClient.class    McpClientFactory.class
+McpManager$BridgeStatus.class   McpManager.class
+McpNotificationListener$1.class  McpNotificationListener.class  McpNotificationSource.class
+McpWire.class
+SecretRedaction$1.class  SecretRedaction.class
+StreamableHttpMcpTransport$1..3.class  StreamableHttpMcpTransport$HttpReply.class
+StreamableHttpMcpTransport$Options.class  StreamableHttpMcpTransport.class
+ZBotStdioMcpTransport$1..3.class  ZBotStdioMcpTransport$Options.class  ZBotStdioMcpTransport.class
+```
+
+**注入缝**：全部走既有的 `McpClientFactory.wrap(String, McpTransport)` 那条口径 —— 新 transport 只实现
+公开接口 `com.zifang.z.agent.kernel.mcp.McpTransport`（4 方法），**内核 jar 一个字节未改**（见 §13 的 `git status` 读数）。
+新增 `McpClientFactory.create(entry)` 做生产路径的 transport 判别，`createStdio(entry)` 原样保留当
+§2 的对照组（它仍走内核 `StdioMcpTransport`）。
+
+| 文件 | 干什么 | 为什么必须在 z-bot 侧 |
+|---|---|---|
+| `mcp/ZBotStdioMcpTransport.java` | 常驻读线程 stdio：JSON 解析配对端 id、`future.get(timeout)` 真超时、版本可配、`/bin/sh` ppid 监护脚本 | 内核三条缺陷 + 收不到 notification（§1/§2 取证） |
+| `mcp/StreamableHttpMcpTransport.java` | POST JSON-RPC + `mcp-session-id` + `mcp-protocol-version` + 202 语义 + **json/SSE 双形态** + 常驻 GET SSE 通知流 + DELETE 收尾 | 内核根本没有 HTTP transport；`McpTransport` 是公开接口 ⇒ 不需要动它 |
+| `mcp/McpNotificationListener.java` / `McpNotificationSource.java` | server→client 通知的回调与"这条通道到底能不能收"的自证位 | 不收 ⇒ `listChanged` 不许对外广告 |
+| `mcp/McpWire.java` | id 解析 / 请求拼装 / POSIX 单引号化 | 把"按字符串包含配对端"这条错法从根上换掉 |
+| `mcp/SecretRedaction.java` | `mask/maskAll/scrub/maskUrl` | headers/url 可能带 secret，三条泄漏路径各拦一条 |
