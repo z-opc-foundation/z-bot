@@ -350,7 +350,7 @@ STATUS: **已跑（p27b）** —— 三格工单读数与实测逐次相符，�
 
 ## §9 量具的错 / 产品的错（分两节）
 
-STATUS: **p27b 已记**（本棒新增：量具 **6** 条 + 产品 6 条；前棒留下的 P27-D2/D3 见 §4 与 §6 的 M17/M19/M20）
+STATUS: **p27b 已记**（本棒新增：量具 **7** 条 + 产品 6 条；前棒留下的 P27-D2/D3 见 §4 与 §6 的 M17/M19/M20。表是追加式写的，**G7 物理行排在 G6 之前，读表按编号不按行序**）
 
 ### 9.1 量具的错（尺的问题，不是产品的问题）
 
@@ -361,6 +361,7 @@ STATUS: **p27b 已记**（本棒新增：量具 **6** 条 + 产品 6 条；前�
 | **P27b-G3** | 工单 §3.4 允许的记号集 = `KILLED / RED-OK / SURVIVED / PARTIAL / INJECTION_NOT_APPLIED`，而 `p27_mutation.py`（前棒版）的产出集 = `KILLED / SURVIVED / INJECTION_NOT_APPLIED / BASELINE_NOT_GREEN / RESTORE_FAILED / NONINFORMATIVE / ERROR` | 两侧**不是同一个词表**：脚本没有 `RED-OK`、`PARTIAL`，只有把两者一并压成 `KILLED` 的粗档；多的 4 个是"停机/不具信息"类（`NONINFORMATIVE` = rc≠0 但既无具名红也无类级红，多半是编译断或没跑到用例） | **不为了对齐词表把 `NONINFORMATIVE` 折叠成 `KILLED`**（那是拿假绿冒充杀变异）。与 P27b-G5 同一批改动里引入 `RED-OK`（预期红命中且无预期外红）/ `PARTIAL`（命中但有预期外红）/ `KILLED`（预期红集零命中、被别的用例杀掉），并把 `BASELINE_NOT_GREEN / RESTORE_FAILED / NONINFORMATIVE / ERROR` 在 docstring 里明确标成"停机型第六档：出现即本轮不可读"。批二实测第六档 **0 次**，台账只出现五档之内的三个记号 |
 | P27b-G4 | 工单 §3.1 断言"`git merge --ff-only main` 可行" | 实测分叉（`27  2`），ff 结构上不可能；红线又写"禁合并 main" | 见 §0.2：不硬合，四杠都在本分支基线上量；只读 `merge-tree` 探测证明"并得干净"（tree `e75448b`、无 CONFLICT）|
 | **P27b-G5** | 杠② 批一 21 行**每一行**都印 `预期红却没红:<方法名> \| 预期外变红:com.zifang.z.bot.delegate.<类名>`，`killed_by_or_red_tests` 整列只有类名 ⇒ 工单 §3.4 要的"这条 bug 被哪一支**具名**测试抓到"系统性失效 | 尺的错，不是产品的错：`failed_tests_from_surefire()` 用 `re.search(r"<testcase[^>]*name=\"([^\"]+)\"", head)`，而 surefire 写的是 `<testcase name="<方法>" classname="<类>">`——贪婪 `[^>]*` 会退到 `classname=` 里那个 `name=` 上。取证（同一份 XML 两种正则对拍）：`<testcase name="stopOnFlyingChildWritesStoppedSceneAndFirstTerminalVerdictWins" classname="com.zifang.z.bot.delegate.DelegateManagerLedgerTest"` → 旧式取到 `com.zifang.z.bot.delegate.DelegateManagerLedgerTest`，新式取到 `stopOnFlyingChildWritesStoppedSceneAndFirstTerminalVerdictWins`。预期红集本身**不是虚构**：24 个方法名逐个 `grep 'public void <名>('` 复算，全部存在且各只在一支测试类里 | **不折叠、不弱化判据**：改 `p27_mutation.py` 的取键（逐属性解析，只在字面 `name=` 处取值）后**整批 21 支重跑**（批二 18:22:51），批一台账归档 `~/.cache/zbot-p27-lead/LEDGER.pre-G5-fix.tsv` 只留证不作判定。批二才有 `RED-OK=8 / PARTIAL=10 / SURVIVED=3` 的真实分布（§6.3）|
+| **P27b-G7** | 共享变异锁可以是 **0 字节**（没有 owner pid），于是 `p27_mutation.py` 的"死锁才接管"退化成"读不到 pid 就接管" ⇒ 真实持有者还活着时这道闸形同虚设，别的编写棒的杠② 会被无声抢锁 | 实测：收口时 `.git/zbot-mutlock` `size=0 mtime=Sep 26 18:26:02`，而本棒两批都打印过 `== 锁已释放 ==`、且脚本取锁必写 `<pid> p27a-mutation <ts>`（非 0 字节）⇒ 不是我留的；`p27_mutation.py:289` 的 `int(stale.split()[0])` 在空串上抛 `ValueError` → `hp=None` → 走 `:296-301` 的 `unlink` 接管分支。旁证：`grep -n mutlock _doc/acceptance/p27/p27_e2e.py` = **0 命中** ⇒ 杠③ 压根不取锁（我 18:26 的 E2E 四跑就是在无锁下跑的） | **只登记不改**（改法有两条且都要跨会话统一：空内容一律 `rc=4` 走人 / 把 owner 交给 `flock` 而不是文件内容；杠③ 是否必须共锁也得主编定）。按红线我没删别人的锁、也没 kill 任何持有者 |
 | **P27b-G6** | 杠③ 修尺前三跑（`e2ea/b/c`）各 4 条 CHECK 恒红：`inspect_read_back_the_scene FAIL <missing>`、`orphan_adopted_to_unknown FAIL adopted=1 state_after_adopt=UNKNOWN … state_after_adopt=<missing>`、`dropped_not_replayed FAIL restore_offered=<missing>`、`ack_without_claim_loud_fail FAIL ack_without_claim=IllegalStateException delivery=PENDING … delivery=<missing>` | 同一行里"既报拿到了值、又报该键 missing"⇒ 只可能是量具取键错：`p27_e2e.py` 的 `parts = l[4:].split("=", 1)` 一行只按**第一个** `=` 切一次，于是 key 成了字面量 `"after_kill state"`，行内其余字段（`state_after_adopt` / `restore_offered` / `delivery` / `still_readable`）永远查不到；驱动（`P27DelegationDriver`）一行发多字段是设计如此，java 侧 `E2E|CHECKS=11 FAILED=0` 一直是对的 | 改尺不改判词：逐对 `k=v` 收进 `tokens`，另按"行首字段/裸标签"建 `byline`，五条 CHECK 改判 `field(head, key)`。**先拿已知样本回读**（`e2ea/inspect.out` 离线重放）验第一版改完 `after_kill` 仍 `<missing>`（裸标签行首没有 `=`），补 `bare` 登记后才对上；阴性对照同时保留：`field('after_kill','nope')`、`field('nope','state')` 仍 `<missing>` ⇒ 尺没被改成恒真。修后 `e2ed/e/f/g` 四跑 `CHECKS=20 FAILED=0`（§7）|
 
 ### 9.2 产品的错（实现的问题，本棒只钉不改）
@@ -712,5 +713,8 @@ STATUS: **p27b 收口完成** —— 工单 §3 的 1—6 全部落到实测量�
 4. **裁定 6 个投递面入口（`release/drop/undeliveredTerminalResults/adoptOrphans/pruneStale/sweepAtStartup`）要不要接生产** —— 依据 §10.1（真 `submitBackground`+`backgroundResult` 连拉 6 次只烧 `attempts=1` ⇒ 上限 8 在现网撞不到）与 `M02/M04` 两支只有测试能杀的事实。
 
 **给主编的一句话**：本棒改的两处**尺**（`p27_mutation.py` 的 `name=`/`classname=` 取键、`p27_e2e.py` 的一行多字段取键）都是把"归属到具名测试"从**恒假红**改成可读，**没有放宽任何判据**；两处各自带了对照（§6.5 的 git+md5 双对账、§9.1 G6 的已知样本离线重放 + `field('after_kill','nope')` 仍 `<missing>` 的阴性对照），作废的批一台账原样留在 `~/.cache/zbot-p27-lead/LEDGER.pre-G5-fix.tsv` 可复核。
+
+**交接告警（实测，本棒没碰它）**：收口时共享变异锁 `$(git rev-parse --path-format=absolute --git-common-dir)/zbot-mutlock` = `/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock` 仍在原地，`stat` 实测 **size=0、mtime=Sep 26 18:26:02**。这一笔**不是本棒留的**：本棒两批杠② 各自打印 `== 锁已释放 ==`，且 `p27_mutation.py` 取锁必写 `<pid> p27a-mutation <时间戳>`（非 0 字节）。⇒ 按红线"不碰别人的锁、不 kill 持有者"，我**没有删它**。后果要提前知道：0 字节里没有 owner pid，下一棒的接管逻辑走到 `hp = int(stale.split()[0])` 会 `ValueError → hp=None`，于是把它判成"死锁"直接 `unlink` 并接管 —— 若真实持有者还活着，这道闸**形同虚设**（登记为 **P27b-G7**，见 §9.1；本棒不改锁逻辑，因为改法要先定"0 字节算谁的"）。
+
 
 
