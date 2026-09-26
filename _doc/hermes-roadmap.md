@@ -989,19 +989,89 @@ JS 逻辑无法跨语言共用），**只有第三条（内联处理器点名）
 
 ### 8.12.5 这期欠的账（不装作已过）
 
-- **P27c-G1**：p27 台账的 `expected_red` 列在合并树上**双向陈旧**——"预期红却没红"4 条、"预期外变红"58 条，
-  35 个名字逐个已解析到宿主文件与最后提交时刻（`p27/EVIDENCE.md` §12.3）。按红线"预期红集跑之前写死、不许回填"，
-  我**没有**动那张表；要动必须按"谁读这个值"重推归属、改完**整族 21 支复跑**再记账。
-  ⇒ 这一族真正的"漏抓"是 0（除 M13 外每支都有具名测试变红），但**这族现在只有 outcome 可信、expect 集合不可信**。
+- **P27c-G1**：~~我**没有**动那张表~~ —— **已订正（`6f6b21f`）**：那张表我动了，但不是"回填"。
+  按红线要求的顺序做的：先另立机制推导文档（`~/.cache/zbot-p27-lead/g1_expect_derivation.md`，518 行，按"谁读这个值"派生归属），
+  再用 `derive_sets.py` 从文档**机械**取出 expect 集（`@Test` 注解才算，delegate 包共 62 支；空/歧义/不存在即 FATAL），
+  由 `apply_g1_table.py` 一次性重写那 10 支的表体；同时新增 `allow_extra` 档（写读共用归一那类"必然连带红"单独记账，
+  既不冒充判据命中也不算未预测的红）。量具自己带 `--selftest`（14 例：7 判档 + missed 可见 + 6 类坏表必须被拦），实测
+  `SELFTEST|cases=14 failures=0` rc=0。**但**：这 10 支（乃至整族 21 支）**按新表的整批复跑还没做** ⇒
+  新 expect 集现在是"推导成立、未经实测"的假设；旧台账里 `expected_red` 列（合并树上双向陈旧的那份）依旧不作数，
+  只有 outcome 列作为历史读数有效。复跑完另立 §8.13 记账。
 - **T1 的注入阳性对照 v1 是空跑**（`d8a3e43` 已判作废）：v1 在 E2E 起跑**之前**篡改 `target/classes`，
   而每一跑开头就是 `mvn -o -pl z-bot-core test-compile`，resources 插件把 `src` 又拷了一遍 ⇒
   篡改被构建抹掉（classes mtime 回到注入后 2 s、md5 回到 `bb3ff2e6`），`run_B` 32/32 全绿**没有真猎物**。
-  v2 改在构建之后注入（等日志出现 `BUILD|classpath_file=` 再动那一字节），并加 `ORDER_PROOF` 行把
-  "注入有没有进被读到的那条路"和"T1 红没红"分开判 ⇒ **本节写下时 v2 仍在跑，读数收口后另立 `P28-lead-9`；
-  在那之前 T1 的牙口仍是未证，不许读成"有牙"。**
+  ~~**本节写下时 v2 仍在跑，读数收口后另立 `P28-lead-9`；在那之前 T1 的牙口仍是未证，不许读成"有牙"。**~~
+  → **已闭合（09-27 01:35:16，见 `p28/EVIDENCE.md` §P28-lead-9）**：v2 把注入挪到本跑打印 `BUILD|classpath_file=` 之后，
+  三口独立读数成立 —— `T1V2|ORDER_PROOF served=bf6d3919 tampered=bf6d3919 disk=bb3ff2e6 prey_reached_measured_path=YES`、
+  `T1V2|红项条数=1 红名=T1_served_console_bytes_equal_disk_html`（32 项里只红这一项，rc=1）、
+  还原后 `RUN_D rc=0 … pass=32 fail=0` + `MD5_THREE_WAY … same=YES` ⇒
+  `T1V2|VERDICT t1_red=YES prey_hit=YES ⇒ 有牙`。它**没**证到的是 served 内容的正确性（只比 md5/长度）、
+  其它资源的过滤链路、以及浏览器渲染层。
 - **杠③ 没在新树上重跑过**：`31be6c7` 改了 `src/main`（`DelegateManager.java`），而最近三次整跑（`lead_t9_r1..r3`，
   23:09–23:45）跑在它之前。盘上 HTML 的字节没漂（`bb3ff2e6`，最后一次改 `index.html` 是 22:50 的 `4417a5e`），
   但**"HTML 没变"不等于"杠③ 已在新树上成立"** —— 待补：当前树 ×3 整跑。
+  （杠① 已补：`6f6b21f` 上 ×3 见 §8.13.2；杠③ 仍未跑，这条不作废。）
+- **一条我自己造的缺陷（已闭，形状值得记）**：`b8b1918` 新加的 `ReadmeClaimsTest` 让杠① 连续三轮红 3 支
+  （`1162 / f=3 / files=109`，3/3 确定复现，不是间歇）。病在我自己：`repoFile()` 按"从 CWD 往上哪个 `pom.xml` 先存在"挑根，
+  而 surefire 的 CWD 是 `z-bot-core`，子 pom **也**存在却没有 `<revision>` ⇒ 版本尺的参照集为空。
+  我本地的探针是从仓根起的 `JUnitCore`（4/4 绿），**探针的 CWD ≠ 门禁的 CWD**，所以绿是自证的假绿。
+  修法（`f4ad57d`）：根只由"这份 pom 含 `<revision>`"决定（往上最多 6 层），`pom.xml` 与 `README.md` 从同一个根起算，
+  不给逐文件各自 fallback。
 - 旧账不变：D-P28-2（`POST /api/skill/push` 推的是拉）仍未裁定；`/api/agent/register` 200-vs-501、
   `/api/models` tmpdir 缓存、web 那 17 条"转发-缺"命令是否进 WEB 段，都等点头；
-  真 tty 人机体验 NO-RUN；P29（README×7 + 抬号 + 发 Central）未开工。
+  真 tty 人机体验 NO-RUN。~~P29（README×7 + 抬号 + 发 Central）未开工~~ → README 第一版与数字守卫已开工，见 §8.13。
+
+## 8.13 第九期：P29 起手（README 主张守卫）+ T1 牙口补证 + 杠① 在新树 ×3（09-27 01:37–01:56，主编亲测）
+
+### 8.13.1 这一期落了哪三笔，各自只声称自己做过的事
+
+| commit | 时刻 | 内容 | 是否带"已实测通过"的声称 |
+|---|---|---|---|
+| `b8b1918` | 01:37:20 | `ReadmeClaimsTest`（4 支 `@Test`，钉 README 6 条定量主张）+ `p28_mutation.py` 的 M15/M16 两支配套注入 | 否（提交信息里明确"杠②③④ 未跑"） |
+| `f4ad57d` | 01:52:35 | 修 `repoFile()` 的仓根解析（见 §8.12.5 那条自造缺陷） | 只声称"单类 `mvn -o -pl z-bot-core test -Dtest=ReadmeClaimsTest` 4/4 绿" |
+| `6f6b21f` | 01:53:29 | p27 杠② 量具：10 支 expect 按机制重推 + `allow_extra` 档 + `_validate_table` + `--selftest`（14 例 rc=0） | 否，提交信息末行写死"21 支整批复跑尚未执行" |
+
+README 那 6 条主张的口径：`grep -c '^' README.md` = 122 行、`<revision>` = `0.2.0`、内核 pin = `0.2.1`，
+每一条在 README 里都自带一条复算命令，尺读的就是那一条命令的**同源对象**（不是文档抄的数）。
+
+### 8.13.2 杠①：`6f6b21f` ×3 串行（原文，逐字来自 `~/.cache/zbot-integrate/bar1_6f6b21f.log`）
+
+```
+BAR1_SERIES|dir=/Users/zifang/.cache/zbot-integrate/bar1_270153 start=2026-09-27 01:53:36 HEAD=6f6b21f
+BAR1_TREE|dirty_total=2 dirty_tracked=0 src_md5_delegate=fd1652b3
+BAR1_SRC_MD5_START|index.html=bb3ff2e6 p28_e2e.py=2e8134bb
+ROUND|r=1 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 01:54:39
+ROUND|r=2 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 01:55:41
+ROUND|r=3 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1162, Failures: 0, Errors: 0, Skipped: 0] class_sum=1162 f=0 e=0 s=0 files=109 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-27 01:56:44
+BAR1_SRC_MD5_END|index.html=bb3ff2e6 p28_e2e.py=2e8134bb
+BAR1_CLASSES|src=bb3ff2e6 classes=bb3ff2e6 src_len=53093 cls_len=53093
+BAR1_DONE|end=2026-09-27 01:56:44 dir=/Users/zifang/.cache/zbot-integrate/bar1_270153 HEAD=6f6b21f dirty_tracked=2 src_md5_delegate=fd1652b3
+```
+
+- **`1158 → 1162`（+4）与 `files=108 → 109`（+1）** 正好等于 `b8b1918` 新增的那一个测试文件里那 4 支 `@Test`；
+  没有一支测试被静默挤掉（`class_sum` 与聚合行 `agg` 双尺一致，`build_success_rows=1` 说明只有一场 reactor）。
+- 协议照旧：每轮 `rm -rf z-bot-core/target/surefire-reports` 后 `mvn -o test` 全 reactor（**不** `-pl`），三轮串行不并发。
+- **`dirty_tracked` 开头 0、结尾 2 这个不一致，我这轮不当它作废，但要把证据摆齐**：
+  收尾时脏的两条是 `_doc/acceptance/p28/EVIDENCE.md` 与 `_doc/hermes-roadmap.md`（我在三轮跑期间写 §P28-lead-9 与本节），
+  `git status --porcelain -- z-bot-core/src` 空、`git diff --name-only 6f6b21f -- z-bot-core/src` 计 **0** 个文件，
+  且被新加的那支测试在盘上与在 `6f6b21f` 里逐字节同（`md5` 前缀两边都是 `8fd84fa2`）。
+  ⇒ 编译对象三轮都是 `6f6b21f` 那棵树，动的只有不参与编译的两篇文档。**下一期起：写作与测量不同时进行**，
+  要么先写完再跑，要么跑期间一个字不碰。
+- 杠④：三轮 6 个采样点（`ROUND_START` ×3 + 每轮 `ROUND` 行尾）逐格 `8 / 2dadaed0 / 690ddbc0`；
+  真 minimax key 只量长度（125），值未被读取。
+
+### 8.13.3 T1 的牙口（补上 §8.12.5 那笔账）
+
+见 `p28/EVIDENCE.md` §P28-lead-9。三句结论：
+① `ORDER_PROOF` 与 `T1V2|VERDICT t1_red=YES prey_hit=YES` 分列 ⇒ "猎物上场"和"尺咬住"是两条独立读数，不是一句话；
+② 32 项里只红 T1 那一项（`rc=1 pass=31 fail=1`），且还原后 `32 pass=32 fail=0` + 三方 md5 `same=YES`；
+③ 归属钉死：`git diff --name-only 7dc51ba..6f6b21f` 只 6 个文件、`z-bot-core/src/main` 段 **0** 个，
+`index.html` 在该链六个提交上恒 `bb3ff2e6`、`HttpChannel.java` 两端恒 `20cc3f4a` ⇒ 这轮的"有牙"对当前树依然成立。
+
+### 8.13.4 这一期仍然欠的（写在这里，别让下一个人以为已过）
+
+- 杠② p28：`p28_mutation.py` 现在 **16** 支（新加 M15/M16），当前树整批未跑（`b8b1918` 提交时只有 14 支的老账）。
+- 杠② p27：21 支按 `6f6b21f` 的新表整批复跑未做 ⇒ 新 expect 集"推导成立、未经实测"。
+- 杠③：当前树 ×3 真进程 E2E 未跑（§8.12.5 那条待补不变）。
+- 浏览器渲染层 `/help` 实输出对照未做（`P28-lead-6` 的未完项）。
+- P29 其余：`z-agent` / `z-agent-kernel` / `z-agent-proxy` 三篇 README、`<revision>` 抬号、发 Central —— 后两件都在 z-bot 的 push 授权之外，等点头。

@@ -722,3 +722,104 @@ BAR1_DONE|end=2026-09-27 01:05:09 dir=/Users/zifang/.cache/zbot-integrate/bar1_2
 - 杠④ 在杠① 的 6 个采样点逐格 `8 / 2dadaed0 / 690ddbc0`；真 minimax key 全程只量长度（125），值未被读取。
 
 _再生成本节两支读数：`python3 _doc/acceptance/p28/p28_mutation.py`（要抢锁）与 `bash ~/.cache/zbot-integrate/bar1_x3.sh`；原始日志 `~/.cache/zbot-integrate/p28_mut_final_270057.log`、`bar1_7dc51ba.log`。_
+
+
+## P28-lead-9 · T1 注入阳性对照 v2：这次是真有牙（09-27 01:11:10–01:35:16，主编亲测）
+
+### 1. 量具身份
+
+- 驱动 `~/.cache/zbot-integrate/t1_tamper_v2.sh`（74 行，md5 前缀 `8d41fdc1`，写于 00:32），
+  输出目录 `~/.cache/zbot-integrate/t1_tamper_v2_270111/`（`run_B.log`、`run_D.log`、注入前副本 `index.classes.pre`）。
+- 被调的 E2E 尺仍是仓内 `_doc/acceptance/p28/p28_e2e.py`（`2e8134bb`，与 §P28-lead-8 同一份字节）。
+- 注入方式（v1 病灶的修法）：先起跑，**等本跑自己打印 `BUILD|classpath_file=`** 之后
+  （这一行之后本跑再无 mvn，不可能再把资源重拷一遍）才向
+  `z-bot-core/target/classes/web/index.html` 尾部追加 1 字节；还原只从注入前 `cp` 的那份字节 `cp` 回去，
+  `trap … EXIT` 保证半途退出也还原。全程 `--config-dir` 临时根 + `stub-key-not-real`，`llm_hits` 是打到我自写假 LLM 的次数。
+
+### 2. 外部日志逐字（`t1_tamper_v2_outer.log`，17 行）
+
+```
+T1V2|START 2026-09-27 01:11:10 dir=/Users/zifang/.cache/zbot-integrate/t1_tamper_v2_270111
+T1V2|MD5_PRE classes=bb3ff2e6 snapshot=bb3ff2e6 src=bb3ff2e6
+T1V2|LAUNCHED pid=19666
+T1V2|TAMPER_AFTER_BUILD 2026-09-27 01:11:15 classes=bf6d3919 len=53094
+T1V2|RUN_B rc=1 E2E|run=t1_tamper_v2 checks=32 pass=31 fail=1 llm_hits=1 serve_port=55115 result=HAS_FAILURE
+SERVED|status='HTTP/1.1 200 OK' served=53094B/bf6d3919 disk=53093B/bb3ff2e6 classpath=53094B/bf6d3919
+T1V2|红项条数=1 红名=T1_served_console_bytes_equal_disk_html
+T1V2|注入被构建抹掉的反证（v1 病灶）：classes mtime=01:11:15 注入时刻见上一行
+T1V2|ORDER_PROOF served=bf6d3919 tampered=bf6d3919 disk=bb3ff2e6 prey_reached_measured_path=YES
+T1V2|VERDICT t1_red=YES prey_hit=YES ⇒ 有牙（篡改进了 served，且 T1 点名红了）
+T1V2|RESTORE classes=bb3ff2e6 len=53093
+T1V2|MD5_THREE_WAY classes=bb3ff2e6b03ed524c92dd4d877adfe9b snapshot=bb3ff2e6b03ed524c92dd4d877adfe9b src=bb3ff2e6b03ed524c92dd4d877adfe9b same=YES
+T1V2|RUN_D rc=0 E2E|run=t1_restored_v2 checks=32 pass=32 fail=0 llm_hits=1 serve_port=61395 result=OK
+SERVED|status='HTTP/1.1 200 OK' served=53093B/bb3ff2e6 disk=53093B/bb3ff2e6 classpath=53093B/bb3ff2e6
+T1V2|DONE 2026-09-27 01:35:16
+```
+
+### 3. 牙口三段论，每段一条独立读数
+
+1. **猎物确实进了被测量那条路** —— `ORDER_PROOF served=bf6d3919 tampered=bf6d3919 disk=bb3ff2e6`：
+   HTTP 响应体的 md5 等于**被篡改后**的那份，而不等于盘上 `src/main/resources` 那份。这一步单独成立，
+   与 T1 红不红无关（所以 v1 那种"注入被构建抹掉"的跑会在这里就露出来：它 `prey_reached_measured_path=NO`）。
+2. **尺点名咬住，且只咬这一处** —— `RUN_B rc=1 … checks=32 pass=31 fail=1`，`红项条数=1 红名=T1_served_console_bytes_equal_disk_html`。
+   `FAILED_CHECK|T1_…|… served=53094B md5=bf6d3919 | disk=53093B md5=bb3ff2e6 (…) | classpath=53094B md5=bf6d3919 (…)`
+   —— 消息里三方尺寸/哈希全打出来，红了能直接判断是哪一层分叉（这一条是"被 serve 的字节 ≠ 盘上那份"，不是"服务挂了"）。
+   其余 31 条不受影响，说明这 1 字节没顺手把别的判据撞红（也就不是"整跑崩了所以全红"那种假阳性）。
+3. **还原对照** —— `RUN_D rc=0 … 32 pass=32 fail=0`，且 `MD5_THREE_WAY … same=YES`、`RESTORE … len=53093`：
+   同一棵树、同一份尺，只有"注入 / 不注入"这一个变量，判据跟着从红回绿。
+
+### 4. 与 v1 的对比（为什么上一节判作废是对的）
+
+| | 注入时刻 | served | disk | 结果 | 判读 |
+|---|---|---|---|---|---|
+| v1 `t1_tamper_262345` | E2E 起跑**之前** | `53093B/bb3ff2e6` | `53093B/bb3ff2e6` | 32/32 全绿 | 零猎物（`test-compile` 把篡改重拷抹掉） |
+| v2 `t1_tamper_v2_270111` | `BUILD\|classpath_file=` 之后 | `53094B/bf6d3919` | `53093B/bb3ff2e6` | 31  pass / 1 红（T1） | 有牙 |
+
+v1 那一行 `SERVED|… served=53093B/bb3ff2e6` 与盘上完全一致，正是"猎物根本没上场"的形状；
+所以 §P28-lead-7·三 的结论（"32/32 全绿既不能读成没牙、也不能读成抓到篡改"）成立，v2 才是它等的那一次。
+
+### 5. 这次证到了什么、没证到什么
+
+- **证到**：`HttpChannel.serveConsole()` 每次请求 `getResourceAsStream` 读的是 classpath 上那份，
+  且 T1 那条判据比较的是"HTTP 响应体 vs 盘上 src"，两者一旦分叉它必红；
+  尺对"被 serve 的字节"是逐字节的，不是只看状态码或长度。
+- **没证到**：① 内容正确性（T1 只比 md5/长度， served 里若是"合法但错版"的 HTML 它不管，那是文档派生尺那几层的活）；
+  ② 资源过滤链路里**其它**资源（只动了 `web/index.html`）；③ 浏览器渲染层（DOM 拿到之后）—— 那仍是
+  `P28-lead-6` 记的未完项（`/help` 实输出的浏览器层对照）。
+
+### 6. 树身份与归属（这轮读数属于哪棵树）
+
+跑窗 01:11:10–01:35:16 之内工作树被提交过两次（`5aeacda` 01:13:16、`443744b` 01:20:55），所以"跑时 HEAD"不是一个值。
+按字节把归属钉死：`git diff --name-only 7dc51ba..6f6b21f` 只有 6 个文件
+
+```
+README.md
+_doc/acceptance/p27/p27_mutation.py
+_doc/acceptance/p28/EVIDENCE.md
+_doc/acceptance/p28/p28_mutation.py
+_doc/hermes-roadmap.md
+z-bot-core/src/test/java/com/zifang/z/bot/ReadmeClaimsTest.java
+```
+
+`z-bot-core/src/main` 那一段是 **0 个文件**，被 serve 的那条路上两个关键点逐字节对得上：
+`index.html` 在 `7dc51ba / 5aeacda / 443744b / b8b1918 / f4ad57d / 6f6b21f` 六个提交上都是 `bb3ff2e6`；
+`HttpChannel.java` 在 `7dc51ba` 与 `6f6b21f` 上都是 `20cc3f4a`。⇒ **T1 v2 量的是 `serveConsole` 的实现，
+这份实现在那六个提交之间没动过一个字节**，所以这轮的有牙结论对当前树（`6f6b21f`）依然成立；
+变的只有测试/文档/README。两轮 `BUILD|classpath_file=…/cp.txt size=3044 rc=0` 尺寸一致，也说明两边喂给 JVM 的
+classpath 是同一份产物。
+
+### 7. 还原与杠④（诚实记账）
+
+- 还原：`RESTORE classes=bb3ff2e6 len=53093` + `MD5_THREE_WAY same=YES`（全 md5 `bb3ff2e6b03ed524c92dd4d877adfe9b`），
+  未用任何 `git checkout/restore`。盘上那份此后两次被独立量具复核为 `bb3ff2e6`：
+  `bar1_7dc51ba.log` 的 `BAR1_SRC_MD5_START|index.html=bb3ff2e6`（01:01，跑在 T1 之前）与
+  `bar1_6f6b21f.log` 的同一行（01:53:36，跑在 T1 之后）⇒ 篡改没有残留到工作树。
+- 收线：`lsof` 复扫 55115 / 61395 两个端口都不在 LISTEN，`ps` 里 `java … ZBot` 一条不剩。
+  （第一次探活我用 `ps | grep "[j]ar serve\|[Z]Bot serve"` 匹到了两条，那是**我自己那条 grep 命令行**，
+  换成 `grep -E "java .*ZBot" | grep -v grep` 后为 0。）
+- **杠④：这一支驱动自己没有采样 `~/.zbot`** —— 它的三值证据是借来的：由杠① 那 6 个采样点
+  （`bar1_x3.sh` 每轮 `ROUND_START` 各打一次）与 `p28_e2e.py` 内部的三个时点承担，逐格 `8 / 2dadaed0 / 690ddbc0`；
+  真 minimax key 全程只量长度（125），值未被读取。这一条要写清，别把"整轮杠④ 绿"记成"这支驱动量过杠④"。
+
+_再生成本节读数：`bash ~/.cache/zbot-integrate/t1_tamper_v2.sh`（它会注入 `target/classes`，跑完自还原；与任何 mvn/杠② 串行）；
+原始日志 `~/.cache/zbot-integrate/t1_tamper_v2_outer.log`、`~/.cache/zbot-integrate/t1_tamper_v2_270111/run_{B,D}.log`。_
