@@ -5,7 +5,6 @@ import com.zifang.z.agent.kernel.tool.ToolResult;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -24,7 +23,9 @@ import java.util.Map;
  * 驱动自己说的话一句不算证据。</p>
  *
  * <p>用法：{@code java -cp <真 jar>:<test-classes> 本类 <mode> <memories 目录> [参数…]}。
- * mode：tool|read|entries|soul|halfwrite|badbudget|driftprobe，见 {@link #main}。</p>
+ * mode：{@code tool|read|soul|halfwrite|badbudget|driftprobe}（见 {@link #main}；前棒的 javadoc
+ * 还广告过一个 {@code entries} 档，{@code main()} 里从来没有分发出去过 —— p24d 量具修订：
+ * 条目数由 {@code read} 档一并吐出，判定在 JVM 外面独立量，不留一个假的入口）。</p>
  */
 public final class MemoryE2eDriver {
 
@@ -235,9 +236,5 @@ public final class MemoryE2eDriver {
         } catch (Exception e) {
             return "ERR_" + e.getClass().getSimpleName();
         }
-    }
-
-    private static String utf8(byte[] b) {
-        return new String(b, StandardCharsets.UTF_8);
     }
 }

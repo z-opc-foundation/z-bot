@@ -13,16 +13,24 @@
     rewrite 要审批），所以点名 testcase 允许 `bot.memory.*` 与 `bot.agent.*` 两边，
     XML 按各自包名去找（见 CLS_PKG）。
   * 每支变异体只跑它点名的 testcase（`-Dtest=Class#m1+m2`），不跑全量。
-  * 判定只认 surefire XML 里的 testcase 名，五档：
-      RED-OK             点名的全红、没有别的红
-      PARTIAL            点名的一部分红 / 红了别人
-      GREEN-BUT-MUTATED  全绿 ⇒ 断言缺口（如实记账，不改判据凑绿）
-      BROKEN             编译不过
-      NO-RUN             阳性对照进不来（配不到猎物），写明原因，不算分
+  * 判定只认 surefire XML 里的 testcase 名，记号**必须落在工单 §2.4 的那五个里**
+    （p24d 相对前棒的改动：前棒五档里有四档不在这五个之内，照抄进台账就是返工。
+     旧→新映射写死在 main() 的 MARK 表里 —— 改的是记号，不是判据）：
+      KILLED                 点名的全红、没有别的红，**并且**下面那条字节证明拿到了
+      RED-OK                 红了，但"这处改动真进了字节码"没证成 ⇒ 只敢报"红"不敢报"杀"
+      PARTIAL                点名的一部分红 / 红了别人
+      SURVIVED               真跑到而全绿 ⇒ 断言缺口（旧 GREEN-BUT-MUTATED；如实记账，不改判据凑绿）
+      INJECTION_NOT_APPLIED  编译不过 / ran=0 / 阳性对照进不来而跳过（旧 NO-RUN）/
+                             源码改了但 class 反汇编一字未动（等价变异或压根没重编）/ CTRL-* 行
   * **阳性对照**：每族先跑一次 `injection=NONE`，点名的 testcase 必须全绿且真跑到
-    （ran>0），否则该族所有变异体记 NO-RUN。
-  * 还原只从内存里的原文写回（不用 `git checkout --`），每支跑完立刻 md5 对账，对不上就停。
-  * LEDGER.tsv 只由本脚本机械输出，禁止手敲。
+    （ran>0），否则该族所有变异体记 INJECTION_NOT_APPLIED。
+  * **注入必须被证明编译进去了**（工单 §2.4 第二条）：每支变异体在还原之前，对"被改的那个源文件"
+    对应的 `target/classes/**.class` 跑 `javap -c -p` 取反汇编指纹，与本轮 clean 构件的指纹逐文件
+    比对；一字未变 ⇒ "检查抓不到"这句话根本不成立，那行只能记 INJECTION_NOT_APPLIED。
+  * 还原一律从**本次运行前自己 cp 的副本**（`~/.cache/zbot-p24-lead/mutbak/`）cp 回来 + md5 对账，
+    **不用 `git checkout --`**（git 基线是 HEAD，不是我开始测量那一刻，那样会连别人的未提交改动一起抹）。
+    开跑前先看 `memory/` 目录干不干净：不干净 ⇒ rc=5 拒绝开跑（上一支残留会污染后面全部读数）。
+  * LEDGER.tsv 只由本脚本机械输出，禁止手敲；台账 mtime 必须晚于本 .py 的 mtime。
 
 **永挂体检（跑变异之前必做，工单 §3 杠② 的前置）**：点名的判级集里若有测试会永挂，就会一直占着
 全编队共享的 `zbot-mutlock`（上一棒就是这么把 P14a 饿死的）。本脚本启动时机械重跑这条检查，
@@ -37,11 +45,14 @@
 复算: python3 -u _doc/acceptance/p24/p24_mutation.py            # 全量一轮
       python3 -u _doc/acceptance/p24/p24_mutation.py --check    # 只验锚点/点名/永挂体检
 """
+import atexit
 import fcntl
 import hashlib
 import io
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -51,8 +62,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
+MAIN_CLASSES = os.path.join(CORE, "target", "classes")
 MEM_TEST_SRC = os.path.join(CORE, "src", "test", "java", "com", "zifang", "z", "bot", "memory")
 AGENT_TEST_SRC = os.path.join(CORE, "src", "test", "java", "com", "zifang", "z", "bot", "agent")
+
+# 现场与副本一律落 `~/.cache`（工单 §1：绝不写 /tmp，会被扫）
+CACHE = os.path.expanduser("~/.cache/zbot-p24-lead")
+MUTBAK = os.path.join(CACHE, "mutbak")
+
+# 记号表：工单 §2.4 只准这五个（前棒的旧记号一律按语义映射过去，不改判据）
+MARKS = ("KILLED", "RED-OK", "SURVIVED", "PARTIAL", "INJECTION_NOT_APPLIED")
 
 LOCK_RETRIES = 3             # 抢锁重试次数（刻意小：抢不到就该让路，不是死等）
 LOCK_BACKOFF = 10            # 每次退避秒数 ⇒ 最多等 30s
@@ -405,6 +424,72 @@ def md5(path):
     return h.hexdigest()
 
 
+# ===== 注入的字节证明（工单 §2.4：注入的 bug 必须证明被编译进去了）=====
+
+def class_files_for(key):
+    """被改的源文件 ⇒ 它在 target/classes 里产出的所有 class（含 $ 嵌套/匿名）。"""
+    rel = SRC[key].split("src/main/java/")[-1]          # com/zifang/z/bot/memory/MemoryStore.java
+    base = os.path.basename(rel)[:-len(".java")]
+    root = os.path.join(MAIN_CLASSES, os.path.dirname(rel))
+    out = []
+    if os.path.isdir(root):
+        for n in sorted(os.listdir(root)):
+            if n == base + ".class" or n.startswith(base + "$"):
+                out.append(os.path.join(root, n))
+    return out
+
+
+def disasm_sig(key):
+    """`javap -c -p` 的反汇编指纹：不含行号表，所以"源码漂了一行"不会伪装成"字节变了"。"""
+    sig = {}
+    javap = shutil.which("javap") or "javap"
+    for cf in class_files_for(key):
+        p = subprocess.run([javap, "-c", "-p", cf],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        body = p.stdout
+        if p.returncode != 0:     # javap 拿不到 ⇒ 不许给"证明成立"，退回按 class 原始字节哈希
+            body = open(cf, "rb").read() + b"<!RAW-BYTES-INSTEAD-OF-JAVAP>"
+        h = hashlib.sha256()
+        h.update(body)
+        sig[os.path.basename(cf)] = (h.hexdigest()[:12], len(body))
+    return sig
+
+
+CLEAN_SIG = {}
+
+
+def snapshot_clean(keys):
+    """在当前（未注入）盘面上量一次 clean 反汇编指纹；mvn 刚编过，class 就是提交树的构件。"""
+    for k in keys:
+        CLEAN_SIG[k] = disasm_sig(k)
+    return {k: len(v) for k, v in CLEAN_SIG.items()}
+
+
+def sig_delta(key):
+    """当前 class 反汇编指纹 vs 本轮 clean 指纹 ⇒ (差异文件列表 | None, 说明)。
+
+    None = 量不出（没有 clean 参照 / target/classes 里没有对应的 class）：
+    这属于**量具没起起来**，绝不许被读成"变异没进字节码"，更不许读成"检查抓不到"。
+    """
+    if key not in CLEAN_SIG:
+        return None, "没有 clean 指纹可比（快照阶段没跑到这个文件）"
+    now = disasm_sig(key)
+    if not now:
+        return None, "target/classes 里找不到 %s 对应的 class（没重编？）" % SRC[key]
+    if CLEAN_SIG[key].keys() != now.keys():
+        return None, "class 集合都变了：%s → %s" % (sorted(CLEAN_SIG[key]), sorted(now))
+    diff = [n for n in now if CLEAN_SIG[key][n] != now[n]]
+    return diff, "反汇编差异 %d/%d 枚：%s" % (len(diff), len(now), ",".join(sorted(diff)) or "-")
+
+
+def injection_proof(key):
+    """工单 §2.4 的字节证明：被改文件对应的 class 至少一枚反汇编与 clean 不同 ⇒ 变异真编进去了。"""
+    diff, detail = sig_delta(key)
+    if diff is None:
+        return False, "量具未起：" + detail
+    return bool(diff), detail
+
+
 def check_named_tests():
     """点名的 Class#method 必须真的存在于测试源码里（指向已删测试的变异体只会崩出假红）。"""
     missing = []
@@ -484,6 +569,17 @@ def run_named(named):
     return rc, failing, ran, out, time.time() - t0, sel
 
 
+def compile_only():
+    """还原源码之后真重编一次：让 target/classes 回到"提交树的构件"，字节层面可核对。"""
+    try:
+        p = subprocess.run(["mvn", "-o", "-q", "compile", "-pl", "z-bot-core"], cwd=ZBOT,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           timeout=PER_RUN_TIMEOUT)
+        return p.returncode, p.stdout.decode("utf-8", "replace")
+    except subprocess.TimeoutExpired:
+        return -1, "TIMEOUT"
+
+
 def main():
     mutants = MUTANTS
     check_only = "--check" in sys.argv
@@ -529,6 +625,17 @@ def main():
     if check_only:
         return 0
 
+    # ===== 盘面守卫：memory/ 与门禁点名的测试类必须干净（残留 = 上一支没还原 = 后面全污染）=====
+    dirty = subprocess.run(["git", "-C", ZBOT, "status", "--porcelain", "--",
+                           "z-bot-core/src/main/java/com/zifang/z/bot/memory"],
+                           stdout=subprocess.PIPE).stdout.decode("utf-8", "replace").strip()
+    if dirty:
+        print("FATAL: memory/ 有未提交改动，拒绝开跑（残留变异体会污染后面所有读数；"
+              "还原请从 %s 里的本次副本 cp，不要用 git checkout）:\n%s" % (MUTBAK, dirty))
+        return 5
+    if not os.path.isdir(MUTBAK):
+        os.makedirs(MUTBAK)
+
     if not os.path.isdir(REPORTS):
         os.makedirs(REPORTS)
 
@@ -540,20 +647,66 @@ def main():
     print("[锁] 已取得 %s" % lock_path, flush=True)
 
     baseline = {k: md5(abspath(k)) for k in SRC}
+    copies = {}                      # 本次运行自己 cp 的副本：还原只认它，不认 git
+    for k in SRC:
+        dst = os.path.join(MUTBAK, "%s.%s" % (k, os.path.basename(SRC[k])))
+        shutil.copyfile(abspath(k), dst)
+        copies[k] = (dst, md5(dst))
+        if md5(dst) != baseline[k]:
+            print("FATAL: cp 出来的副本就对不上（%s）" % k)
+            return 2
+    print("[副本] 已 cp %d 个源文件到 %s（md5 全部对账通过）" % (len(copies), MUTBAK), flush=True)
     rows = []
-    tally = {"RED-OK": 0, "PARTIAL": 0, "GREEN-BUT-MUTATED": 0, "BROKEN": 0, "NO-RUN": 0}
+    tally = dict((m, 0) for m in MARKS)
     ledger = os.path.join(HERE, "LEDGER.tsv")
+
+    def restore_from_copy(key):
+        """还原只从本次 cp 的副本；对不上 md5 就停（git 基线是 HEAD，不是我开始测量的那一刻）。"""
+        dst, want = copies[key]
+        shutil.copyfile(dst, abspath(key))
+        return md5(abspath(key)) == want == baseline[key]
+
+    def restore_all(reason):
+        """异常/信号兜底：绝不让变异体留在盘上过夜（前棒死在 150 轮时就是这样污染下一棒的）。"""
+        left = []
+        for k in SRC:
+            if md5(abspath(k)) != baseline[k]:
+                shutil.copyfile(copies[k][0], abspath(key))
+                left.append("%s=%s" % (os.path.basename(SRC[k]),
+                                       "已按副本还原" if md5(abspath(k)) == baseline[k] else "还原失败"))
+        if left:
+            print("[紧急还原] %s ⇒ %s" % (reason, ", ".join(left)), flush=True)
+        return left
+
+    def _bye(*a):
+        restore_all("进程退出/收到信号")
+        if a:
+            sys.exit(130)
+
+    atexit.register(_bye)
+    for _sig in ("SIGINT", "SIGTERM", "SIGHUP"):
+        _s = getattr(signal, _sig, None)
+        if _s:
+            signal.signal(_s, _bye)
 
     def flush_ledger():
         with io.open(ledger, "w", encoding="utf-8") as fh:
             fh.write("\t".join(["id", "family", "target", "testcase", "injection",
                                 "expected_red_set", "verdict", "detail"]) + "\n")
             for r in rows:
+                if r[6] not in MARKS:
+                    raise SystemExit("FATAL: 台账行 %s 的记号 %r 不在工单允许的五格里" % (r[0], r[6]))
                 fh.write("\t".join(r) + "\n")
             fh.write("\t".join(["#tally", "", "", "", "",
-                                "RED-OK=%d|PARTIAL=%d|GREEN-BUT-MUTATED=%d|BROKEN=%d|NO-RUN=%d"
-                                % (tally["RED-OK"], tally["PARTIAL"], tally["GREEN-BUT-MUTATED"],
-                                   tally["BROKEN"], tally["NO-RUN"]), "", ""]) + "\n")
+                                "|".join("%s=%d" % (m, tally[m]) for m in MARKS), "", ""]) + "\n")
+            fh.write("\t".join(["#marks_allowed_by_workorder", "", "", "", "",
+                                "|".join(MARKS), "", ""]) + "\n")
+            proofed = len([r for r in rows
+                           if not r[0].startswith("CTRL-") and "字节注入证明=证成" in r[7]])
+            fh.write("\t".join(["#byte_proof_ok_rows", "", "", "", "", "", str(proofed), ""]) + "\n")
+            fh.write("\t".join(["#ctrl_status", "", "", "", "", "",
+                                "|".join("%s=%s" % kv for kv in sorted(ctrl_state.items())),
+                                ""]) + "\n")
             fh.write("\t".join(["#mutants_injected", "", "", "", "", "",
                                 str(len([r for r in rows if not r[0].startswith("CTRL-")])),
                                 ""]) + "\n")
@@ -569,26 +722,39 @@ def main():
                                 time.strftime("%Y-%m-%dT%H:%M:%S%z")]) + "\n")
 
     families = sorted({m[1] for m in mutants})
-    prey_ok = {}
+    prey_ok, ctrl_state = {}, {}
     # ===== 阳性对照：每族 injection=NONE，点名的 testcase 必须真跑到且全绿 =====
     for fam in families:
         named = sorted(FAMILY_PREY.get(fam, set()))
         if not named:
             prey_ok[fam] = False
-            rows.append(["CTRL-" + fam, fam, "-", "(无点名 testcase)", "NONE", "-", "NO-RUN",
-                         "该族没有任何点名 testcase"])
-            tally["NO-RUN"] += 1
+            ctrl_state[fam] = "NO_PREY"
+            rows.append(["CTRL-" + fam, fam, "-", "(无点名 testcase)", "NONE", "-",
+                         "INJECTION_NOT_APPLIED", "该族没有任何点名 testcase（CTRL 行按定义未注入）"])
             flush_ledger()
             continue
         rc, failing, ran, out, secs, sel = run_named(named)
-        verdict = "BROKEN" if "COMPILATION ERROR" in out else (
-            "NO-RUN" if (ran == 0 or failing) else "OK")
-        prey_ok[fam] = verdict == "OK"
-        rows.append(["CTRL-" + fam, fam, "-", sel, "NONE", ",".join(named), verdict,
-                     "ran=%d rc=%s %.1fs 红=%s" % (ran, rc, secs, ",".join(sorted(failing)) or "-")])
+        status = "BROKEN" if "COMPILATION ERROR" in out else (
+            "NO_RAN" if ran == 0 else ("RED" if failing else "OK"))
+        prey_ok[fam] = status == "OK"
+        ctrl_state[fam] = status
+        rows.append(["CTRL-" + fam, fam, "-", sel, "NONE", ",".join(named),
+                     "INJECTION_NOT_APPLIED",
+                     "CTRL 阳性对照（未注入）status=%s ran=%d rc=%s %.1fs 红=%s"
+                     % (status, ran, rc, secs, ",".join(sorted(failing)) or "-")])
         print("[对照] %-16s %-6s ran=%d 点名=%d %.1fs %s"
-              % (fam, verdict, ran, len(named), secs, ",".join(sorted(failing)) or "全绿"), flush=True)
+              % (fam, status, ran, len(named), secs, ",".join(sorted(failing)) or "全绿"), flush=True)
         flush_ledger()
+
+    # ===== clean 构件指纹：此时盘上是未注入的源码、且刚被 mvn 编译过 ⇒ 拿它当字节参照 =====
+    counts = snapshot_clean(sorted(set(m[2] for m in mutants)))
+    print("[字节] clean 反汇编指纹已取：%s（javap -c -p，不含行号表）"
+          % ", ".join("%s=%d枚" % (SRC[k].split("/")[-1], n) for k, n in sorted(counts.items())),
+          flush=True)
+    for k, n in sorted(counts.items()):
+        if n == 0:
+            print("FATAL: %s 在 target/classes 里一枚 class 都没有 ⇒ 字节证明无从谈起，拒绝开跑" % SRC[k])
+            return 2
 
     # ===== 逐支注入 =====
     for mid, fam, key, old, new, want, expected, note in mutants:
@@ -596,49 +762,69 @@ def main():
             print("FATAL: %s 的预期红集与冻结表不一致（表被改过）" % mid)
             return 2
         if not prey_ok.get(fam, False):
-            rows.append([mid, fam, SRC[key], ",".join(expected), "SKIPPED", ",".join(expected),
-                         "NO-RUN", "阳性对照进不来猎物：CTRL-%s 不是 OK" % fam])
-            tally["NO-RUN"] += 1
-            print("%-44s NO-RUN（阳性对照失败）" % mid, flush=True)
+            rows.append([mid, fam, SRC[key], ",".join(expected), "NOT_INJECTED",
+                         ",".join(expected), "INJECTION_NOT_APPLIED",
+                         "阳性对照进不来猎物：CTRL-%s status=%s ⇒ 这一支压根没注入"
+                         % (fam, ctrl_state.get(fam))])
+            tally["INJECTION_NOT_APPLIED"] += 1
+            print("%-44s INJECTION_NOT_APPLIED（阳性对照失败）" % mid, flush=True)
             flush_ledger()
             continue
-        original = read(key)
+        original = read(key)                    # 只用来算注入后的文本；还原一律走副本
         write(key, original.replace(old, new, 1))
         rc, failing, ran, out, secs, sel = run_named(expected)
-        write(key, original)
-        restored = md5(abspath(key)) == baseline[key]
+        proved, pdetail = injection_proof(key)   # 必须在还原之前量（此时 class = 本支变异体）
+        restored = restore_from_copy(key)
+        crc, cout = compile_only()               # 还原后真重编一次：既坐实上一轮量的是变异体，
+        back_ok, bdetail = sig_delta(key)        # 也证明"回到 clean 字节"不是我说回就回
+        byte_back = (back_ok == []) and crc == 0
         if "COMPILATION ERROR" in out:
-            verdict = "BROKEN"
+            verdict = "INJECTION_NOT_APPLIED"    # 编译不过 ⇒ 这份 bug 压根没进构件
         elif ran == 0:
-            verdict = "NO-RUN"
+            verdict = "INJECTION_NOT_APPLIED"    # 一条测试都没跑到，无从判级
+        elif not proved:
+            verdict = "INJECTION_NOT_APPLIED"    # 字节没变：等价变异或没重编，不许记成"检查抓不到"
         else:
             hit = set(expected) & failing
             if hit and not (failing - set(expected)) and len(hit) == len(expected):
-                verdict = "RED-OK"
+                verdict = "KILLED"
             elif hit or failing:
                 verdict = "PARTIAL"
             else:
-                verdict = "GREEN-BUT-MUTATED"
+                verdict = "SURVIVED"
         tally[verdict] += 1
         who = ",".join(sorted(failing)) if failing else "全绿"
-        print("%-44s %-18s 点名 %d/%d ran=%d rc=%s %.1fs 还原=%s | %s"
+        print("%-44s %-22s 点名 %d/%d ran=%d rc=%s %.1fs 字节=%s 还原=%s 回clean=%s | %s"
               % (mid, verdict, len(set(expected) & failing), len(expected), ran, rc, secs,
-                 restored, who), flush=True)
+                 "证成" if proved else "未证", restored, byte_back, who), flush=True)
         rows.append([mid, fam, SRC[key], sel,
                      "\\n".join(new.split("\n"))[:90] or "(删掉锚点)", ",".join(expected), verdict,
-                     "红=%s ran=%d rc=%s %.1fs 还原=%s 说明=%s" % (who, ran, rc, secs, restored, note)])
+                     "红=%s ran=%d rc=%s %.1fs 字节注入证明=%s(%s) 副本还原=%s 重编回clean=%s(%s rc=%s)"
+                     " 说明=%s" % (who, ran, rc, secs, "证成" if proved else "未证", pdetail,
+                                   restored, byte_back, bdetail, crc, note)])
         flush_ledger()
         if not restored:
-            print("FATAL: %s 之后没还原成基线，停在这里（后面读数不可信）" % mid)
+            print("FATAL: %s 之后没从副本还原成基线，停在这里（后面读数不可信）" % mid)
+            break
+        if not byte_back:
+            print("FATAL: %s 还原并重编之后字节没回到 clean（%s）⇒ 上一轮的字节证明不可信，停"
+                  % (mid, bdetail))
             break
 
     # ===== 还原对账：md5 + git status（工单：收尾时 src/main 必须干净）=====
     untracked = subprocess.run(["git", "-C", ZBOT, "status", "--porcelain"],
                                stdout=subprocess.PIPE).stdout.decode("utf-8", "replace")
     src_changed = [k for k in SRC if md5(abspath(k)) != baseline[k]]
+    if src_changed:                       # 循环里 break 出来时兜底还原（绝不留变异体过夜）
+        restore_all("收尾兜底")
+        src_changed = [k for k in SRC if md5(abspath(k)) != baseline[k]]
     print("\n== 台账 ==")
-    for k in ("RED-OK", "PARTIAL", "GREEN-BUT-MUTATED", "BROKEN", "NO-RUN"):
-        print("  %-18s %d" % (k, tally[k]))
+    for k in MARKS:
+        print("  %-22s %d" % (k, tally[k]))
+    print("  阳性对照各族: %s" % ", ".join("%s=%s" % kv for kv in sorted(ctrl_state.items())))
+    print("  字节证明证成/注入总数: %d/%d"
+          % (len([r for r in rows if not r[0].startswith("CTRL-") and "字节注入证明=证成" in r[7]]),
+             len([r for r in rows if not r[0].startswith("CTRL-")])))
     print("  注入后 src/main 与基线 md5 有差异的文件: %s" % (src_changed or "无（逐字节还原）"))
     print("  git status --porcelain: %s" % (untracked.strip().replace("\n", " | ") or "（空）"))
     try:
