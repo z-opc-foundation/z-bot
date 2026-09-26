@@ -874,4 +874,86 @@ BAR3_DONE|end=2026-09-27 03:57:32 dir=/Users/zifang/.cache/zbot-integrate/bar3_x
   ——⇒ 同族的尺应当合并：那条链已产出 `CROSS|three_round_verdict_identical=YES`，本节的 `e2e_verdict` 只该作为它的独立复核，不该各写一套剥法。
 - 杠④ 与真 profile：每轮首尾各一条 `bar4=8/2dadaed0/690ddbc0/key_len_only=125`（每轮首尾各一次）；`U1`（三时点不变）/
   `U2`（真 key 未被读、线上只有 stub）/ `U3`（serve 子进程被回收）/ `U4`（用的是临时 profile）四支 PASS 原文见上块。
-- 这一节**没有**证的：浏览器渲染层（DOM 拿到之后）的 `/help` 实输出对照 —— 仍是未完项，见 roadmap §8.13.6。
+- ~~这一节**没有**证的：浏览器渲染层（DOM 拿到之后）的 `/help` 实输出对照 —— 仍是未完项，见 roadmap §8.13.6。~~
+  → 由 **`P28-lead-11`** 补上（`VERDICT|same=YES`，且它自己的边界写在那一节末段）。
+
+## P28-lead-11 · 浏览器层 `/help` 实输出对照：DOM 那段文字 == `/api/commands` 的 web 段（09-27 04:16:01–04:18:47，主编亲测）
+
+补的是 `P28-lead-10` 末行那条未完项，也是 roadmap §8.13.6 剩下的"浏览器渲染层未做"。
+量具在 `~/.cache/zbot-help-browser/`（`serve_up.py` 起真 serve + 落 `commands.json`、`dom_compare.py` 判等、`kill.py` 收尾），
+不在仓内 ⇒ 下面每条读数都原样贴出，复算步骤写在末段。
+
+**真进程侧**（`ZBOT_HOME` 指向临时根、config 只有 `stub-key-not-real`；端口由 `bind(0)` 取，不猜固定号）：
+
+```
+BAR4|tag=before dir_count=8 cfg_md5_8=2dadaed0 db_md5_8=690ddbc0 key_len_only=125
+PORT|chosen=64461
+SERVE|pid=69107 port=64461
+COMMANDS|rows=29 web_rows=6 web_names=["/status", "/confirm", "/help", "/new", "/clear", "/tools"]
+CTRL|web_equals_all=False (期望 False；True 就说明这项对照没有区分力)
+READY|url=http://127.0.0.1:64461/
+```
+
+`/api/commands` 判的是 **200 + 非空数组 + 行字段含 `name`/`endpoints`** 三件事同时成立才认 UP（`curl` 对 404 也返回 0，
+"端口有人听"不等于"是我的服务"）。
+
+**浏览器侧**：真页面 `http://127.0.0.1:64461/` 加载后先读一次结构 —— `title="z-bot 控制台"`、
+`WEB_COMMANDS.length=6`、`#quick-commands` 渲出的正是那 6 条 ⇒ `loadCommands()` 的 fetch 真的接到了这棵树。
+然后在 `#msg-input` 里填入 `/help` 并触发 Enter，页面自己那条 `keydown` 监听（`index.html:1538`）跑起来，
+DOM 里出现的那条 assistant 气泡逐字：
+
+```
+📋 命令列表（来自 /api/commands 的 web 段）：
+  /status  — 显示当前状态（模型 / 工具 / 技能）
+  /confirm — 确认上次等待中的危险命令
+  /help    — 显示此帮助
+  /new     — 新建会话
+  /clear   — 清空当前会话记忆
+  /tools   — 列出已注册工具
+```
+
+**判等尺的读数**（`dom_compare.py`，它按 `index.html:1196` **同一条**过滤规则从 `commands.json` 现算期望集，
+不是我另抄一份）：
+
+```
+A|help_blocks=1 url=http://127.0.0.1:64461/
+B|dom=6 api_web_no_alias=6 api_web_with_alias=6 api_all_no_alias=26
+B|dom=["/status", "/confirm", "/help", "/new", "/clear", "/tools"]
+B|api=["/status", "/confirm", "/help", "/new", "/clear", "/tools"]
+B|missing_in_dom=[] extra_in_dom=[] order_same=True alias_rows_in_web=0
+C|web_equals_all=False (期望 False；True ⇒ 这项对照无区分力)
+VERDICT|same=YES
+```
+
+- **A 段防"空跑"**：先要求那条 `/help` 气泡**在场**，否则"没有差异"会因为页面压根没渲染而成立。
+- **C 段防"过定"**：web 段（6）≠ 全量（26）。另两把运行时对照同样落在"必须 False"那一侧：
+  `CTRL_RUNTIME|dom_vs_all: dom=6 all=26 equal=False`、`dom_vs_tui: tui=26 equal=False` ⇒ DOM 渲染的确实是被筛过的那一段，
+  不是整张表（若相等，本节这句话就没有内容）。
+- **尺自己先被验过才敢用**：`dom_compare.py` 拿四份合成 DOM 自证 —— 齐 ⇒ `same=YES`、少一条 ⇒ `NO`、
+  多一条（`/exit`）⇒ `NO`、整块缺失 ⇒ `NO_HELP_BLOCK`。**第一遍就把一个真 bug 抓出来了**：
+  我最初用 `line[3:]` 剥 `  /`，把前导斜杠一起吃掉 ⇒ "齐"那份也报 `NO`。修成 `line[2:]` 后四份判定才各自对。
+  （别名行的坑是改尺时顺手避掉的：`serve_up.py` 的 `web_names` 只按"endpoints 含 web"滤，会连别名行一起留着，
+  而 DOM 按 `!aliasOf` 滤 ⇒ 直接拿它当期望集会造出假不一致，所以 `dom_compare` 自己按 DOM 规则重算并打印
+  `api_web_with_alias` 与 `api_web_no_alias` 两个数，二者相等（这里都是 6）才说明这次没有别名混进来。）
+
+**这一节没有证的（说清边界）**：
+触发 Enter 用的不是 OS 级按键。`browser-use` 的点击/按键在本机报
+`NATIVE_BROWSER_VIEWPORT_UNAVAILABLE … viewport=0x0, visible=false, visibilityState=hidden`
+⇒ 我改用页面内 `dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}))`，
+并且**以"handler 真跑了"为读数**：`dispatchEvent` 返回 `false`（`index.html:1540` 的 `e.preventDefault()` 生效）
+且气泡随后出现在 DOM 里。所以这节证到的是"**生产页的 keydown 监听 → `sendMessage()` → `handleSlash('/help')` →
+`appendMsg` → 文本进 DOM**"这条真链路，且它渲染的内容等于 API 的 web 段；
+**没有**证：物理按键/窗口焦点行为、视觉样式与换行布局（`innerText` 把 `<br>` 还原成 `\n` 就被我用文本比掉了）、
+以及"窗口可见时点击路径同不同"。要把这三样补上，需要在浏览器面板真在前台时重跑一遍（复算：
+`python3 serve_up.py` → 页面内 `fill` + 真键盘 Enter → `python3 dom_compare.py dom_capture.json` → `python3 kill.py`）。
+
+**收尾**（`kill.py`，只杀自己起的那个 pid，且先证明它是本棒起的 serve）：
+
+```
+KILL_TARGET|pid=69107 port=64461 lstart=Sun Sep 27 04:16:01 2026     /usr/bin/java -cp …/z-bot/z-bot-core/t
+KILLED|pid_gone=True listener_on_port=''
+BAR4|tag=after dir_count=8 cfg_md5_8=2dadaed0 db_md5_8=690ddbc0 key_len_only=125
+BAR4_ASSERT|cfg_same=True db_same=True (都该 True；False⇒这轮 E2E 写花了真 profile)
+```
+
+⇒ 真 `~/.zbot` 在这一整轮里三值未变，key 只被量长度；serve 进程回收、端口无残留 listener。

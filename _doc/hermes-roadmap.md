@@ -1121,7 +1121,8 @@ BAR1_DONE|end=2026-09-27 02:02:08 dir=/Users/zifang/.cache/zbot-integrate/bar1_2
 - ~~杠② p28~~ → **已闭（§8.13.5，`5d28377`，15 RED-OK / 1 刻意等价变异）**。
 - ~~杠② p27：21 支按 `6f6b21f` 的新表整批复跑未做 ⇒ 新 expect 集"推导成立、未经实测"~~ → **已闭（§8.13.7：新表 22 支五跑，`RED-OK=21 SURVIVED=1`，三格按机制裁决；逐跑原文见 `p27/EVIDENCE.md` §13）**。
 - ~~杠③：当前树 ×3 真进程 E2E 未跑（§8.12.5 那条待补不变）~~ → **已闭（§8.13.7：`0b47cc8` 上 03:21:26–03:57:32 串行 ×3，逐轮 32/32、`CROSS|e2e_verdict=1` + `CROSS_CTRL|…实测=2`，原文见 `p28/EVIDENCE.md` P28-lead-10）**。
-- 浏览器渲染层 `/help` 实输出对照未做（`P28-lead-6` 的未完项）。
+- ~~浏览器渲染层 `/help` 实输出对照未做（`P28-lead-6` 的未完项）~~
+  → **已闭（§8.13.9 / `p28/EVIDENCE.md` P28-lead-11：DOM 那条气泡逐字 == `/api/commands` 的 web 段 6 条，`VERDICT|same=YES`；边界：Enter 是页内合成的 keydown，不是 OS 级按键）**。
 - ~~**杠② 的 `p27_mutation.py` 不采样 `~/.zbot`**（`grep -c bar4 rerun_2.log rerun_4.log rerun_env.log` = 0）⇒ 杠② 那五跑对杠④ 没有直接读数，只被杠①/杠③ 的 `bar4=` 采样点夹着。补法是在每跑首尾各打一条 `BAR4|…`，但**注意**：整跑会把受跟踪的 `LEDGER.tsv` 覆写一遍（"跑一次就改一次台账字节"），所以补这一刀要么先把 r5 字节存档、跑完按字节对账，要么给脚本加一个"台账只落 stdout、不写 `LEDGER.tsv`"的 dry 档 —— 别用 `git checkout --` 当还原步。~~
   → **已闭（§8.13.8 / `p27/EVIDENCE.md` §13.7：首尾各一条 `BAR4|…` + `BAR4_VERDICT` 参与退出码，六支对照证有牙，整批复跑台账逐列不变；覆写问题走 `ZBOT_LEDGER_OUT` 出口，未用 `git checkout --`）**。
 - P29 其余：`z-agent` / `z-agent-kernel` / `z-agent-proxy` 三篇 README、`<revision>` 抬号、发 Central —— 后两件在 z-bot 的 push 授权之外，等点头。
@@ -1190,3 +1191,23 @@ $ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
 - **新提交树 `c38e276` 的杠① 补量成立**（04:11:44→04:15:00 串行三轮，`dirty_tracked` 起止 0）：
   `1162 / F=E=S=0 / files=109 / socket_hits=0` ×3，杠④ 六个采样点逐格 `8/2dadaed0/690ddbc0`，
   `BAR1_CLASSES|src=bb3ff2e6 classes=bb3ff2e6 src_len=53093 cls_len=53093`；原文见 `p27/EVIDENCE.md` §13.7 末块。
+
+### 8.13.9 浏览器层 `/help` 实输出 == `/api/commands` 的 web 段（09-27 04:16:01–04:18:47，主编亲测）
+
+`P28-lead-11` 的结论搬到这一层：**真进程 + 真页面 + 真 `keydown` 监听链路**（`serve` 起在 `bind(0)` 取的 64461、
+临时 profile + `stub-key-not-real`），DOM 里那条 `/help` 气泡与 API 的 web 段**逐字、逐序相同**
+（`COMMANDS|rows=29 web_rows=6` → `VERDICT|same=YES`），且对照落在"必须 False"那一侧：
+`web_equals_all=False`、`dom_vs_all: 6 vs 26 equal=False`、`dom_vs_tui equal=False` ⇒ 这不是"两张空表相等"也不是"整张表都被广告出去"。
+`~/.zbot` 三值首尾相同（`BAR4_ASSERT|cfg_same=True db_same=True`），serve 进程回收、端口无残留 listener。
+
+- **§8.13.6 至此只剩 P29 一条**（三篇 README + `<revision>` 抬号 + 发 Central；后两件在 z-bot 的 push 授权之外）。
+- **这节没证的三样**（写在 `P28-lead-11` 末段，别外推）：物理按键与窗口焦点、视觉样式/布局、窗口可见时的点击路径。
+  成因是本机 `browser-use` 报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE … viewport=0x0, visibilityState=hidden`
+  ⇒ 触发改用页内 `dispatchEvent(KeyboardEvent)`，并以"`dispatchEvent` 返回 `false`（`preventDefault()` 生效）+ 气泡进 DOM"作为
+  "页面自己的 handler 真跑了"的读数，而不是直接调 `handleSlash()`（那会绕开监听器这一环，也就绕开了我要量的东西）。
+- **尺先被验再用**：`dom_compare.py` 上四份合成 DOM 自证（齐/少一/多一/无块）⇒ 第一遍就抓出自己 `line[3:]`
+  把前导斜杠吃掉这个 bug；另避掉一个假不一致的坑：`serve_up.py` 的 `web_names` 不滤别名行，
+  而 DOM 的规则是 `!aliasOf && endpoints 含 web` ⇒ 判等尺按 **DOM 同一条规则**从原始 `rows` 现算期望集，
+  并打印 `api_web_with_alias` 与 `api_web_no_alias` 两个数（本次都是 6，说明这批没有别名混进 web 段）。
+  这与 §13.5 那把"过滤器把 22 行全筛掉却报 0 格不同"的尺是同一个病的第三种现形：**凡"两边比一比"的尺，
+  期望集必须由被比那一侧的规则现算，且分母要打印。**
