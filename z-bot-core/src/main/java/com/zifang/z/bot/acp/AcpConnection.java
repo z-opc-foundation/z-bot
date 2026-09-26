@@ -196,13 +196,62 @@ public final class AcpConnection {
             JsonNode result = handler.handle(this, msg);
             if (result != ACP_ASYNC) {
                 respond(msg.id(), result);
+                // 回包已经写出去了，这时才补发"会话建立之后"的通知 —— 对齐 hermes
+                // acp_adapter/server.py:1734（广告排在 session/new 的 response 之后，不插到前面）。
+                runAfterResponse();
+            } else {
+                // handler 自己接管了应答权（session/prompt）：这里不替它决定何时补发通知。
+                clearAfterResponse();
             }
         } catch (AcpProtocolException e) {
+            clearAfterResponse();
             fail(msg.id(), e);
         } catch (Exception e) {
+            clearAfterResponse();
             fail(msg.id(), AcpProtocolException.internal(
                     method + " 处理失败: " + e, e));
             stderr.println("[acp] " + method + " 内部异常: " + e);
+        }
+    }
+
+    // ---- "回包之后再补发通知"的挂点 ----
+
+    private final java.util.List<Runnable> afterResponse =
+            new java.util.ArrayList<Runnable>();
+
+    /**
+     * 登记一条"等这条请求的回包写出去之后再发"的动作（{@code available_commands_update} 用它）。
+     *
+     * <p>不这么做的话通知会插在 {@code session/new} 的 response 前面 —— 客户端还没拿到 sessionId
+     * 的确认就先收到该会话的通知。hermes 用 {@code loop.call_soon(create_task, ...)} 达成同一效果。</p>
+     */
+    public void scheduleAfterResponse(Runnable action) {
+        if (action != null) {
+            synchronized (afterResponse) {
+                afterResponse.add(action);
+            }
+        }
+    }
+
+    private void runAfterResponse() {
+        java.util.List<Runnable> pending;
+        synchronized (afterResponse) {
+            pending = new java.util.ArrayList<Runnable>(afterResponse);
+            afterResponse.clear();
+        }
+        for (Runnable r : pending) {
+            try {
+                r.run();
+            } catch (RuntimeException e) {
+                // 广告失败不能把已经成功的 session/new 变成失败（hermes 那边是 except + warning）。
+                stderr.println("[acp] 回包后补发通知失败: " + e);
+            }
+        }
+    }
+
+    private void clearAfterResponse() {
+        synchronized (afterResponse) {
+            afterResponse.clear();
         }
     }
 

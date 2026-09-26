@@ -1,6 +1,6 @@
 # p28a 路由台账 —— 由 HttpChannel.routes() 渲染，别手写这一份
 # 复算/再生成: mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.write=true
-# 分母: 25 行 (方法粒度) / 22 条路径 (dispatch 字面量口径)
+# 分母: 26 行 (方法粒度) / 23 条路径 (dispatch 字面量口径)
 method	path	shape	auth	bind_scope	shape_contract	row_count_from	defect
 GET	/	CONSOLE_HTML	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	resource:/web/index.html	-	-
 GET	/index.html	CONSOLE_HTML	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	resource:/web/index.html	-	-
@@ -27,3 +27,4 @@ POST	/api/skill/push	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via
 GET	/api/cron	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:count,jobs;count-of:jobs;rowfields:jobs:id,name,prompt,schedule,enabled,lastRun,lastResult	CronScheduler#list() 落盘的任务数	-
 POST	/api/cron	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:ok	-	-
 POST	/api/agent/register	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:ok	-	-
+GET	/api/commands	JSON_ARRAY	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	array;rowfields:-:name,description,args,scope,endpoints,aliasOf	CommandCatalog.defs() + SlashRegistry.live() 的技能段	-

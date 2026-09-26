@@ -3,9 +3,11 @@ package com.zifang.z.bot.ui;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+
+import com.zifang.z.bot.slash.CommandCatalog;
 
 /**
  * Raw-mode terminal 输入读取器 — 实现 Tab 补全、方向键、Backspace 等交互。
@@ -32,10 +34,12 @@ public final class RawTerminalReader implements AutoCloseable {
     /**
      * 终端通道私有命令 — 需要本地 UI 状态，不进 {@code SlashRegistry}。
      * 也是未注入注册表时的缺省 Tab 补全池。
+     *
+     * <p>P19 单源：这 9 个名字不再由本类手抄一份，读的是 {@code CommandCatalog} 里
+     * 通道私有的那一段（顺序即表里的声明顺序，与收口前手抄的那份逐位相同）。</p>
      */
-    public static final List<String> LOCAL_COMMANDS = Arrays.asList(
-            "/status", "/theme", "/feedback", "/confirm", "/help", "/?", "/exit", "/quit", "/q"
-    );
+    public static final List<String> LOCAL_COMMANDS =
+            Collections.unmodifiableList(CommandCatalog.localNames());
 
     private final InputStream in;
     private final boolean rawMode;

@@ -825,13 +825,10 @@
         </div>
         <div class="panel-section">
             <div class="panel-title">⏱ 快捷命令</div>
-            <div class="panel-row" style="flex-direction:column;gap:4px;align-items:flex-start">
-                <code style="font-size:11px;color:var(--text-dim)">/new — 新建会话</code>
-                <code style="font-size:11px;color:var(--text-dim)">/clear — 清空记忆</code>
-                <code style="font-size:11px;color:var(--text-dim)">/status — 状态</code>
-                <code style="font-size:11px;color:var(--text-dim)">/tools — 工具列表</code>
-                <code style="font-size:11px;color:var(--text-dim)">/help — 帮助</code>
-            </div>
+            <!-- P19 单源：这一栏不再手写清单（旧版在这里抄了 5 行，与 /help 那 6 行、
+                 与真有水流的分支三者各漂各的）。内容来自 GET /api/commands 里 endpoints 含
+                 "web" 的那些行，渲染函数见 renderQuickCommands()。 -->
+            <div id="quick-commands" class="panel-row" style="flex-direction:column;gap:4px;align-items:flex-start"></div>
         </div>
     </div>
 </div>
@@ -1164,6 +1161,47 @@
         return {name: data, args: '{}', reason: '高危操作'};
     }
 
+    // ===== COMMAND TABLE (P19 单源消费端) =====
+    // 这一页不再自己抄第二份命令清单。清单只有一处：服务端 GET /api/commands（它吐的就是
+    // CommandCatalog 整张表，每行自带 endpoints 可见性段）。本页只取 endpoints 含 "web" 的行。
+    //
+    // "广告即兑现"由 CommandSurfaceConsistencyTest 钉住：它把这个文件里 handleSlash 实际
+    // 有分支的那组命令名，和 CommandCatalog 的 WEB 段逐名字比对。
+    //  ⇒ 在这里加一条没分支的广告、或在 handleSlash 加一条没登记的分支，都会红。
+    let WEB_COMMANDS = [];
+
+    async function loadCommands() {
+        try {
+            const r = await fetch('/api/commands');
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const rows = await r.json();
+            WEB_COMMANDS = rows.filter(row => row && !row.aliasOf
+                && Array.isArray(row.endpoints) && row.endpoints.indexOf('web') >= 0);
+        } catch (e) {
+            // 取不到就什么都不广告 —— 宁可空表，也不退回手抄清单（抄的那份正是漂移的源头）。
+            WEB_COMMANDS = [];
+        }
+        renderQuickCommands();
+        return WEB_COMMANDS;
+    }
+
+    function renderQuickCommands() {
+        const box = document.getElementById('quick-commands');
+        if (!box) return;
+        box.innerHTML = WEB_COMMANDS.map(row =>
+            `<code style="font-size:11px;color:var(--text-dim)">${escapeHtml(row.name)} — ${escapeHtml(row.description || '')}</code>`
+        ).join('');
+    }
+
+    function commandHelpText() {
+        if (!WEB_COMMANDS.length) {
+            return '命令表没取到（GET /api/commands 不可达）。本页不保留手抄的备用清单。';
+        }
+        const width = WEB_COMMANDS.reduce((n, row) => Math.max(n, (row.name || '').length), 0);
+        return WEB_COMMANDS.map(row =>
+            `  ${(row.name || '').padEnd(width)} — ${row.description || ''}`).join('\n');
+    }
+
     // ===== SLASH COMMANDS =====
     async function handleSlash(text) {
         const cmd = text.trim().toLowerCase();
@@ -1188,13 +1226,9 @@
                 appendMsg('assistant', '❌ 读取 /bot/tools 失败：' + e.message, 'error');
             }
         } else if (cmd === '/help') {
-            appendMsg('assistant', `📋 命令列表：
-/new       — 新建会话
-/clear     — 清空记忆
-/status    — 刷新状态
-/tools     — 工具列表
-/confirm   — 确认上次危险命令
-/exit      — 退出（仅 Terminal 模式）`);
+            // P19 起不再手写这份清单（旧版这里抄了 6 行，其中 /exit 本页根本没有分支，
+            // 却没写它真接住的 /help 以外的差异 —— p28 WIRING.md §3.4/§3.5 量的就是这两笔）。
+            appendMsg('assistant', `📋 命令列表（来自 /api/commands 的 web 段）：\n${commandHelpText()}`);
         } else if (cmd.startsWith('/confirm')) {
             if (lastToolCall) {
                 await approveLast();

@@ -6,6 +6,7 @@ import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.session.SessionManager;
+import com.zifang.z.bot.slash.CommandCatalog;
 import com.zifang.z.bot.slash.SlashCommand;
 import com.zifang.z.bot.slash.SlashRegistry;
 import com.zifang.z.bot.ui.LineEditor;
@@ -16,9 +17,7 @@ import com.zifang.z.bot.ui.TerminalUI;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -99,15 +98,18 @@ public final class TerminalChannel {
         return names;
     }
 
-    /** 终端私有命令说明（/help 表用；别名折进主条目）。 */
-    private static final Map<String, String> LOCAL_DOC = new LinkedHashMap<String, String>();
-    static {
-        LOCAL_DOC.put("/status", "显示当前状态（模型 / 工具 / 技能）");
-        LOCAL_DOC.put("/theme", "切换主题（cyan / green / amber）");
-        LOCAL_DOC.put("/feedback", "对上一次回复评分（up / down / <int>）");
-        LOCAL_DOC.put("/confirm", "确认上次等待中的危险命令");
-        LOCAL_DOC.put("/help", "显示此帮助");
-        LOCAL_DOC.put("/exit", "退出（别名 /quit, /q, /?）");
+    /**
+     * 终端私有命令的说明行 —— P19 起不再本类手抄一份，读 {@code CommandCatalog} 的通道私有一段。
+     * 保留这个访问点是为了让"帮助表 = 注册表段 + 私有段"这个形状在代码里还看得见。
+     */
+    private static List<String[]> localHelpRows() {
+        List<String[]> rows = new ArrayList<>();
+        for (CommandCatalog.Def d : CommandCatalog.localDefs()) {
+            if (!d.isAlias()) {
+                rows.add(new String[]{d.name(), d.description()});
+            }
+        }
+        return rows;
     }
 
     /** 启动面板与 /help 的命令表 — 注册表派生，注册即出现在帮助里。 */
@@ -116,9 +118,7 @@ public final class TerminalChannel {
         for (SlashCommand c : slash.all()) {
             rows.add(new String[]{c.name(), c.description()});
         }
-        for (Map.Entry<String, String> e : LOCAL_DOC.entrySet()) {
-            rows.add(new String[]{e.getKey(), e.getValue()});
-        }
+        rows.addAll(localHelpRows());
         return rows;
     }
 
