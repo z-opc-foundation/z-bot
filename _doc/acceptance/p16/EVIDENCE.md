@@ -354,11 +354,18 @@ Supervisor     235a9a7=9edd95d3fc7ce1c070894668e3d53a93 disk=9edd95d3fc7ce1c0708
 
 ```
 $ git log --oneline 235a9a7..HEAD
-7261ceb p16ev2 杠② 复跑收口：…          ← 本棒最后一笔
+534f999 p16ev2 文档收口：杠② 与上一棒封账逐字节对拍 + 收口时刻复测原文 + 两棒分工校正   ← 本棒最后一笔
+7261ceb p16ev2 杠② 复跑收口：LEDGER 换最终脚本字节重生成（判定与上一棒逐字节同）+ M07 未覆盖改为量出来
 a7c6880 p16ev2: EVIDENCE 补杠③/杠④ 两节 + 杠① 真三跑原文；mutation 量具回归修正
 fecf63b p16ev2 杠③ 量具修好：全段一次跑完 33/33，两次独立复跑结论一致（产品代码零改动）
 ea538b9 wip(p16ev): 封存被 150 轮截断的验收棒产物（杠②已跑完，杠③全段未过），未验收
+```
 
+> 上面这五行里，`534f999` 就是**写下本块文字的这笔 commit**（自我指涉但可核：`git log -1` 就是它）；
+> 它之后本棒不再有改动 —— `git show --stat 534f999` 只动 `_doc/acceptance/p16/EVIDENCE.md` 一个文件。
+> 下面这几条是在 `7261ceb` 之后、`534f999` 之前跑的，`534f999` 不改任何被量的东西：
+
+```
 $ git diff --name-only 235a9a7..HEAD
 _doc/acceptance/p16/.gitignore  _doc/acceptance/p16/EVIDENCE.md  _doc/acceptance/p16/LEDGER.tsv
 _doc/acceptance/p16/p16_e2e.py  _doc/acceptance/p16/p16_mutation.py
