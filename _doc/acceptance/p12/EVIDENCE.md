@@ -862,16 +862,49 @@ BotAgent.java:979  long refunded = budgetLedger.refundTokens(freedTokensOfCompre
 
 | 假设 | 复算命令 | 实测 |
 |---|---|---|
-| （待填） | （待填） | （待填） |
+| `merge-tree` 单行=无冲突 | `git merge-tree --write-tree 926b8b5 e74f49c \| wc -l` | **1 行**，树 `f56724d5b9ed6f1aa9f05065db34ac1f3b368910` ⇒ **证实** |
+| 合并树 `@Test`=637 | `git grep -c '@Test' f56724d… -- 'z-bot-core/src/test' \| awk -F: '{s+=$NF} END{print s}'` | **637** ⇒ 证实 |
+| main `@Test`=619 / 本分支 `@Test`=483 | 同命令分别跑 `926b8b5` / `e74f49c` | **619 / 483** ⇒ 证实 |
+| LEDGER verdict 在第 2 列、19 行 | `head -1 LEDGER.tsv`（列序）＋ `awk -F'\t' 'NR>1{c[$2]+=1} END{for(k in c) print k,c[k]}'` | 表头第 2 列名就是 `verdict`；`NF=11` 全行一致；行数 **19** ⇒ 证实。旧 LEDGER 分档：RED-OK 14 / PARTIAL 2 / GREEN-BUT-MUTATED 3（跑在 483 面上，本棒 §10.2 重算） |
+| K2 探针跑不跑 | `python3 _doc/acceptance/p12/p12_k2_probe.py; echo rc=$?` | **rc=0**，7/7 case 符合期望 ⇒ **K2 判据本身可信**（详见 §10.3 原文） |
+| 合并树=预览树 | `git diff --name-only f56724d… HEAD` | 只差 `_doc/acceptance/p12/EVIDENCE.md`（本棒骨架，纯文档）⇒ **Java 字节与预览树逐一同源** |
 
-## 10.1 杠① 全量单测串行三跑
+**结论：主编的四条假设全部证实，无一被证伪。**
+
+## 10.1 杠① 全量单测串行三跑（合并树，61 个测试类 / 637 条）
+
+复算：`bash ~/.cache/zbot-p12d/bar1.sh`（每跑前 `rm -rf z-bot-core/target/surefire-reports`；三跑**串行**，非并行凑数）。
+日志：`~/.cache/zbot-p17/p12d_bar1_r{1,2,3}.log`（`.gitignore:5` 是 `*.log` ⇒ 日志不入仓，决定性读数原样贴在下面）。
 
 | 项 | 复算命令 | 实测 |
 |---|---|---|
-| 三跑 `Tests run:` | `grep -h '^\[INFO\] Tests run:.*Skipped:' ~/.cache/zbot-p17/p12d_bar1_r{1,2,3}.log \| tail -1` | （待填） |
-| 三跑一致 | | （待填） |
-| socket 类错误计数 | `grep -c 'java.net.BindException\|Connection refused\|SocketTimeout' ~/.cache/zbot-p17/p12d_bar1_rN.log` | （待填） |
-| `@Test`(git grep) 与 surefire 对账 | | （待填） |
+| 三跑 `Tests run:` | `grep -hE '^Tests run: .*Skipped' <log>`（surefire `Results:` 汇总行） | r1=**637, Failures: 1, Errors: 0, Skipped: 0** / r2=**同** / r3=**同** ⇒ **数字三跑一致，但一致地不绿** |
+| BUILD 结果 | `grep -c 'BUILD SUCCESS' <log>` | 三跑均 **0**（`MVN_EXIT_RUN_{1,2,3}=1`，三跑同时刻的墙钟 13:02:56 / 13:03:15 / 13:03:34） |
+| 逐类求和交叉核对 | 解析 `-- in <class>` 行求和 | 61 个类 / tests=637 / failures=1 / errors=0 / skipped=0（与汇总行自洽） |
+| **`@Test`(git grep) 与 surefire 对账** | `git grep -l '@Test' HEAD -- 'z-bot-core/src/test' \| wc -l` = 61 文件；surefire 类数 = 61；surefire tests = 637 = `git grep -c '@Test'` 的 637 | **逐字相等 ⇒ 无漏收测试类、`z-bot-desktop-packager` 模块贡献 0 个测试类（`classes=0`）**。注意：本棒合并前旧基线是 483(@Test 行) vs 481(surefire) 的 2 条差，合并后归零 ⇒ 差值来自 §上一棒的量具口径，不是本面 |
+| socket 类错误计数 | `grep -c 'java.net.BindException\|Connection refused\|SocketTimeout' <log>` | r1/r2/r3 均 **0** ⇒ 红与端口/网络无关，不是环境抖动 |
+| 红的那一条 | `grep -hE '^\[ERROR\] .*(FAILURE|ERROR)$' <log> \| sort -u` | 三跑**同一条且唯一一条**：`com.zifang.z.bot.channel.GatewayDeliveryP16Test.graftedChatsShareOneSessionAndSerializeWithoutWedging` |
+
+### 10.1.1 这条红是判决性的：P12 的上下文前缀撞掉了 main 的 channel 断言
+
+`GatewayDeliveryP16Test.java:381`（该文件由 main `926b8b5` 带入，**不在本棒写域内**）：
+
+```java
+assertTrue("回显对不上说明两条会话串味了: " + m.text, m.text.startsWith("echo: A"));
+```
+
+失败原文（`p12d_bar1_r1.log:313`，逐字）：
+
+```
+java.lang.AssertionError:
+回显对不上说明两条会话串味了: echo: [z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）
+当前时间: 2026-09-26 13:02:45 +08:00 GMT+08:00
+---
+A0
+```
+
+- 断言挂在 `startsWith("echo: A")`，而 reply 现在是 `echo: <P12 的运行时上下文头>\n---\nA0` —— **不是串味，是 P12 把上下文头注进了 user 消息**，main 那条回显断言没按 P12 的协议剥头。
+- 判据"串味"本身没坏：同一次跑里 `assertEquals(4, chan.sent.size())`、`leaseTimeoutCount()=0` 等都过了，只有回显前缀这一条挂。
 
 ## 10.2 杠② 变异注入（合并树重跑 + LEDGER 脚本重算）
 
