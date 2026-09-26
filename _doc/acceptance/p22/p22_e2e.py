@@ -42,18 +42,38 @@ def log(msg):
 
 
 def zbot_snapshot():
+    """只 stat 现场根条目的存在性/mtime，不跟随符号链接、不读内容（红线 1：里面有真 key）。
+
+    p22b 修正：`~/.zbot/workspace` 是一个**断链的符号链接**（指向已不存在的目标），
+    旧写法 `os.path.isfile()` 跟随链接 ⇒ False ⇒ 走"目录"分支，再 `os.path.getmtime()`
+    直接 FileNotFoundError ⇒ 整个 E2E 一个场景都没跑就炸（实测第一跑）。改成 lstat + 兜底。
+    """
     out = {}
     for name in sorted(os.listdir(REAL_HOME)):
         p = os.path.join(REAL_HOME, name)
-        if os.path.isfile(p):
-            with open(p, "rb") as f:
-                out[name] = hashlib.md5(f.read()).hexdigest()[:8] + ":" + str(os.path.getmtime(p))
+        try:
+            st = os.lstat(p)  # lstat：绝不跟随符号链接，绝不打开文件
+        except OSError as e:
+            out[name] = "unreadable:%r" % (e,)
+            continue
+        import stat as _stat
+        if _stat.S_ISLNK(st.st_mode):
+            out[name] = "link:%d" % st.st_mtime
+        elif _stat.S_ISDIR(st.st_mode):
+            out[name] = "dir:%d" % st.st_mtime
         else:
-            out[name] = "dir:" + str(os.path.getmtime(p))
+            with open(p, "rb") as f:
+                out[name] = hashlib.md5(f.read()).hexdigest()[:8] + ":" + str(st.st_mtime)
     return out
 
 
 # ---------------------------------------------------------------- 假 dockerd
+
+def norm(path):
+    """剥掉 docker Engine API 的版本前缀（实测客户端打的是 /v1.44/_ping）。"""
+    stripped = re.sub(r"^/v\d+\.\d+", "", path)
+    return stripped or path
+
 
 class FakeDockerd(threading.Thread):
     """最小 Engine API 假服务：只 127.0.0.1、只这一个线程、每响应必带 status。"""
@@ -112,6 +132,12 @@ class FakeDockerd(threading.Thread):
                    "Connection: close\r\n\r\n" % (status, ctype, len(body))).encode() + body)
 
     def route(self, method, path, body):
+        # p22b 修正①：客户端打的是带版本前缀的 /v1.44/_ping，旧路由只匹配 /_ping ⇒ 全 404，
+        #   java 侧当场炸 [DOCKER_BAD_RESPONSE]，docker 场景 12 条断言全红（量具的错，不是产品的）。
+        # p22b 修正②：DELETE 的路径是 /containers/<id>?force=true，旧写法让 ([^/]+) 把查询串一起
+        #   吃进 container id ⇒ self.deleted 里存的是 "e2econtainer00001?force=true"，
+        #   Python 侧的"删了没删"永远对不上号 ⇒ 这里统一剥前缀和查询串。
+        path = norm(path.split("?")[0])
         if path.startswith("/_ping"):
             return 200, "text/plain", b"OK"
         if path.startswith("/version"):
@@ -125,8 +151,13 @@ class FakeDockerd(threading.Thread):
         if m:
             cid = m.group(1)
             self.json_polls[cid] = self.json_polls.get(cid, 0) + 1
-            # sleep 999 那一支（第 2 个容器）永远 running ⇒ 客户端超时
-            still_running = cid.endswith("2") and self.json_polls[cid] <= 200
+            # p22b 修正③：旧判据 `cid.endswith("2")` 假设"第二个容器就是 sleep 那支"，实测驱动
+            # 在 sleep 之前已经起了 2 个容器（echo + writeFile）⇒ sleep 落在 ...00003，
+            # 假 dockerd 立刻回 Running=false，DOCKER_TIMEOUT 实测成 false（不是产品的超时没生效，
+            # 是假服务没把"还在跑"这件事演对）。改成按 create 请求里的 Cmd 真判 sleep。
+            body_by_id = dict(self.created)
+            is_sleep = any("sleep" in str(x) for x in body_by_id.get(cid, {}).get("Cmd", []))
+            still_running = is_sleep and self.json_polls[cid] <= 200
             state = '{"Running":%s,"ExitCode":0,"Dead":false}' % ("true" if still_running else "false")
             return 200, "application/json", ('{"Id":"%s","State":%s}' % (cid, state)).encode()
         m = re.search(r"/containers/([^/]+)/(start|stop)", path)
@@ -237,6 +268,30 @@ def check(name, cond, detail=""):
     return dict(name=name, ok=bool(cond), detail=str(detail)[:220])
 
 
+def count_sleep25():
+    """Python 侧独立取证：现场里还有没有 `sleep 25` 活着（驱动 ① 用的就是这两个字）。
+
+    p22b 加这一段的原因（实测，不是猜）：final 三跑的第 3 跑里
+    `TREE_KILLED_DESCENDANTS=2 / TREE_EXIT=137 / TREE_SURVIVORS_AFTER=2` ——
+    驱动在 killTree 之后**立刻**打了一次 ps，SIGKILL 已发出但 macOS 还没把条目摘掉；
+    同一次运行里稍后的 `pgrep 'sleep 25' | wc -l` 又是 0（TREE_PGREP=50/  0）。
+    判据要的是"树真的没了"，所以这里给一个**有上限**的 settling 复探（最多 1s），
+    复探之后还不干净就是真红 —— 首探读数一并留在 detail 里，不藏。
+    """
+    first = None
+    for i in range(11):
+        out = subprocess.run(["/bin/ps", "-axo", "pid,ppid,command"],
+                             stdout=subprocess.PIPE).stdout.decode("utf-8", "replace")
+        n = sum(1 for line in out.split("\n")
+                if "sleep 25" in line and "[s]leep" not in line)
+        if first is None:
+            first = n
+        if n == 0:
+            return dict(first=first, settled_in_ms=i * 100, now=0)
+        time.sleep(0.1)
+    return dict(first=first, settled_in_ms=1000, now=n)
+
+
 # ---------------------------------------------------------------- 五种模式
 
 def write_cfg(home, kv):
@@ -253,23 +308,47 @@ def scenario_local(jar):
     write_cfg(home, {"exec.env.backend": "local", "exec.env.default.timeout.ms": "4000"})
     r = run_java(jar, "local", home)
     mk = markers(r)
-    return dict(mode="local", rc=r["rc"], secs=r["secs"], markers=mk, checks=[
+    # p22b 修正：以下判词全部对齐 P22E2eDriver 实际打印的 marker 名（旧稿写的是
+    # SURVIVOR_COUNT / KILLED / STDOUT_CAPPED / STDOUT_TOTAL / STDOUT_BYTES / DRAINED_WITHOUT_HANG /
+    # STDIN_SEEN / SANDBOX_ESCAPE —— 实测驱动一个都不打，7/10 条只是因为读不到键而红，不是产品红）
+    def num(key):
+        try:
+            return int(mk.get(key, "") or 0)
+        except ValueError:
+            return -1
+    ps_probe = count_sleep25()
+    return dict(mode="local", rc=r["rc"], secs=r["secs"], markers=mk, ps_probe=ps_probe, checks=[
         check("java rc=0", r["rc"] == 0, r["lines"][-3:]),
+        check("驱动跑到收尾（LOCAL_RC=0）", mk.get("LOCAL_RC") == "0", mk.get("LOCAL_RC")),
         check("后端是 local", mk.get("BACKEND") == "local", mk.get("BACKEND")),
-        check("超时把整棵树端干净（ps 现场取证的存活后代=0）",
-              mk.get("SURVIVOR_COUNT") in ("0", None) and "SURVIVOR_COUNT=0" in "\n".join(r["lines"]),
-              mk.get("SURVIVOR_COUNT")),
-        check("killedDescendants 记了数（>0）", int(mk.get("KILLED", "0") or 0) > 0, mk.get("KILLED")),
-        check("输出按字节上界夹住", mk.get("STDOUT_CAPPED") == "1", mk.get("STDOUT_BYTES")),
-        check("全量字节数照记（不因截断而少报）",
-              int(mk.get("STDOUT_TOTAL", "0") or 0) > int(mk.get("STDOUT_BYTES", "0") or 0),
-              (mk.get("STDOUT_BYTES"), mk.get("STDOUT_TOTAL"))),
-        check("到上限之后仍把管道读干净（没堵死）", mk.get("DRAINED_WITHOUT_HANG") == "1", mk.get("DRAIN_SECS")),
-        check("stdin 走独立线程（wc -c 对得上）", mk.get("STDIN_SEEN") == "6", mk.get("STDIN_SEEN")),
-        check("越界路径被拒（SANDBOX_ESCAPE）", "SANDBOX_ESCAPE" in str(mk.get("ESCAPE")), mk.get("ESCAPE")),
-        check("现场目录里才有产物，~/.zbot 没被写",
-              os.path.isdir(os.path.join(home, "sandbox")) or "SANDBOX_ROOT" not in mk
-              or mk["SANDBOX_ROOT"].startswith(home), mk.get("SANDBOX_ROOT")),
+        check("超时确实发生", mk.get("TREE_TIMEOUT") == "true", mk.get("TREE_TIMEOUT")),
+        check("超时把整棵树端干净（独立 ps 复探，1s 上限内归零）",
+              ps_probe["now"] == 0 and int(mk.get("TREE_KILLED_DESCENDANTS", "0") or 0) >= 2,
+              "驱动首探=%s 复探=%s settling=%sms pgrep=%s killed=%s"
+              % (mk.get("TREE_SURVIVORS_AFTER"), ps_probe["now"], ps_probe["settled_in_ms"],
+                 mk.get("TREE_PGREP"), mk.get("TREE_KILLED_DESCENDANTS"))),
+        check("killedDescendants 记了数（>0）", num("TREE_KILLED_DESCENDANTS") > 0,
+              mk.get("TREE_KILLED_DESCENDANTS")),
+        check("收尾有上限（TREE_COST_MS<8000，实测 %s）" % mk.get("TREE_COST_MS"),
+              0 <= num("TREE_COST_MS") < 8000, mk.get("TREE_COST_MS")),
+        check("输出按字节上界夹住（BOUND_RENDERED<=4096 且标了 truncated）",
+              num("BOUND_RENDERED") > 0 and num("BOUND_RENDERED") <= 4096
+              and mk.get("BOUND_TRUNCATED") == "true",
+              (mk.get("BOUND_RENDERED"), mk.get("BOUND_TRUNCATED"))),
+        check("全量字节数照记（5MB 输入不许因截断少报）",
+              num("BOUND_TOTAL") == 5 * 1024 * 1024 and num("BOUND_TOTAL") > num("BOUND_RENDERED"),
+              (mk.get("BOUND_TOTAL"), mk.get("BOUND_RENDERED"))),
+        check("到上限之后仍把管道读干净（60000 行回 EOF、没堵死）",
+              mk.get("DRAIN_EXIT") == "0" and num("DRAIN_TOTAL") > 400000
+              and num("DRAIN_COST_MS") < 20000,
+              (mk.get("DRAIN_EXIT"), mk.get("DRAIN_TOTAL"), mk.get("DRAIN_COST_MS"))),
+        check("stdin 走独立线程（wc -c 对得上 5242880）", mk.get("STDIN_COUNT") == "5242880",
+              mk.get("STDIN_COUNT")),
+        check("越界路径被拒（ESCAPE=REFUSED:）", str(mk.get("ESCAPE", "")).startswith("REFUSED"),
+              mk.get("ESCAPE")),
+        check("现场目录在 cache 根下、~/.zbot 没被写",
+              home.startswith(os.path.expanduser("~/.cache/zbot-p22-lead/e2e"))
+              and not os.path.exists(os.path.join(home, "escaped.txt")), home),
     ])
 
 
@@ -281,7 +360,11 @@ def scenario_docker(jar):
     ledger = os.path.join(home, "tool-env", "docker-ledger.properties")
     os.makedirs(os.path.dirname(ledger), exist_ok=True)
     with open(ledger, "w", encoding="utf-8") as f:
-        f.write("%s=owner=%d,run=stale\n" % (orphan, 999999))
+        # p22b 修正④：产品认的键是 DockerExecEnvironment.LEDGER_PREFIX("container.") + id，
+        # value 形如 runToken@pid（:647）；旧稿写的 "<id>=owner=999999,run=stale" 没有前缀 ⇒
+        # ledgerIds() 根本看不见它，孤儿只走 label 那一路被捞，"账本兜底"这条 E2E 没量到，
+        # 而且删完之后那行还留在盘上（旧判据据此报 FAIL，是量具种错，不是产品没划掉）。
+        f.write("container.%s=stale-run-token@999999\n" % orphan)
     write_cfg(home, {
         "exec.env.backend": "docker",
         "exec.env.docker.host": "tcp://127.0.0.1:%d" % fake.port,
@@ -293,11 +376,15 @@ def scenario_docker(jar):
     })
     r = run_java(jar, "docker", home)
     mk = markers(r)
-    seq = ["%s %s" % (q["method"], q["path"].split("?")[0]) for q in fake.requests]
+    seq = ["%s %s" % (q["method"], norm(q["path"].split("?")[0])) for q in fake.requests]
     create = [q for q in fake.requests if "/containers/create" in q["path"]]
     body = json.loads(create[0]["body"]) if create else {}
     hc = body.get("HostConfig", {})
     seq_paths = " | ".join(seq)
+    created_ids = [c[0] for c in fake.created]
+    # p22b：上一版这里写成 [c[0] for c, b in fake.created ...] —— c 已经是 id 字符串，
+    # 于是 sleep 那支被算成 ['e','e']，"删了没删"永远对不上（量具自己的下标错，实测 docker 场景连红 1 条）。
+    sleep_ids = [c for c, b in fake.created if any("sleep" in str(x) for x in b.get("Cmd", []))]
     fake.shutdown()
     fake.join(timeout=5)
     left = os.path.exists(ledger) and open(ledger, encoding="utf-8").read()
@@ -305,10 +392,15 @@ def scenario_docker(jar):
                 request_seq=seq, request_count=len(fake.requests),
                 create_body=body, checks=[
         check("java rc=0", r["rc"] == 0, r["lines"][-3:]),
-        check("先 _ping（且判了 status/不是 HTML）", seq[0] == "GET /_ping", seq[:2]),
+        check("驱动跑到收尾（DOCKER_RC=0）", mk.get("DOCKER_RC") == "0", mk.get("DOCKER_RC")),
+        check("选的是 docker 后端", mk.get("BACKEND") == "docker", mk.get("BACKEND")),
+        check("先 _ping（且判了 status/不是 HTML）", seq and seq[0] == "GET /_ping", seq[:2]),
         check("create→start→json→logs→DELETE 全序列",
-              all(x in seq for x in ("POST /containers/create", "POST /containers/%s/start" % fake.created[0][0] if fake.created else "x",
-                                     "DELETE /containers/%s" % fake.created[0][0] if fake.created else "y")),
+              all(x in seq for x in ("POST /containers/create",
+                                     "POST /containers/%s/start" % (created_ids[0] if created_ids else "x"),
+                                     "GET /containers/%s/json" % (created_ids[0] if created_ids else "x"),
+                                     "GET /containers/%s/logs" % (created_ids[0] if created_ids else "x"),
+                                     "DELETE /containers/%s" % (created_ids[0] if created_ids else "y"))),
               seq_paths[:400]),
         check("Cmd 是数组不是字符串（无 shell 拼接）",
               isinstance(body.get("Cmd"), list) and body["Cmd"][0] == "/bin/echo", body.get("Cmd")),
@@ -320,15 +412,18 @@ def scenario_docker(jar):
               and hc.get("SecurityOpt") == ["no-new-privileges:true"], hc),
         check("label 带过去（托管标记）",
               body.get("Labels", {}).get("z-bot.p22.managed") == "true", body.get("Labels")),
+        check("AutoRemove=false（不自清才需要回收）", body.get("HostConfig", {}).get("AutoRemove") is False
+              or body.get("AutoRemove") is False, body.get("HostConfig", {}).get("AutoRemove")),
         check("stdout/stderr 分帧解出来", mk.get("DOCKER_STDOUT") == "hello-from-p22-e2e"
               and mk.get("DOCKER_STDERR") == "to-stderr", (mk.get("DOCKER_STDOUT"), mk.get("DOCKER_STDERR"))),
+        check("超时那一路确实超时了", mk.get("DOCKER_TIMEOUT") == "true", mk.get("DOCKER_TIMEOUT")),
         check("超时那一路也删了容器",
-              fake.created and any("sleep" in str(b.get("Cmd")) for _, b in fake.created)
-              and fake.created[1][0] in fake.deleted if len(fake.created) > 1 else False,
-              (fake.created and [c[0] for c in fake.created], fake.deleted)),
+              bool(sleep_ids) and all(i in fake.deleted for i in sleep_ids),
+              (sleep_ids, fake.deleted)),
         check("孤儿按账本回收", orphan in fake.deleted, fake.deleted),
         check("账本里孤儿那条已划掉", orphan not in (left or ""), (left or "")[:200]),
-        check("stdin 明确拒绝而不是换后端", mk.get("DOCKER_STDIN", "").startswith("STDIN_NOT"), mk.get("DOCKER_STDIN")),
+        check("stdin 明确拒绝而不是换后端", mk.get("DOCKER_STDIN") == "CAPABILITY_UNSUPPORTED",
+              mk.get("DOCKER_STDIN")),
     ])
 
 
@@ -355,28 +450,40 @@ def scenario_ssh(jar):
         "exec.env.ssh.host": "127.0.0.1",
         "exec.env.ssh.port": "22",
         "exec.env.ssh.user": "p22e2e",
-        "exec.env.ssh.identity": ident,
+        # p22b 修正：产品读的键是 ExecEnvConfig.KEY_SSH_IDENTITY = "exec.env.ssh.identity.file"
+        # （实测 ExecEnvConfig.java:48），旧稿写的 "exec.env.ssh.identity" 没人认 ⇒
+        # SshExecEnvironment.<init> 当场抛 SSH_NO_CREDENTIALS，8 条断言全红是量具的错不是产品的。
+        "exec.env.ssh.identity.file": ident,
         "exec.env.ssh.workdir": os.path.join(home, "remote-sandbox"),
     })
     r = run_java(jar, "ssh", home)
     mk = markers(r)
     argv_text = open(marker, encoding="utf-8").read() if os.path.exists(marker) else ""
+    argv_line_count = len([x for x in argv_text.split("\n") if x.strip()])
     return dict(mode="ssh", rc=r["rc"], secs=r["secs"], markers=mk, fake_ssh_argv=argv_text,
                 checks=[
         check("java rc=0", r["rc"] == 0, r["lines"][-3:]),
-        check("后端选的是 ssh（不是静默 local）", mk.get("BACKEND") == "ssh", mk.get("BACKEND")),
-        check("BatchMode=yes（不许交互式问密码）", "-o" in argv_text and "BatchMode=yes" in argv_text, argv_text[:200]),
+        check("驱动跑到收尾（SSH_RC=0）", mk.get("SSH_RC") == "0", mk.get("SSH_RC")),
+        check("后端选的是 ssh（不是静默 local）", mk.get("BACKEND") == "ssh"
+              and mk.get("SSH_BACKEND_FROM_CONFIG") == "ssh",
+              (mk.get("BACKEND"), mk.get("SSH_BACKEND_FROM_CONFIG"))),
+        check("假 ssh 真被跑起来了（argv 落了盘）", os.path.exists(marker) and argv_line_count > 0,
+              argv_line_count),
+        check("BatchMode=yes（不许交互式问密码）", "<BatchMode=yes>" in argv_text, argv_text[:200]),
         check("目标只从配置来（user@host 落在一个 argv 元素里）",
               "<p22e2e@127.0.0.1>" in argv_text, argv_text[:300]),
         check("-p / -i 都是独立 argv 元素", "<-p>" in argv_text and "<-i>" in argv_text, argv_text[:300]),
-        check("远端调用只有 1 个元素（没有把命令摊成多词）",
-              argv_text.strip().count("\n") <= 8 and "<cd " in mk.get("SSH_REMOTE", ""),
-              mk.get("SSH_REMOTE")),
+        check("远端调用只占 1 个 argv 元素（没被摊成多词）",
+              argv_text.count("rm -rf") == 1 and mk.get("SSH_EXIT") == "0",
+              (argv_text.count("rm -rf"), mk.get("SSH_EXIT"))),
         check("带分号的参数原样落地、没被执行",
               os.path.exists(pwned) is False and "rm -rf" in mk.get("SSH_REMOTE", ""),
               (os.path.exists(pwned), mk.get("SSH_REMOTE"))),
-        check("无凭据时显式报 SSH_NO_CREDENTIALS", mk.get("SSH_NO_CRED") == "SSH_NO_CREDENTIALS",
-              mk.get("SSH_NO_CRED")),
+        check("无凭据的现场必须大声失败、绝不静默退 local",
+              mk.get("SSH_NO_CRED") in ("SSH_NO_CREDENTIALS", "SSH_TARGET_NOT_CONFIGURED"),
+              mk.get("SSH_NO_CRED") + "（驱动给的 no-cred 现场 host 与 identity 都没配，"
+              "实测先撞 host 白名单 ⇒ 短码是 SSH_TARGET_NOT_CONFIGURED；"
+              "只缺钥匙那一支由单测 ssh_missingIdentityFailsLoudlyNoSilentLocal 钉 SSH_NO_CREDENTIALS）"),
     ])
 
 
@@ -385,11 +492,18 @@ def scenario_wiring(jar):
     write_cfg(home, {"exec.env.backend": "local"})
     r = run_java(jar, "wiring", home)
     mk = markers(r)
+    # p22b 修正：驱动打的是 WIRING_SPY_CALLS / WIRING_TOOL_OUTPUT / WIRING_IS_ERROR，
+    # 旧稿读的是 SPY_CALLS / TOOL_OUT（键名对不上）；而"摘掉后端时显式报错"这一条驱动里
+    # 根本没有对应场景（那是单测 execToolFailsLoudlyWhenTheBackendIsDown 守的）⇒ 删掉这条假期望，
+    # 改成驱动真做了的"install(null) 之后收尾成功"。
     return dict(mode="wiring", rc=r["rc"], secs=r["secs"], markers=mk, checks=[
         check("java rc=0", r["rc"] == 0, r["lines"][-3:]),
-        check("exec 工具真的经过被装上的后端", mk.get("SPY_CALLS") not in (None, "0"), mk.get("SPY_CALLS")),
-        check("后端返回的文本原样回到工具里", "从假后端回来的输出" in str(r["lines"]), mk.get("TOOL_OUT")),
-        check("摘掉后端时是显式报错，不是退回 local 跑", "BACKEND_WAS_DOWN" in str(r["lines"]), mk.get("TOOL_ERR")),
+        check("驱动跑到收尾（WIRING_RC=0）", mk.get("WIRING_RC") == "0", mk.get("WIRING_RC")),
+        check("exec 工具真的经过被装上的后端", mk.get("WIRING_SPY_CALLS") not in (None, "", "0"),
+              mk.get("WIRING_SPY_CALLS")),
+        check("后端返回的文本原样回到工具里", "从 SPI 回来的" in str(mk.get("WIRING_TOOL_OUTPUT")),
+              mk.get("WIRING_TOOL_OUTPUT")),
+        check("spy 正常返回时工具不判错", mk.get("WIRING_IS_ERROR") == "false", mk.get("WIRING_IS_ERROR")),
     ])
 
 
@@ -398,11 +512,21 @@ def scenario_legacy(jar):
     write_cfg(home, {"exec.env.backend": "local"})
     r = run_java(jar, "legacy-hang-model", home, timeout=120)
     mk = markers(r)
+    # p22b 修正：驱动打的是 NEW_TOTAL_LINES / NEW_TOTAL_BYTES / NEW_COST_MS 与
+    # LEGACY_READ_LINES / LEGACY_HANG / LEGACY_RC_MODEL_DONE；旧稿读的 NEW_PATH_HANG 不存在。
+    # "新路径不堵"的实测判据 = 同一个 60000 行的场景，新后端在硬上限内返回且模型跑完。
+    new_cost = int(mk.get("NEW_COST_MS", "-1") or -1)
     return dict(mode="legacy-hang-model", rc=r["rc"], secs=r["secs"], markers=mk, checks=[
         check("java rc=0（模型自己带硬上限，不会把验收器拖死）", r["rc"] == 0, r["lines"][-3:]),
         check("老口径复现出堵死（LEGACY_HANG=1）", mk.get("LEGACY_HANG") == "1",
               {k: v for k, v in mk.items() if k.startswith("LEGACY")}),
-        check("新路径同场景不堵（NEW_PATH_HANG=0）", mk.get("NEW_PATH_HANG") == "0", mk.get("NEW_PATH_HANG")),
+        check("老口径确实只读满 100 行就撒手（LEGACY_READ_LINES=100）",
+              mk.get("LEGACY_READ_LINES") == "100", mk.get("LEGACY_READ_LINES")),
+        check("模型本身跑完了（LEGACY_RC_MODEL_DONE=1）",
+              mk.get("LEGACY_RC_MODEL_DONE") == "1", mk.get("LEGACY_RC_MODEL_DONE")),
+        check("新路径同场景不堵：60000 行在 %sms 内返回且全量字节照记" % mk.get("NEW_COST_MS"),
+              0 <= new_cost < 20000 and int(mk.get("NEW_TOTAL_BYTES", "0") or 0) > 400000,
+              (mk.get("NEW_COST_MS"), mk.get("NEW_TOTAL_LINES"), mk.get("NEW_TOTAL_BYTES"))),
     ])
 
 
