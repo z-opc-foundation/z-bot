@@ -275,7 +275,27 @@ public final class AcpAgentServer {
         ObjectNode result = JsonRpc.object();
         result.put("sessionId", session.acpSessionId());
         attachSessionMeta(result, session);
+        advertiseCommands(session);
         return result;
+    }
+
+    /**
+     * P19 单源的 ACP 消费端：会话建立/恢复之后，把 {@code CommandCatalog} 的
+     * {@link CommandCatalog.Endpoint#ACP} 那一段用 {@code available_commands_update} 帧广告出去。
+     *
+     * <p>时机对齐 hermes {@code acp_adapter/server.py:1122/1170/1205}（{@code new}/{@code load}/
+     * {@code resume} 三处都调 {@code _schedule_available_commands_update}）—— fork 那第四处我们没实现，
+     * 所以也没有可广告的会话；见 {@code AcpMethods.SESSION_FORK} 的 notImplemented。
+     * 帧本身排在回包之后，见 {@link AcpConnection#scheduleAfterResponse}。</p>
+     */
+    private void advertiseCommands(AcpSessionRegistry.AcpSession session) {
+        final AcpStreamPublisher publisher = new AcpStreamPublisher(conn, session.acpSessionId());
+        conn.scheduleAfterResponse(new Runnable() {
+            @Override
+            public void run() {
+                publisher.sendAvailableCommands();
+            }
+        });
     }
 
     /**
@@ -302,6 +322,7 @@ public final class AcpAgentServer {
             result.putNull("models");
         }
         attachSessionMeta(result, session);
+        advertiseCommands(session);
         return result;
     }
 

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
+import com.zifang.z.bot.slash.CommandCatalog;
+import com.zifang.z.bot.slash.SlashRegistry;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -169,6 +171,67 @@ public final class AcpStreamPublisher implements StreamListener {
             n += q.size();
         }
         return n;
+    }
+
+    // ---- 命令表广告（P19 单源的消费端之一）----
+
+    /**
+     * 发 {@code session/update} 的 {@code available_commands_update} 帧，内容 =
+     * {@link CommandCatalog} 的 {@link CommandCatalog.Endpoint#ACP} 那一段 + 技能段。
+     *
+     * <p><b>帧形状是取证来的，不是凭记忆写的</b>（权威 schema =
+     * {@code ~/.hermes/hermes-agent/venv/lib/python3.11/site-packages/acp/schema.py}，逐行实测）：</p>
+     * <ul>
+     *   <li>{@code :2443} {@code AvailableCommandsUpdate(BaseModel)} ⇒ 判别字
+     *       {@code session_update: Literal["available_commands_update"] = Field(alias="sessionUpdate")}
+     *       ⇒ 线上键是 {@code sessionUpdate}（camelCase）。</li>
+     *   <li>{@code :2179—2181} 命令数组 {@code available_commands = Field(alias="availableCommands")}
+     *       ⇒ 线上键是 {@code availableCommands}。</li>
+     *   <li>{@code :2138} {@code AvailableCommand{name, description, input}} —— 三个字段都<b>没有</b> alias，
+     *       所以线上键就是 {@code name}/{@code description}/{@code input}。</li>
+     *   <li>{@code :1321} {@code AvailableCommandInput(RootModel[UnstructuredCommandInput])} +
+     *       {@code :1104—1120} {@code UnstructuredCommandInput.hint} ⇒ 有参数提示时
+     *       {@code "input": {"hint": "..."}}；无提示时省略 —— 与 hermes
+     *       {@code acp_adapter/server.py:1699—1712}（{@code input_hint} 为假 ⇒ {@code input=None}）同形。</li>
+     *   <li>外层 {@code params = {sessionId, update}} —— 与本类 {@link #send(ObjectNode)} 已有的
+     *       五种 sessionUpdate 帧同一套包裹，不另造。</li>
+     * </ul>
+     *
+     * <p>调用时机对齐 hermes {@code server.py:1734 _schedule_available_commands_update} 的注释
+     * "send the command advertisement <b>after the session response is queued</b>" ⇒ 由
+     * {@code AcpAgentServer} 在 {@code session/new} / {@code session/load} / {@code session/resume}
+     * 的回包<b>写出去之后</b>才发（{@link AcpConnection#scheduleAfterResponse}），
+     * 不让通知插到本会话的回包前面。</p>
+     */
+    public void sendAvailableCommands() {
+        ObjectNode update = JsonRpc.object();
+        update.put("sessionUpdate", AcpMethods.UPDATE_AVAILABLE_COMMANDS);
+        ArrayNode commands = update.putArray("availableCommands");
+        for (CommandCatalog.Def d : CommandCatalog.defsFor(CommandCatalog.Endpoint.ACP)) {
+            commands.add(commandNode(d.name(), d.description(), d.argsHint()));
+        }
+        // 技能派生命令：可见性段只在 CommandCatalog.skillEndpoints() 判一次（那里含 ACP），
+        // 这里只负责把运行时扫出来的名字填进同一个帧，不再各自判一遍能不能显示。
+        SlashRegistry live = SlashRegistry.live();
+        if (live != null) {
+            for (String key : live.skillCommandKeys()) {
+                com.zifang.z.bot.slash.SlashCommand c = live.find(key);
+                commands.add(commandNode(key, c == null ? "" : c.description(), ""));
+            }
+        }
+        send(update);
+    }
+
+    private static ObjectNode commandNode(String name, String description, String argsHint) {
+        ObjectNode command = JsonRpc.object();
+        command.put("name", name);
+        command.put("description", description == null ? "" : description);
+        if (argsHint != null && !argsHint.isEmpty()) {
+            ObjectNode input = JsonRpc.object();
+            input.put("hint", argsHint);
+            command.set("input", input);
+        }
+        return command;
     }
 
     // ---- 内部 ----
