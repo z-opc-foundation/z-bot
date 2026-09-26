@@ -197,7 +197,135 @@ public class P12RefundAndSteerGuardTest {
         }
     }
 
+    // ===== drain 的"排空"侧与中断那一轮的账（p12c 补：注入跑第一遍时这两条无人可抓） =====
+
+    /**
+     * {@code context.steer().drain()} 的判据有两半：读得到（M7 钉）与<b>真的清空</b>（这一条钉）。
+     *
+     * <p>只断言"插话进了 tool 结果"是抓不到"排了不空"的 —— 同一份内容再塞回队列，
+     * 第一个工具缝里照样看得见它。所以三个量都取自同一次真跑：队列必须真空、
+     * 跨所有已发出的请求这条插话只许出现一次、下一轮的 user 消息里不许以别的身份再冒出来。</p>
+     */
+    @Test
+    public void steerIsDrainedExactlyOnce() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        final BotAgent agent = agentWithEcho(llm);
+        try {
+            // 三个 step、两个工具缝：只有"排不空"才会让同一条插话在第二个缝里再来一遍
+            llm.script(toolReply(60, call("c1", "echo", "{\"message\":\"a\"}")));
+            llm.script(toolReply(60, call("c2", "echo", "{\"message\":\"b\"}")));
+            llm.script(textReply(60, "收尾"));
+            final boolean[] fired = {false};
+            agent.chat("干活", new StreamListener() {
+                @Override
+                public void onEvent(StreamEvent event) {
+                    // 只插一次：不然"每个工具缝都插一句"会把排空与重复注入两件事混成一件事
+                    if (event.kind() == StreamEvent.Kind.TOOL_RESULT && !fired[0]) {
+                        fired[0] = true;
+                        agent.steer("只在第一个工具缝里插一次");
+                    }
+                }
+            });
+
+            assertFalse("drain 之后 SteerQueue 必须真的空了", agent.context().steer().hasPending());
+            // 数"最后一份请求"里的出现次数：历史会整段重放，跨请求累加会把重放当成重复注入
+            ChatCompletionsRequest last = llm.requests.get(llm.requests.size() - 1);
+            assertEquals("同一条插话在同一份请求里只许出现一次（排空没生效就会在第二个工具缝再来一遍）",
+                    1, countIn(last, "[User steer]: 只在第一个工具缝里插一次"));
+
+            llm.script(textReply(60, "第二轮"));
+            agent.chat("下一轮", StreamListener.NOOP);
+            String nextUser = lastUserText(llm.requests.get(llm.requests.size() - 1));
+            assertFalse("上一轮排过的插话不许在下一轮以 [User queued] 之类的身份冒出来：" + nextUser,
+                    nextUser.contains("只在第一个工具缝里插一次"));
+        } finally {
+            agent.shutdown();
+        }
+    }
+
+    /**
+     * 中断收口不吞账：按了 {@code /stop} 之后那一轮，{@code Done} 事件里上报的调用数
+     * 必须是真打出去的那几次。写死成 0（或任何"当量没发生"的收口）就是用户的账凭空消失。
+     */
+    @Test
+    public void abortedTurnReportsTheCallsActuallyMade() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        final BotAgent agent = agentWithEcho(llm);
+        try {
+            for (int i = 0; i < 4; i++) {
+                llm.script(toolReply(60, call("c" + i, "echo", "{\"message\":\"x\"}")));
+            }
+            List<StreamEvent> events = new ArrayList<StreamEvent>();
+            String reply = agent.chat("一直干", new StreamListener() {
+                @Override
+                public void onEvent(StreamEvent event) {
+                    events.add(event);
+                    if (event.kind() == StreamEvent.Kind.STEP_START
+                            && ((StreamEvent.StepStart) event).step == 2) {
+                        agent.stop();
+                    }
+                }
+            });
+            assertTrue("这一轮应当走中止分支，实得回复：" + reply, reply.startsWith("已中止"));
+
+            StreamEvent.Done done = null;
+            for (StreamEvent e : events) {
+                if (e.kind() == StreamEvent.Kind.DONE) {
+                    done = (StreamEvent.Done) e;
+                }
+            }
+            assertTrue("中断路径也要回抛 Done 事件（用户看到的就是这一行）", done != null);
+            assertTrue("中断那一轮不许把调用账吞成 0，实得 totalSteps=" + done.totalSteps
+                            + "，stub 侧真收到 " + llm.requests.size() + " 次",
+                    done.totalSteps > 0);
+            assertTrue("上报的调用数不能少于真打出去的次数（totalSteps=" + done.totalSteps
+                            + " < requests=" + llm.requests.size() + "）",
+                    done.totalSteps >= llm.requests.size());
+        } finally {
+            agent.shutdown();
+        }
+    }
+
     // ===== helpers =====
+
+    /** 带一个 echo 工具的 agent：工具缝要真存在，drain 与中断才有落点。 */
+    private BotAgent agentWithEcho(ScriptedLlm llm) throws Exception {
+        Toolkit toolkit = new Toolkit();
+        toolkit.register(Toolkit.of("echo", "回显", stringSchema("message"),
+                args -> new ToolResult(null, null, "echoed", false,
+                        Collections.<String, Object>emptyMap())));
+        return BotAgent.builder((com.zifang.z.bot.config.BotConfig) null)
+                .provider(llm)
+                .toolkit(toolkit)
+                .sandbox(new Sandbox(sandboxDir.getAbsolutePath()))
+                .sessionManager(new SessionManager(sessionDir))
+                .budget(new IterationBudget(10, 100_000L))
+                .model("test-model")
+                .maxSteps(6)
+                .withoutBuiltinTools()
+                .build();
+    }
+
+    /**
+     * 数某一份请求里某个片段出现了多少次（"只注入一次"这种判据得靠数，不能靠 contains）。
+     *
+     * <p>刻意只数<b>单份</b>请求：历史会整段重放，跨请求累加会把重放误读成重复注入。</p>
+     */
+    private static int countIn(ChatCompletionsRequest request, String needle) {
+        int seen = 0;
+        for (Msg m : request.getMessages()) {
+            String c = m.getContent();
+            if (c == null) {
+                continue;
+            }
+            int at = c.indexOf(needle);
+            while (at >= 0) {
+                seen++;
+                at = c.indexOf(needle, at + needle.length());
+            }
+        }
+        return seen;
+    }
 
     private static void sleep(long millis) {
         try {

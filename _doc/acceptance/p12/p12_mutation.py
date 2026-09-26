@@ -497,7 +497,7 @@ def run_mutants(selected, with_e2e):
                     verdict = "GREEN-BUT-MUTATED"
         finally:
             write(key, original)
-        restored = md5(src_path(key)) == before[SRC[key]]
+        restored = md5(src_path(key)) == before[src_path(key)]
         # 独立取证第二把尺：还原后的磁盘字节 vs `git show <基线>:<path>`，注入前后各取一次
         disk_eq_git_after = (gbase is not None and md5(src_path(key)) == gbase)
         tally[verdict] = tally.get(verdict, 0) + 1
