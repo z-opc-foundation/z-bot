@@ -895,3 +895,54 @@ Sep 26 17:14:16 2026 p23_mutation.py   ← 量具（含本棒新增两支 + 一�
 p23b 那轮它不红（命令表侧当时没有 `environments` 用例）⇒ 记 PARTIAL。本棒补的 G-1
 （`environmentHiddenSkillStaysOutOfTableAndIsAccounted`）正是那个缺失的猎物 ⇒ 本轮实测两支全红、升 **RED-OK**
 （台账 45→47 支，五档 `RED-OK 47 / PARTIAL 0`）。
+
+### §11.5 杠③ 真进程 E2E 整跑 ×3（A5 转绿，判据一字未改）
+
+命令：`python3 _doc/acceptance/p23/p23_e2e.py p23c-{f1,f2,f3}`（串行；根目录 `~/.cache/zbot-p23-lead/e2e/<label>/`，
+打包由脚本自己做 `mvn -o package -DskipTests -pl z-bot-core`）。原始尾巴（`bar3_p23c_runner.log` + 各自 `.log`）：
+
+```
+bar3 f1 start 2026-09-26T09:21:12Z / rc=0 / end 09:21:49Z   E2E 条数=41 PASS=41 FAIL=0
+bar3 f2 start 2026-09-26T09:21:49Z / rc=0 / end 09:22:22Z   E2E 条数=41 PASS=41 FAIL=0
+bar3 f3 start 2026-09-26T09:22:22Z / rc=0 / end 09:22:55Z   E2E 条数=41 PASS=41 FAIL=0
+
+$ grep -h A5 ~/.cache/zbot-p23-lead/bar3_p23c_f{1,2,3}.log
+PASS  A5 /skills 口径：账本写明为什么两条没进命令表    撞核心名=True 平台门=True      ×3
+```
+
+`result.json` 三跑对账（`checks=41 PASS=41 FAIL=0`，失败项清单为空 `[]`）：
+
+```
+p23c-f1  jar=ba2de782  head=b1cec70  stub=http://127.0.0.1:59642/v1
+p23c-f2  jar=ba2de782  head=b1cec70  stub=http://127.0.0.1:59855/v1
+p23c-f3  jar=ba2de782  head=b1cec70  stub=http://127.0.0.1:60207/v1
+```
+
+A5 的历史读数：p23b 六跑恒 `撞核心名=False 平台门=True`（FAIL）⇒ 本棒三跑恒 `True/True`（PASS）。
+`jar_sha8` 由 p23b 的 `5f4c9500` 变成本棒的 `ba2de782`（src 改了，理应换件）；三跑同一件 jar、同一棵 `head`，
+跑前 `git status --porcelain -- z-bot-core/src | wc -l` = **0** ⇒ 量的是提交树。
+**A5 的判据（`"核心命令" in listing and "platforms" in listing`）本棒一个字没动**（`git diff 61d5b52..HEAD -- _doc/acceptance/p23/p23_e2e.py` 为空）。
+
+### §11.6 杠④ `~/.zbot` 三时点
+
+```
+$ date -u +%Y-%m-%dT%H:%M:%SZ ; ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/.zbot/state.db | cut -c1-8 ; test -e ~/.zbot/skills && echo EXISTS || echo NOT_EXIST ; awk -F= '/^minimax\.api\.key=/{print length($2)}' ~/.zbot/config.properties
+t0 开工       2026-09-26T09:03:2xZ 本地 17:03 : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125   （§11.0）
+t1 杠① 在飞   2026-09-26T09:15:28Z                : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125
+t2 杠③ 之后   2026-09-26T09:23:19Z                : 8 / 2dadaed0 / 690ddbc0 / NOT_EXIST / keylen=125
+-rw-r--r--@ 1 zifang staff 215 Jul 12 13:54:07 2026 ~/.zbot/config.properties     ← mtime 未推进
+-rw-r--r--@ 1 zifang staff 569344 Sep 25 17:05:14 2026 ~/.zbot/state.db           ← mtime 未推进
+```
+
+三时点三值全等（8 / 2dadaed0 / 690ddbc0），`~/.zbot/skills` **仍不存在**，两个文件的 mtime 一字未动；
+真 minimax key 全程只被 `awk` 量过一次长度（125）。测试与 E2E 一律走 `~/.cache/zbot-p23-lead/…`
+（`ZBOT_HOME` + `-Dzbot.home=<scene>/zbot-home`），没往 `/tmp` 写任何产物（仓在 `/private/tmp/zbot-wt-p23` 是工单指定的仓位置）。
+收尾 `pgrep -fl 'z-bot-core.jar|p23_e2e'` 无输出 ⇒ 无残留 REPL / stub LLM 活口。
+
+### §11.7 本棒明确不做 / 记下的新缺陷候选
+
+| 要动 X | 因为 Y | 会撞 Z |
+|---|---|---|
+| 把 `/help`（及 `/?`、`/status`、`/theme`、`/feedback`、`/confirm`、`/exit`）纳入 `coreCommandNames()` 的守卫面 | 这 7 条是 `channel/TerminalChannel.java:235` 的本地 doc，从没进 `SlashRegistry`；技能 `name: help` 仍可在命令表里注册一条 `/help`，而 `TerminalChannel` 是先查 `command != null` 再落到本地 doc ⇒ **技能可以顶掉本地 `/help`**（D-2 候选，p23c 只按 §1.3 钉死既有守卫的口径，没扩这条） | 工单 §1.5「不要扩范围」＋ §3.4 禁写 `channel/**`；改哪一侧（把 help 注册进 registry，还是让 TerminalChannel 的本地 doc 先判）是产品决策，交主编 |
+| `coreCommandNames()` 改成吐裸 slug（口径 B） | 口径 A 已经让 `BotAgent` 零改动；口径 B 要动 `BotAgent:936/939` 的映射，正踩在 4 支共写的雷区上 | §3.4 |
+| `reserved` 两侧同时容错（既 `test(key)` 又在调用方补斜杠） | 工单 §1.1 明令只许一处归一；本棒已用 `caller_side_normalization_reintroduced` 这支变异把它钉住（RED-OK） | §1.1 |
