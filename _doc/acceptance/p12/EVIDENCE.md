@@ -246,9 +246,38 @@ M12 那对 sha256 同时就是 §9 的阳性对照（冻结在位时两轮都是
   当时攥锁的是 `/private/tmp/zbot-wt-p20b` 那棒的 `p20d_tk5_equiv_probe.py`（PID 64902，10:44:28 起），
   复算：`lsof /Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock` ⇒ 只列出该 PID；
   本棒源码 md5 未变（`git status --porcelain` 之后仍只剩 `logs/`、`out/`）。
+- **flock 真的跨 worktree 互斥（本棒新取证，不是自造探针）**：本棒杠② 第二遍全量在 `11:17:46` 拿到锁、
+  `11:24` 收工放锁；`11:24:02` 锁就被**另一个 worktree 的进程**攥走了。复算：
+
+  ```
+  $ lsof /Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock
+    COMMAND   PID   USER  FD TYPE DEVICE NAME
+    Python  73653 zifang  3u REG  1,16   .../.git/zbot-mutlock
+  $ lsof -p 73653 -a -d cwd -Fn | grep ^n
+    n/private/tmp/zbot-wt-p20b                     ← 邻居在**另一个工作树**里，抢的是同一把锁
+  $ ps -p 73653 -o lstart,command | tail -1
+    Sat Sep 26 11:24:01 2026  Python -u _doc/acceptance/p20b/p20b_mu…
+  ```
+
+  这段时间本棒跑 `--lock-probe` ⇒ 探针自己的"邻居进程"也拿不到锁，原文：
+
+  ```
+  探针对象: /Users/zifang/…/z-bot/.git/zbot-mutlock（git 公共目录，跨 worktree 有效）
+  源码全量 md5 基线: 120 个 .java 文件
+    邻居进程: LOCK-BUSY holder：另一支注入脚本攥着 …（[Errno 35] Resource temporarily unavailable）⇒ 本次不跑，一个源文件都没碰 (pid=75367)
+  FATAL 邻居没攥住锁          rc=2
+  ```
+
+  这一跑**恰好是"拒跑方向"的又一次实测**（被真邻居拒，且 `git status --porcelain` 之后仍只剩
+  `logs/`、`out/` ⇒ 一个源文件都没碰），但它不是探针设计的那次双向读数。
 - **双向实测**（`--lock-probe`：攥住 flock ⇒ 本脚本必须拒跑且全量源码 md5 不变；松开 ⇒ 照常拿得到）：
-  UNKNOWN —— 本轮次截止前未跑到（见 §7），命令已备：
-  `python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe`。
+  UNKNOWN —— 本棒三次重试（11:25 / 11:31 / 11:41）全被 `zbot-wt-p20b` 那支 `p20b_mutation.py`（PID 73653，
+  11:24:01 起）攥着锁，`--lock-probe` 在它自己那一步就 `LOCK-BUSY` 退出（上面原文），**没有伪造读数**。
+  两向的**间接**证据各自都有（① 拒跑：本节两条真邻居读数 + `logs/p12c_mut_retry_index.txt` 里那串
+  `attempt1..13 rc=5` 与 `attempt14 rc=0`；② 放行：同一把锁在邻居松手后本棒 `11:17:46` 的 `--with-e2e`
+  全量、`10:53` 的 `--with-e2e M6 M12` 都正常 `LOCK-ACQUIRED`），但这不等于探针那一跑在同一次执行里
+  先攥后放、两向各一条的读数值。
+  命令已备：`python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe`（见 §7.1）。
 
 ### 2.5 还原独立取证
 
@@ -571,27 +600,33 @@ $ md5 -q ~/.zbot/state.db | cut -c1-8
 | G7 | 杠② 判定规则 | `if hit and not extra: RED-OK` —— 只看"点名的红了没 + 有没有多红"，**不看有没有点名没打满** | M1 2/3、M12 1/2、M18 1/2 都被记成 RED-OK，读者会以为"点名的三条全红了" | 本棒**没改这条规则**（改了就跟上一棒的台账不可比），改为在 §2.3 把这三条"没打满的那一半"逐条落地给因果 |
 | G8 | 杠③ cache 段 C1 | 只连打两次 chat、**两次之间不写盘** ⇒ "每步按盘重建"与"冻结快照"算出同一份字节 | `--with-e2e M12` 第一跑 `e2e_rc=0`（`logs/p12c_mut_withe2e_M6_M12.log`）：把冻结整个摘掉，真进程层照样全绿 ⇒ C1 在进程层是等价变异盲点 | 本棒补 C5（中途写 `SOUL.md` 那一行不许进 prompt，且先证盘上真有那一行）+ C6（中途写的记忆下一轮在 **user** 消息里，反 C5 的空跑），并把 M12 的 kind 改成 `mvn+e2e` 走 cache 段 ⇒ 阳性对照见 §9 |
 | G9 | 杠③ K2/K3 扫描面 | 排除规则用 basename 含 `_run` 来挡 harness 自己的读数文件 | 万一**真**运行期产物名字里带 `_run`，它会被排除在凭证扫描之外（哨兵看不见它） | 本棒没放宽、也没重写这条启发式；排除清单在读数里逐条报出（`K3 … 未纳入扫描的 harness 读数文件=[…]`），残余风险只记在这里 |
+| G10 | 杠② LEDGER 写出方式 | `LEDGER.tsv` 每次运行**整体重写**，且只写本次跑到的那些支 ⇒ 跑子集（`--with-e2e M12` 这种单支复打）会静默把 19 行台账压成 1 行 | 本棒接手时盘上就是这样：`git status` 显示 `M LEDGER.tsv`，diff 里 18 行被删、只剩表头 + M12 一行。要不是它有未提交的 `M` 标记，这份"1 支的台账"就会被当成"全量台账"入库 ⇒ **子集跑不是不能跑，是不能拿它的产物当交付物** | 本棒没有改脚本的写出方式（改了台账格式就没法跟上一棒比），而是**重跑一遍 19 支全量**（`--with-e2e`）让 `LEDGER.tsv` 重新成为全量脚本产物（§2.1b），并把上一棒那 18 行的读数用 `git show e69709a:…LEDGER.tsv` 留住做逐支对拍 |
 
 ## 7. 本期没做的（别当成做了）
 
-1. **杠② 的 `--lock-probe` 双向实测没跑到**（150 轮上限 + 同机邻居连着攥锁）。
-   替代证据只有一向：邻居（`/private/tmp/zbot-wt-p20b` 那棒的 `p20d_tk5_equiv_probe.py`，PID 64902）
-   真在飞时本脚本 `rc=5` 拒跑且源码 md5 不变（§2.4 原文）。
-   **"松开后照常拿得到"这一向是间接证据**（同一把锁后来被本棒 `--with-e2e M6 M12` 正常拿到过，
-   见 `p12c_mut_withe2e_M6_M12.log` 首行 `LOCK-ACQUIRED`），不等于探针那一跑的双向读数。补跑命令：
+1. **杠② 的 `--lock-probe` 双向实测仍然没跑到**（同机邻居连着攥锁）。本棒（含续跑）共重试 4 次
+   11:25 / 11:31 / 11:41 都被 `zbot-wt-p20b` 的 `p20b_mutation.py`（PID 73653，11:24:01 起）挡在门外，
+   探针在它自己那一步就 `LOCK-BUSY` ⇒ `FATAL 邻居没攥住锁` rc=2（原文与 lsof 取证见 §2.4）。
+   两向各自都有**间接**读数（拒跑：两条真邻居 + `attempt1..13 rc=5`；放行：`attempt14 rc=0`、
+   `11:17:46` 全量 `LOCK-ACQUIRED`），但"同一次执行里先攥后放、两向各一条"这条**没有**。补跑命令：
    `python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe`。
 2. **M8 / M9 / M17 三支 GREEN-BUT-MUTATED 只给了因果，没补判据**。改法本棒已经想清楚但没落地：
    M8 ⇒ 让命令先 `touch <token>.marker`，"起没起过进程"才留得下痕迹；M9 ⇒ 读一个 **0 行**文件
    （循环体一次都不进，只有入口检查点会断）；M17 ⇒ 两次绑定必须**时间重叠**
    （A 卡在工具里、B 在同刻 `bind+request`），现在这个"B 收工 A 才上"的时序永远量不出来。
+   ⇒ 结论：**"已经按了停止就不该再起进程"、"文件读入口检查点"、"旗子按线程定向"这三条守卫
+   今天仍然只有实现、没有能判红的观测**，别当成验收了。
 3. **M16 想钉的那条测试（`interruptInsideParallelToolBatch…`）判不了红**，要抓它得注入
    `InterruptFlag.checkpoint()` 本体 —— 那个类在 `z-agent-kernel`，本期红线不许动内核仓 ⇒ 未覆盖。
-4. **杠② 全量只跑了一轮**（19 支）。另两次是子集（`--with-e2e M6 M12`、`--with-e2e M12`），
-   没有"同一期望集的第二遍全量对拍"，所以单轮内的偶发漏判分不出来。
+4. ~~杠② 全量只跑了一轮~~ ⇒ **本棒已补第二遍全量**（`--with-e2e`，19 支逐支对拍 19/19 全同，见 §2.1b）。
+   仍然没做的是：**没有第三遍**，也没有"换机/换负载下的重复"，所以两遍里都恰好稳定的漏判分不出来；
+   且第二遍的 `e2e_rc` 只有 M6/M12 两支有值（其余 17 支的 kind 是 `mvn`，设计上不跑真进程层）。
 5. **D1/D2（§5 的 token 账与 post-chat）没修**，本棒一行产品码都没动（只动测试与量具）。
 6. **E2E 的 `STOP_LIMIT_MS=2000`、R2b 那条 pty 反面对照的语义**沿用上一棒设定，本棒没重估；
-   实测余量很大（五跑 33–92 ms），但没有多机分布数据支撑这个阈值。
-7. **没做集成**：不 push、不合 `main`、不动兄弟 worktree（`w2-p16ev` / `w2-p20b` / `w1-p15b`）、不动内核仓。
+   实测余量很大（§3.3 五跑 33–92 ms、§3.3b 五跑 50–81 ms），但没有多机分布数据支撑这个阈值。
+7. **`--with-e2e` 只覆盖 stop / cache 两段**：repl 段（真 pty）与 home/creds 段没进注入回路，
+   也就是说"摘掉某个检查点之后 REPL 那条 pty 反面对照会不会变红"今天没有读数。
+8. **没做集成**：不 push、不合 `main`、不动兄弟 worktree（`w2-p16ev` / `w2-p20b` / `w1-p15b`）、不动内核仓。
    `_doc/acceptance/p12/logs/`、`out/` 是跑动产物，`*.log` 被 `.gitignore:5` 排除 ⇒ 没进仓，
    决定性读数已全部粘进本文件。
 
@@ -603,27 +638,42 @@ $ md5 -q ~/.zbot/state.db | cut -c1-8
 # 起讫与盘上状态
 git -C /private/tmp/zbot-wt-p12 log --oneline -6 && git -C /private/tmp/zbot-wt-p12 status --porcelain
 
-# 杠①（三跑，每跑 ~21–30 s）
+# 杠①（三跑，每跑 ~17–30 s；本棒跑了两批：logs/p12c_bar1_run*（HEAD 6998e68）与 p12c_bar1_final_run*（HEAD 5965f80））
 cd /private/tmp/zbot-wt-p12
 for i in 1 2 3; do rm -rf z-bot-core/target/surefire-reports; \
-  mvn -o test > _doc/acceptance/p12/logs/p12c_bar1_run$i.log 2>&1; echo "rc=$?"; done
-grep -hE "Tests run: [0-9]+, Failures|BUILD (SUCCESS|FAILURE)" _doc/acceptance/p12/logs/p12c_bar1_run*.log
+  mvn -o test > _doc/acceptance/p12/logs/p12c_bar1_final_run$i.log 2>&1; echo "rc=$?"; done
+grep -hE "Tests run: [0-9]+, Failures|BUILD (SUCCESS|FAILURE)|Total time" _doc/acceptance/p12/logs/p12c_bar1_final_run*.log
+grep -c -- '-- in ' _doc/acceptance/p12/logs/p12c_bar1_final_run1.log          # 49 个测试类
+git diff --stat 6998e68 HEAD -- z-bot-core                                     # 空 ⇒ 两批跑的是同一份 Java 字节
 
-# 杠②（全量一轮；独占 flock，约 22 分钟；LEDGER.tsv 是脚本产物）
-python3 -u _doc/acceptance/p12/p12_mutation.py
-column -t -s $'\t' _doc/acceptance/p12/LEDGER.tsv          # 只读台账，不许手改
-python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M6 M12   # 真进程层两支（stop / cache）
-python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe        # 本棒未跑到，见 §7.1
+# 杠②（全量一轮 19 支；独占 flock。第一遍不带 e2e ≈4 分钟，第二遍带 --with-e2e ≈7 分钟）
+python3 -u _doc/acceptance/p12/p12_mutation.py                 # → logs/p12c_mut_full_run1.log
+python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e      # → logs/p12c_mut_full_run2.log（入库的 LEDGER.tsv 出自这一遍）
+column -t -s $'\t' _doc/acceptance/p12/LEDGER.tsv              # 只读台账，不许手改
+python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M6 M12   # 单独复打真进程层两支（stop / cache）
+python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe    # flock 双向实测（状态见 §2.4 / §7.1）
+# 两遍全量逐支对拍（本棒读数 19/19 全同，唯一差异是 e2e_rc 列）
+python3 - <<'PY'
+import csv, io, subprocess
+a=list(csv.DictReader(io.StringIO(subprocess.check_output(
+   ['git','show','e69709a:_doc/acceptance/p12/LEDGER.tsv']).decode()),delimiter='\t'))
+b=list(csv.DictReader(open('_doc/acceptance/p12/LEDGER.tsv'),delimiter='\t'))
+k=('verdict','named_hit','named_expected','mvn_rc','tests_that_went_red','restore_forensics_vs_git')
+d={r['id']:[r[x] for x in k] for r in a}; e={r['id']:[r[x] for x in k] for r in b}
+print('rows',len(a),len(b),'全同支数',sum(1 for x in d if d[x]==e.get(x)))
+print('e2e_rc 非空:',[(r['id'].split()[0],r['e2e_rc']) for r in b if r['e2e_rc']])
+PY
 
 # 杠③（真进程 E2E，不带 --only 就是全 25 条；约 30 s/跑）
 mvn -o -q package -DskipTests -pl z-bot-core
+find z-bot-core/src/main/java -name '*.java' -newer z-bot-core/target/z-bot-core.jar   # 必须空
 for i in 1 2 3 4 5; do python3 -u _doc/acceptance/p12/p12_e2e.py \
-  --json _doc/acceptance/p12/out/p12c_e2e_run$i.json \
-  > _doc/acceptance/p12/logs/p12c_e2e_run$i.log 2>&1; echo "run$i rc=$?"; done
-grep -h "^段=all" _doc/acceptance/p12/logs/p12c_e2e_run*.log
+  --json _doc/acceptance/p12/out/p12c_e2e_final_run$i.json \
+  > _doc/acceptance/p12/logs/p12c_e2e_final_run$i.log 2>&1; echo "run$i rc=$?"; done
+grep -h "^段=all" _doc/acceptance/p12/logs/p12c_e2e_final_run*.log
 
-# 杠③ K2 的双向实测（仓外探针，跑的是仓里那份 section_creds()，只把扫描根指到 ~/.cache）
-python3 -u ~/.cache/zbot-p17/probe_k2/two_way.py           # 本棒复算 rc=0
+# 杠③ K2 的双向实测（**已入仓**：跑的是仓里那份 section_creds()，只把扫描根指到 ~/.cache/zbot-p12-k2-probe/）
+python3 -u _doc/acceptance/p12/p12_k2_probe.py                 # rc=0 ⇒ (a)判绿 (b)判红 两边都成立；含封存字节 809b927 一套
 
 # 杠④（三个数，不读不打印 key 值）
 ls -A ~/.zbot | wc -l; md5 -q ~/.zbot/config.properties | cut -c1-8; md5 -q ~/.zbot/state.db | cut -c1-8
@@ -632,7 +682,9 @@ ls -A ~/.zbot | wc -l; md5 -q ~/.zbot/config.properties | cut -c1-8; md5 -q ~/.z
 grep -n "recordSessionUsage\|firePostChat" z-bot-core/src/main/java/com/zifang/z/bot/agent/BotAgent.java
 
 # §9 P24 交接件（C1/C5 的 sha256 读数）
-grep -h "^PASS  C1 \|^PASS  C5 " _doc/acceptance/p12/logs/p12c_e2e_run1.log
+grep -h "^PASS  C1 \|^PASS  C5 " _doc/acceptance/p12/logs/p12c_e2e_final_run1.log
+python3 -c "import json;d=json.load(open('_doc/acceptance/p12/out/mutation-M12.json'));print(*['%s %s | %s'%(c['status'],c['name'][:44],c['detail'][:150]) for c in d['checks'] if c['status']!='PASS'],sep='\n')"
+# 阳性对照：摘掉冻结之后真进程层哪几条判红（M6 那支看 out/mutation-M6.json 的 S2/S3）
 ```
 
 ---
@@ -672,15 +724,26 @@ C6 反空跑：中途写的那行记忆下一轮真到了模型 … user2 含记
 - 单测层（已实测）：`python3 -u _doc/acceptance/p12/p12_mutation.py` 里的 **M12**
   （`SystemPromptCacheFreezeTest.java:83` 的 `assertArrayEquals(first, second)` 当场判红，
   红在 `twoChatsInOneSessionSendByteIdenticalSystemPrompt`）。
-- 真进程层：UNKNOWN —— 摘掉冻结后跑 cache 段要独占 flock，本棒收尾前邻居（`zbot-mutlock`，
-  PID 91548/64902 那支 `p20d_tk5_equiv_probe.py`）一直攥着锁，四次重试全 `rc=5` 拒跑（原文见 §2.4），
-  没伪造读数。复算命令：
-  `python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M12`（拿到锁后期望 `e2e_rc≠0` 且
-  C1 的 `sha256_1 != sha256_2`）。
-- **本棒已经量到的反面事实（P24 必须知道）**：把 M12 摘掉冻结之后，**旧版 cache 段仍然全绿**
-  （`logs/p12c_mut_withe2e_M6_M12.log` 里 `e2e_rc=0`）—— 因为旧版只连打两次 chat、中间不写盘，
-  "每步按盘重建"和"冻结快照"算出同一份字节。所以 **C1 单独复用是无效的回归**：
-  必须连着 C5/C6 那种"中途真写盘 + 盘上确认那一行真在"的动作一起用（§6 G8）。
+- **真进程层（本棒已实测，不再是 UNKNOWN）**：杠② 全量第二遍带 `--with-e2e` 时 M12 拿到锁跑完了，
+  `e2e_rc=1`，红在 C1 与 C5（`out/mutation-M12.json` 原文）：
+
+  ```
+  FAIL C1 两次 chat 实际发出的 system prompt 逐字节相同（比 stub 落盘的请求原文）
+       len1=2345 len2=2372 md5_1=7cf85e3c md5_2=af2f6803
+       sha256_1=8b38a41dc2ff8d9737d9fff928ac346701c1249bcaa2c0358f0e640d93d81eec   ← 冻结在位时两轮都是这个
+       sha256_2=2b4de93591fd6dff41a71f39245f8317b1fc500744b8bc408486c9f330a8b216   ← 摘掉冻结后第二发变了
+  FAIL C5 中途写进 SOUL.md 的那一行不进 system prompt（快照冻结；盘上真有那一行）
+       盘上 SOUL.md 含哨兵=True；两轮 system 含哨兵=False/True
+  ```
+
+  复算命令：`python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M12`（要独占 flock；
+  拿到锁后期望 `e2e_rc≠0`、C1 的 `sha256_1 != sha256_2`、C5 的 `False/True`）。
+  同一支在 `10:52` 那一跑（§6 G8）还是 `e2e_rc=0`，因为当时 cache 段没有"中途写盘"这个动作；
+  本棒补了 C5/C6 之后这一支才有真读数。
+- **P24 必须知道的反面事实**：只复用 C1 是**无效回归** —— 旧版 cache 段（只连打两次 chat、中间不写盘）
+  在摘掉冻结之后仍然全绿（`logs/p12c_mut_withe2e_M6_M12.log` 里 `e2e_rc=0`），因为"每步按盘重建"
+  与"冻结快照"在那个现场算出同一份字节。必须连 C5/C6 那种"中途真写盘 + 先证盘上那一行真在"
+  的动作一起用（§6 G8）。
 
 ### 9.4 现字节上的接线行号（简报里 `:273/:465/:914` 是 `b64d294` 的数，这里给复算后的）
 
