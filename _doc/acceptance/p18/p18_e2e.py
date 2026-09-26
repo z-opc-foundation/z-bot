@@ -209,7 +209,11 @@ class FakeImHandler(BaseHTTPRequestHandler):
                "headers": {k.lower(): str(v) for k, v in self.headers.items()},
                "body": raw.decode("utf-8", "replace"),
                "first_line": "POST %s HTTP/1.1" % self.path,
-               "status_out": None}
+               "status_out": None, "arrived_at": time.time()}
+        # 到达即入账（不是"答完了才记账"）：否则 B 段 sleep 期间看不到在飞请求，
+        # kill -9 会打在已经送达完成之后 —— 量具自己把在飞窗口吃掉了。
+        with RECORD_LOCK:
+            IM_RECORDS.append(rec)
         status, payload = 404, json.dumps({"code": 1, "msg": "no such path"})
         if path.endswith("/auth/v3/tenant_access_token/internal"):
             with RECORD_LOCK:
@@ -227,8 +231,6 @@ class FakeImHandler(BaseHTTPRequestHandler):
             status = 200
             payload = json.dumps({"errcode": 0, "errmsg": "ok"})
         rec["status_out"] = status
-        with RECORD_LOCK:
-            IM_RECORDS.append(rec)
         data = payload.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -671,8 +673,8 @@ def section_b(base_url, fake_base):
     for r in (rows or []):
         st_count[r["state"]] = st_count.get(r["state"], 0) + 1
     check("B3 kill 时刻台账里没有 delivered（不许『平台还没确认就记送达』）",
-          rows is not None and st_count.get("delivered", 0) == 0,
-          "%s 状态分布=%s" % (how, st_count or "-"))
+          rows is not None and len(rows) >= 1 and st_count.get("delivered", 0) == 0,
+          "%s 状态分布=%s 在飞=%d" % (how, st_count or "-", in_flight))
     gw2 = Gateway("B-gw-restart", root, base_url, extra_manifest=man)
     gw2.start()
     ok2 = gw2.listening(gw2.http_port)
