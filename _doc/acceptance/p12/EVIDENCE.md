@@ -393,7 +393,23 @@ $ md5 -q ~/.zbot/state.db | cut -c1-8
 
 ## 5. 本期发现的产品级缺陷（未修）
 
-UNKNOWN
+只报**量得出来**的；杠② 那三条 GREEN-BUT-MUTATED 属"判据缺口"不是产品缺陷，记在 §2.2，不在这里混。
+
+- **D1｜中止那一轮与预算耗尽那一轮的 token 账根本不上报、也不落库**（apiCalls 报了，token 没报）。
+  字节层读数：`BotAgent.java:262`（`catch (AgentInterruptedException)` 分支）与 `:352`（预算耗尽分支）
+  都是 `new StreamEvent.Done(…, context.budget().apiCalls(), null, null)` —— 后两个 `null` 就是
+  prompt/completion token；而 `recordSessionUsage(steps, prompt, completion)` 全仓只有
+  **一处**调用点（`BotAgent.java:1515`，正常收尾路径）。
+  复算：`grep -n "recordSessionUsage" z-bot-core/src/main/java/com/zifang/z/bot/agent/BotAgent.java`
+  ⇒ `1515:        recordSessionUsage(steps, prompt, completion);` 与 `1521` 的定义，没有第三处。
+  后果：用户按 `/stop` 打断一长串工具调用之后，那一轮实际烧掉的 token 在 Done 事件里是空的、
+  在 session 用量里也没入账 —— M19（`abortedTurnReportsTheCallsActuallyMade`）钉住的是 apiCalls 那一半，
+  token 这一半**没有任何断言**。本棒没动产品码，交主编定口径。
+- **D2｜中止那一轮不走 post-chat 钩子**（记忆沉淀/后续动作那一类）。
+  `chat()` 的正常路径是 `runReActLoop → persistSession → firePostChat`（`BotAgent.java:252-254`），
+  中止路径只有 `persistSession()`（`:260-263`），确认等待路径（`:256-258`）也没有。
+  复算：`grep -n "firePostChat" z-bot-core/src/main/java/com/zifang/z/bot/agent/BotAgent.java`。
+  这是"有意还是漏"本棒判不了（没有测试、也没有注入钉它），只把形状记下来。
 
 ---
 
@@ -406,17 +422,73 @@ UNKNOWN
 | G3 | 杠③ 脚本本体 | run3/run4 那两版正则括号写坏 ⇒ `SyntaxError`，整跑 0 条检查 | 读数里出现"检查条数=0"，容易被当"没跑"或"跑了全绿" | 已修；两跑原文记在 §3.2 |
 | G4 | 杠③ K3/K2 扫描面 | 扫描根 `os.walk(HERE)` 会把 **harness 自己的读数文件**（`out/e2e_full.json`、`logs/e2e_full_run1.log`）当运行期产物，而里面逐字写着检查项名字（含 `minimax`）⇒ 哨兵吃自己 | run1 的 `K3 … 命中文件=[…/p12_e2e.py]`、run2 的 `K3 全目录命中=3；其中运行期产物命中=[…/out/e2e_full.json, …/logs/e2e_full_run1.log]` 都是这一条 | 已加排除（`e2e_full`/`e2e_stop_only`/basename 含 `_run`）；**残余风险**见 §5 |
 | G5 | 本棒自己的探针 | `two_way.py` 的 D 场景第一版把 `001.headers.json`（内含 stub key）也铺进了现场 ⇒ "产物里一个 key 都配不到"这个前提根本不成立，实测 PASS 被我期望成 FAIL | 差点反过来冤枉 K2"吃空跑"。复测（`key_header=False`）后 K2 判 FAIL，与期望一致 | 已修探针；教训按"坏读数也要复测"记这一条 |
-| G6 | 杠② LEDGER | 上一版只跟"本次运行开始时的内存快照"对账；如果邻居留了未提交的脏改动，内存快照本身就是脏的 | 还原取证会给出 `SRC_MD5_STABLE=yes` 却仍是脏盘 | 本棒加了第二把尺：逐支注入前后各比一次 `git show HEAD:<path> | md5`，LEDGER 第 11 列 `restore_forensics_vs_git` |
+| G6 | 杠② LEDGER | 上一版只跟"本次运行开始时的内存快照"对账；如果邻居留了未提交的脏改动，内存快照本身就是脏的 | 还原取证会给出 `SRC_MD5_STABLE=yes` 却仍是脏盘 | 本棒加了第二把尺：逐支注入前后各比一次 `git show HEAD:<path> | md5`，LEDGER 第 11 列 `restore_forensics_vs_git`（全 19 行 `before=ok after=ok`） |
+| G7 | 杠② 判定规则 | `if hit and not extra: RED-OK` —— 只看"点名的红了没 + 有没有多红"，**不看有没有点名没打满** | M1 2/3、M12 1/2、M18 1/2 都被记成 RED-OK，读者会以为"点名的三条全红了" | 本棒**没改这条规则**（改了就跟上一棒的台账不可比），改为在 §2.3 把这三条"没打满的那一半"逐条落地给因果 |
+| G8 | 杠③ cache 段 C1 | 只连打两次 chat、**两次之间不写盘** ⇒ "每步按盘重建"与"冻结快照"算出同一份字节 | `--with-e2e M12` 第一跑 `e2e_rc=0`（`logs/p12c_mut_withe2e_M6_M12.log`）：把冻结整个摘掉，真进程层照样全绿 ⇒ C1 在进程层是等价变异盲点 | 本棒补 C5（中途写 `SOUL.md` 那一行不许进 prompt，且先证盘上真有那一行）+ C6（中途写的记忆下一轮在 **user** 消息里，反 C5 的空跑），并把 M12 的 kind 改成 `mvn+e2e` 走 cache 段 ⇒ 阳性对照见 §9 |
+| G9 | 杠③ K2/K3 扫描面 | 排除规则用 basename 含 `_run` 来挡 harness 自己的读数文件 | 万一**真**运行期产物名字里带 `_run`，它会被排除在凭证扫描之外（哨兵看不见它） | 本棒没放宽、也没重写这条启发式；排除清单在读数里逐条报出（`K3 … 未纳入扫描的 harness 读数文件=[…]`），残余风险只记在这里 |
 
 ## 7. 本期没做的（别当成做了）
 
-UNKNOWN
+1. **杠② 的 `--lock-probe` 双向实测没跑到**（150 轮上限 + 同机邻居连着攥锁）。
+   替代证据只有一向：邻居（`/private/tmp/zbot-wt-p20b` 那棒的 `p20d_tk5_equiv_probe.py`，PID 64902）
+   真在飞时本脚本 `rc=5` 拒跑且源码 md5 不变（§2.4 原文）。
+   **"松开后照常拿得到"这一向是间接证据**（同一把锁后来被本棒 `--with-e2e M6 M12` 正常拿到过，
+   见 `p12c_mut_withe2e_M6_M12.log` 首行 `LOCK-ACQUIRED`），不等于探针那一跑的双向读数。补跑命令：
+   `python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe`。
+2. **M8 / M9 / M17 三支 GREEN-BUT-MUTATED 只给了因果，没补判据**。改法本棒已经想清楚但没落地：
+   M8 ⇒ 让命令先 `touch <token>.marker`，"起没起过进程"才留得下痕迹；M9 ⇒ 读一个 **0 行**文件
+   （循环体一次都不进，只有入口检查点会断）；M17 ⇒ 两次绑定必须**时间重叠**
+   （A 卡在工具里、B 在同刻 `bind+request`），现在这个"B 收工 A 才上"的时序永远量不出来。
+3. **M16 想钉的那条测试（`interruptInsideParallelToolBatch…`）判不了红**，要抓它得注入
+   `InterruptFlag.checkpoint()` 本体 —— 那个类在 `z-agent-kernel`，本期红线不许动内核仓 ⇒ 未覆盖。
+4. **杠② 全量只跑了一轮**（19 支）。另两次是子集（`--with-e2e M6 M12`、`--with-e2e M12`），
+   没有"同一期望集的第二遍全量对拍"，所以单轮内的偶发漏判分不出来。
+5. **D1/D2（§5 的 token 账与 post-chat）没修**，本棒一行产品码都没动（只动测试与量具）。
+6. **E2E 的 `STOP_LIMIT_MS=2000`、R2b 那条 pty 反面对照的语义**沿用上一棒设定，本棒没重估；
+   实测余量很大（五跑 33–92 ms），但没有多机分布数据支撑这个阈值。
+7. **没做集成**：不 push、不合 `main`、不动兄弟 worktree（`w2-p16ev` / `w2-p20b` / `w1-p15b`）、不动内核仓。
+   `_doc/acceptance/p12/logs/`、`out/` 是跑动产物，`*.log` 被 `.gitignore:5` 排除 ⇒ 没进仓，
+   决定性读数已全部粘进本文件。
 
 ---
 
 ## 8. 复算命令清单
 
-UNKNOWN
+```
+# 起讫与盘上状态
+git -C /private/tmp/zbot-wt-p12 log --oneline -6 && git -C /private/tmp/zbot-wt-p12 status --porcelain
+
+# 杠①（三跑，每跑 ~21–30 s）
+cd /private/tmp/zbot-wt-p12
+for i in 1 2 3; do rm -rf z-bot-core/target/surefire-reports; \
+  mvn -o test > _doc/acceptance/p12/logs/p12c_bar1_run$i.log 2>&1; echo "rc=$?"; done
+grep -hE "Tests run: [0-9]+, Failures|BUILD (SUCCESS|FAILURE)" _doc/acceptance/p12/logs/p12c_bar1_run*.log
+
+# 杠②（全量一轮；独占 flock，约 22 分钟；LEDGER.tsv 是脚本产物）
+python3 -u _doc/acceptance/p12/p12_mutation.py
+column -t -s $'\t' _doc/acceptance/p12/LEDGER.tsv          # 只读台账，不许手改
+python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M6 M12   # 真进程层两支（stop / cache）
+python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe        # 本棒未跑到，见 §7.1
+
+# 杠③（真进程 E2E，不带 --only 就是全 25 条；约 30 s/跑）
+mvn -o -q package -DskipTests -pl z-bot-core
+for i in 1 2 3 4 5; do python3 -u _doc/acceptance/p12/p12_e2e.py \
+  --json _doc/acceptance/p12/out/p12c_e2e_run$i.json \
+  > _doc/acceptance/p12/logs/p12c_e2e_run$i.log 2>&1; echo "run$i rc=$?"; done
+grep -h "^段=all" _doc/acceptance/p12/logs/p12c_e2e_run*.log
+
+# 杠③ K2 的双向实测（仓外探针，跑的是仓里那份 section_creds()，只把扫描根指到 ~/.cache）
+python3 -u ~/.cache/zbot-p17/probe_k2/two_way.py           # 本棒复算 rc=0
+
+# 杠④（三个数，不读不打印 key 值）
+ls -A ~/.zbot | wc -l; md5 -q ~/.zbot/config.properties | cut -c1-8; md5 -q ~/.zbot/state.db | cut -c1-8
+
+# §5 D1/D2 的字节层复算
+grep -n "recordSessionUsage\|firePostChat" z-bot-core/src/main/java/com/zifang/z/bot/agent/BotAgent.java
+
+# §9 P24 交接件（C1/C5 的 sha256 读数）
+grep -h "^PASS  C1 \|^PASS  C5 " _doc/acceptance/p12/logs/p12c_e2e_run1.log
+```
 
 ---
 
