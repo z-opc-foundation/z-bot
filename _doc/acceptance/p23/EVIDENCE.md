@@ -760,3 +760,63 @@ STATUS: 已填
 ### 未跑清单（写这份文档时）
 
 - 杠② 的 LEDGER 五档计数与杠③ 的三条读数在下面 §6/§7；若某节写着 `STATUS: 未跑`，就是真没跑。
+
+---
+
+## §11 D-1 修复（p23c）
+
+STATUS: 开工落纸（2026-09-26T09:09:04Z 实测 `date -u`）
+
+### §11.0 工单 §0 证据表逐条复算（以盘为准）
+
+复算命令与实测输出：
+
+```
+$ sed -n '138,150p' z-bot-core/src/main/java/com/zifang/z/bot/skill/SkillCommands.java
+            String key = "/" + slug;
+            if (reserved != null && reserved.test(slug)) {
+$ sed -n '930,946p' z-bot-core/src/main/java/com/zifang/z/bot/agent/BotAgent.java
+            core.addAll(live.coreCommandNames());          # :936
+        return SkillCommands.plan(local, core::contains);  # :943
+$ sed -n '466,478p' z-bot-core/src/main/java/com/zifang/z/bot/slash/SlashRegistry.java
+    public List<String> coreCommandNames() {               # :468
+        for (String key : commands.keySet()) { out.add(key); }
+$ grep -n 'return "/' z-bot-core/src/main/java/com/zifang/z/bot/slash/SlashRegistry.java | wc -l
+      20        # 核心命令 name() 全是带斜杠键：/new /clear /sessions /switch /tools /skills
+                # /sync /model /usage /stop /steer /queue /compress /memory /cron /checkpoints
+                # /rollback /background /agents /skill
+$ grep -rn 'skillCommandPlan' --include='*.java' .
+    BotAgent.java:899 / :919（生产：/skills 列表与账本） / :931（定义）
+    —— 测试侧 0 处调用 ⇒ 接线层确实零覆盖，工单这条成立
+$ ls -A ~/.zbot | wc -l ; md5 -q ~/.zbot/config.properties | cut -c1-8 ; md5 -q ~/.zbot/state.db | cut -c1-8
+    8 / 2dadaed0 / 690ddbc0        （t0 开工时点，三值与工单一致；~/.zbot/skills 仍不存在）
+$ grep -rho '@Test' --include='*.java' z-bot-core/src/test/java | wc -l
+    769                            （与工单基线一致）
+```
+
+**三条与工单不符，以盘为准**（都不影响"D-1 是真缺陷"这个结论，但影响修法与卫兵写法）：
+
+1. 工单 §0 结论行写"生产路径上 `reserved.test("help")` 恒 false ⇒ 守卫**永远不会开火**；技能会去抢 `/help`"。
+   实测：`SkillCommands.plan` 有**三个**调用点，不是两个 ——
+   - `SlashRegistry.registerSkillCommands:496-497` 传的是 `slug -> find("/" + slug) != null`，
+     **调用方自己归一了** ⇒ 注册侧守卫**正常开火**（`SlashRegistrySkillCommandTest:105 coreNameCollisionIsSkippedAndAccounted`
+     今天就是绿的，它走的正是这条真链）。
+   - `BotAgent.skillCommandPlan:943` 传 `core::contains`（core 是带斜杠键）⇒ **这条**恒 false。
+   - 所以 D-1 的准确形状是"**同一条守卫的两个生产调用点对 `reserved` 的入参口径不一致**"，
+     坏的是账本/广告面（A5），不是命令表面（A2 一直是绿的）。§7.1(b) p23b 已经写对了一半（"表是对的、账本是错的"）。
+2. 工单 §0 说台账里是 `/help` `/skills`：`/help` **不在** `coreCommandNames()` 的 20 条里 ——
+   它是 `channel/TerminalChannel.java:235` 的本地 doc，从没进过 `SlashRegistry`。
+   ⇒ §1.2 建议的"断言一个叫 `help` 的技能被跳过"在现口径下**做不到**（`help` 本来就不是核心命令，
+   跳过它才是错），卫兵改用 `skills`（A5 夹具装的也正是 `skills`）。
+   `help` 能被技能顶掉本地 `/help` 这件事是**另一条独立缺陷**，属 §1.5 不扩范围，记 §11.x 未做清单，不改码。
+3. 工单 §0"现有两处单测各自塞裸名 `Set` 当 `reserved`"：只有 `SkillCommandsTest:32` 一处是裸名 `Set`；
+   另一处 `SlashRegistrySkillCommandTest` 走真注册链（不是裸名 Set）。"结构上抓不到"这句只对
+   **接线层 `BotAgent.skillCommandPlan` 零覆盖**成立 —— 这正是本票核心卫兵要补的位置。
+
+### §11.1 修法口径（本棒选定：口径 A，单点在 `SkillCommands`）
+
+- `reserved` 的语义钉成 **命令全名（含前导斜杠，如 `/skills`）**，写进 `SkillCommands.plan` 的 `@param` 一行契约；
+  `:146` 改用同一轮里 `:145` 已经算好的 `key` 去测 ⇒ 归一**只此一处**。
+- `SlashRegistry:497` 的调用方归一 `find("/" + slug)` 同步拆成 `find(name)`（否则就是"两边都容错"）。
+- `BotAgent.skillCommandPlan` **一个字不改**：口径 A 下 `core::contains`（带斜杠）当场变正确 ⇒
+  4 支共写的雷区本棒没进去（回报里给"动过 0 行"的实测）。
