@@ -311,6 +311,63 @@ public class DelegationLedgerTest {
         assertEquals(DelegateState.DONE, ledger.load("dlg-illegal").state);
     }
 
+    /**
+     * P27 靶子二/三的正面对手：M19 的<b>确定性</b>判据（{@code reconcileLifeFromDisk} 里那个
+     * {@code if (disk.state.terminal())} 被摘掉时必须红）。
+     *
+     * <p>摘掉那一行不等于"什么都不做"：它会先把<b>盘上事实采纳进调用方握着的副本</b>，再由迁移表
+     * 因为"终态没有出口"而抛 —— 盘上结果一模一样，所以只比对 state.json 的测试永远抓不到它
+     * （P27 台账里那支 SURVIVED 就是这么来的）。两处差异可观测：① 判词点名了盘上状态与副本状态；
+     * ② <b>被拒的那一步不许顺手改写调用方那份副本</b>。② 是行为差异、与措辞无关，所以两支都钉。</p>
+     */
+    @Test
+    public void staleCopyCannotOverwriteATerminalSceneOnDisk() {
+        DelegationLedger.Entry created = ledger.create("dlg-stale", "task", 0, "lbl", null);
+        ledger.advance(created, DelegateEvent.TASK_SPAWNED, "起跑");
+        ledger.advance(created, DelegateEvent.TASK_STOPPED, "叫停");
+        assertEquals(DelegateState.STOPPED, ledger.load("dlg-stale").state);
+
+        DelegationLedger.Entry stale = ledger.load("dlg-stale");
+        stale.state = DelegateState.QUEUED;      // 模拟：子代理手里那份从没推进过
+        long savedBefore = ledger.saveCount();
+        int eventsBefore = ledger.tail("dlg-stale", 200).size();
+        try {
+            ledger.advance(stale, DelegateEvent.TASK_COMPLETED, "陈旧的收工判决");
+            throw new AssertionError("盘上已是终态而副本更旧 ⇒ 必须大声抛");
+        } catch (DelegateTransitions.IllegalTransitionException expected) {
+            String msg = String.valueOf(expected.getMessage());
+            assertTrue("判词要点名盘上是什么:\n" + msg, msg.contains("盘上已是 STOPPED"));
+            assertTrue("判词要点名手里副本是什么:\n" + msg, msg.contains("握着的副本是 QUEUED"));
+            assertEquals("from 必须是盘上那份而不是副本", DelegateState.STOPPED, expected.fromState());
+        }
+        assertEquals("抛之前不许写盘", savedBefore, ledger.saveCount());
+        assertEquals(DelegateState.STOPPED, ledger.load("dlg-stale").state);
+        assertEquals("被拒的那一步不许再落一条终态事件",
+                eventsBefore, ledger.tail("dlg-stale", 200).size());
+        assertEquals("被拒之后调用方手里那份必须保持原样（reconcile 只读不写）",
+                DelegateState.QUEUED, stale.state);
+    }
+
+    /**
+     * 同一段 reconcile 的<b>另一半</b>：盘上比副本更靠前、但还不是终态 ⇒ 采纳盘上事实再走这一步，
+     * 而不是把副本的旧状态写回去。这条<b>不是</b> M19 的判据（09-27 实测：注入后仍绿 —— 被摘的
+     * {@code if} 只在盘上已终态时进得去，这里盘上是 RUNNING），它钉的是此前一条测试都没钉住的
+     * "采纳盘上更靠前状态"那半边语义。
+     */
+    @Test
+    public void aBehindCopyAdoptsTheDiskStateBeforeAdvancing() {
+        DelegationLedger.Entry created = ledger.create("dlg-behind", "task", 0, "lbl", null);
+        ledger.advance(created, DelegateEvent.TASK_SPAWNED, "起跑");   // 盘上：RUNNING
+        DelegationLedger.Entry behind = ledger.load("dlg-behind");
+        behind.state = DelegateState.QUEUED;                          // 手里：停在起跑前
+        ledger.advance(behind, DelegateEvent.TASK_COMPLETED, "收工");
+        assertEquals("采纳盘上的 RUNNING 再走 COMPLETED ⇒ DONE", DelegateState.DONE, behind.state);
+        assertEquals(DelegateState.DONE, ledger.load("dlg-behind").state);
+        String events = String.join("\n", ledger.tail("dlg-behind", 50));
+        assertTrue(events, events.contains("delegate.task_spawned"));
+        assertTrue(events, events.contains("delegate.task_completed"));
+    }
+
     @Test
     public void listIsOrderedByDispatchTime() {
         for (String id : new String[]{"dlg-b", "dlg-a", "dlg-c"}) {

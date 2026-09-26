@@ -333,7 +333,7 @@ public final class DelegateManager {
             // P27：闸门前身只数 RUNNING —— 连发的时候条目还都停在 QUEUED，
             // width=3 的口子实际能塞进任意多条（§9 产品缺陷 P27-D2，附复算用例）。
             long flying = async.values().stream()
-                    .filter(d -> !"DONE".equals(d.status) && !"FAILED".equals(d.status))
+                    .filter(d -> isFlying(d.status))
                     .count();
             if (flying >= width) {
                 return "异步委托并发已满（" + flying + "/" + width + "），稍后再试或先 /agents 查看";
@@ -392,6 +392,19 @@ public final class DelegateManager {
             }
         });
         return "已提交异步委托 " + id + "（/agents 查看进度，/background result " + id + " 取回结果）";
+    }
+
+    /**
+     * 一条异步委托是否还占着并发槽位。<b>QUEUED 也算</b>：闸门如果只数 {@code RUNNING}，
+     * 连发的时候条目还都停在 QUEUED，width=3 的口子实际能塞进任意多条（§9 产品缺陷 P27-D2）。
+     *
+     * <p>今天 {@link AsyncDelegation#status} 只会出现 QUEUED/RUNNING/DONE/FAILED 四种值
+     * （写点：初值、线程池里起跑那一行、收工与失败两处判决；实测 grep 无第五种）。
+     * 抽成单独一处是为了让
+     * "摘掉 QUEUED 也算在飞"这一支能被<b>确定性</b>抓到 —— 连发那条用例靠时序，量不到它。</p>
+     */
+    static boolean isFlying(String status) {
+        return !"DONE".equals(status) && !"FAILED".equals(status);
     }
 
     /** {@code /agents} — 台账快照。 */

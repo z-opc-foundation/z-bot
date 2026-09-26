@@ -264,6 +264,19 @@ public class DelegateManagerLedgerTest {
         }
     }
 
+    /**
+     * 并发闸那条连发用例靠时序：条目多半已经起跑，"只数 RUNNING"的写法在它面前照样能全绿
+     * （P27 台账里 M17 就是这支 SURVIVED）。谓词抽出来之后，这一条不需要线程、不需要闸门，
+     * 四种取值各问一次 ⇒ 摘掉 QUEUED 那半边必红。
+     */
+    @Test
+    public void flyingPredicateCountsQueuedRowsButNotTerminals() {
+        assertTrue(DelegateManager.isFlying("QUEUED"));
+        assertTrue(DelegateManager.isFlying("RUNNING"));
+        assertFalse("DONE 早该让出槽位", DelegateManager.isFlying("DONE"));
+        assertFalse("FAILED 早该让出槽位", DelegateManager.isFlying("FAILED"));
+    }
+
     @Test
     public void depthExceededWritesNoSceneAtAll() throws Exception {
         Scripted llm = new Scripted(textReply("unused"));

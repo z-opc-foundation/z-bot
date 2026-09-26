@@ -192,14 +192,17 @@ MUTANTS = [
          why="id 不再校验 ⇒ `../` 能把台账写出根目录（现场台账变任意目录删除器）"),
     dict(id="M17-gate-counts-running-only",
          file=D("DelegateManager.java"),
-         old="""            long flying = async.values().stream()
-                    .filter(d -> !"DONE".equals(d.status) && !"FAILED".equals(d.status))
-                    .count();""",
-         new="""            long flying = async.values().stream()
-                    .filter(d -> "RUNNING".equals(d.status))
-                    .count();""",
-         expect=["concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth"],
-         why="并发闸退回只数 RUNNING（修之前的写法）⇒ 连发可越过 width"),
+         old='        return !"DONE".equals(status) && !"FAILED".equals(status);',
+         new='        return "RUNNING".equals(status);',
+         expect=["flyingPredicateCountsQueuedRowsButNotTerminals"],
+         why="并发闸退回只数 RUNNING（修之前的写法）⇒ 连发可越过 width。"
+             "09-27 改锚：谓词已从闸门里抽成 DelegateManager.isFlying(String)，由那条无时序的"
+             "谓词用例确定性抓（实测：注入后红的恰是它，见 EVIDENCE §M17 有牙探针）。"
+             "原来那支连发用例 `concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth` "
+             "**从预期红集里摘出**，理由是机制而不是读数：它用 `Scripted().blocking(gate)` 卡的是 "
+             "`chat()`，而池线程在进 `chat()` 之前就把 `d.status` 置成 RUNNING —— 三次提交到第 4 次时"
+             "三条早已 RUNNING，'只数 RUNNING' 照样报 3/3 ⇒ 这一支结构上看不到 QUEUED 那半边。"
+             "它仍是'槽位数对不对'的产品级守卫（保留在套件里），只是不承担 M17 的杀变异职责"),
     dict(id="M18-poll-burns-delivery",
          file=D("DelegateManager.java"),
          old='if (!"DONE".equals(d.status) && !"FAILED".equals(d.status)) {',
@@ -210,8 +213,19 @@ MUTANTS = [
          file=D("DelegationLedger.java"),
          old="if (disk.state.terminal()) {",
          new="if (false && disk.state.terminal()) {",
-         expect=["stopOnFlyingChildWritesStoppedSceneAndFirstTerminalVerdictWins"],
-         why="关掉 reconcile ⇒ 后写的陈旧副本覆盖先落的终态：按了停止、盘上却是 DONE"),
+         expect=["staleCopyCannotOverwriteATerminalSceneOnDisk"],
+         why="关掉 reconcile ⇒ 后写的陈旧副本覆盖先落的终态：按了停止、盘上却是 DONE。"
+             "09-27 改判（三支都在 EVIDENCE §11 的有牙探针里**实测**过，不是推的）：摘掉这一行在**盘上**是等价的"
+             "——落空后仍会走'采纳盘上事实'那半边，迁移表同样因为'终态无出口'而抛，state.json 一个字都不差；"
+             "p27b 那轮它 SURVIVED 就是因为只比对了盘上现场。"
+             "两处真正不等价的东西被 `staleCopyCannotOverwriteATerminalSceneOnDisk` 钉住了："
+             "① 判词点名'盘上已是 X／握着的副本是 Y'；② 被拒的那一步不许顺手改写调用方握着的那份副本"
+             "（摘掉后 `e.state` 会被 adoption 改掉）。"
+             "另外两支**从预期红集里摘出**、各自的理由是机制＋一轮实测："
+             "`stopOnFlyingChildWritesStoppedSceneAndFirstTerminalVerdictWins` 断言的是盘上现场（两种写法逐字节相同，"
+             "实测 rc=1 时它仍绿），但它仍是 M20（/stop 不再落 STOPPED）的预期红 ⇒ 不是死用例；"
+             "`aBehindCopyAdoptsTheDiskStateBeforeAdvancing` 造的是**非终态**的盘上领先（RUNNING），"
+             "被摘的那个 `if` 结构上进不去 ⇒ 实测同样不红，它钉的是 reconcile 的另一半边"),
     dict(id="M20-stop-leaves-no-scene",
          file=D("DelegateManager.java"),
          old="if (liveId != null) {",
@@ -227,6 +241,41 @@ MUTANTS = [
 ]
 
 # ---------------------------------------------------------------------------
+
+
+def self_check_table():
+    """MUTANTS 表自证（改表之后必须先过这一关才许开跑）。
+
+    09-27 我手改 M19 时真造出过"同一个 dict 里两份 why"，所以给这张表配了守卫；
+    四支注入对照量下来，各档的**归因**是（别把解释器的功劳记成尺的）：
+      `dict(why=…, why=…)`      ⇒ `SyntaxError: keyword argument repeated` —— 解释器拦下，走不到这里；
+      键名拼错（`expct=`）      ⇒ 合法语法、**静默**：该支从此没有预期红集 ⇒ 本函数 rc=9；
+      `expect=[]`               ⇒ 合法语法、**静默**：只能判 SURVIVED/KILLED，对账成空话 ⇒ 本函数 rc=9；
+      两支 id 撞车              ⇒ 合法语法、**静默**：台账行互相顶 ⇒ 本函数 rc=9。
+    重复键的检查仍然留着（`dict(...)` 调不到，但 `{...}` 字面量会静默后者覆盖前者）。
+    """
+    import ast
+    import collections
+    src = open(os.path.abspath(__file__), encoding="utf-8").read()
+    dups = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Dict):
+            keys = [k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+            for k, c in collections.Counter(keys).items():
+                if c > 1:
+                    dups.append("line=%d key=%s x%d" % (node.lineno, k, c))
+    if dups:
+        die("MUTANTS 表里有重复键（Python 会静默用后者覆盖前者）:\n     " + "\n     ".join(dups), 9)
+    ids = [m["id"] for m in MUTANTS]
+    if len(set(ids)) != len(ids):
+        die("MUTANTS id 有重复: " + str([i for i, c in collections.Counter(ids).items() if c > 1]), 9)
+    for m in MUTANTS:
+        if set(m) != {"id", "file", "old", "new", "expect", "why"}:
+            die("变异 %s 的字段不对（少键/拼错键会让它永远没有预期红集）: %s" % (m["id"], sorted(m)), 9)
+        if not m["expect"]:
+            die("变异 %s 的预期红集为空 ⇒ 它只能判 SURVIVED/KILLED，不许冒充对账" % m["id"], 9)
+    print("TABLE_SELFCHECK|mutants=%d ids_unique=yes fields_exact=yes dup_keys=0 expectations_nonempty=yes"
+          % len(MUTANTS))
 
 
 def sh(args, cwd=REPO, timeout=None):
@@ -401,6 +450,7 @@ def restore(path, backup, want_md5):
 
 
 def main():
+    self_check_table()
     assert_target_tree()
     os.makedirs(BAK, exist_ok=True)
     os.makedirs(OUT, exist_ok=True)

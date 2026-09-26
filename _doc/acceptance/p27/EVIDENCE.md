@@ -716,5 +716,125 @@ STATUS: **p27b 收口完成** —— 工单 §3 的 1—6 全部落到实测量�
 
 **交接告警（实测，本棒没碰它）**：收口时共享变异锁 `$(git rev-parse --path-format=absolute --git-common-dir)/zbot-mutlock` = `/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock` 仍在原地，`stat` 实测 **size=0、mtime=Sep 26 18:26:02**。这一笔**不是本棒留的**：本棒两批杠② 各自打印 `== 锁已释放 ==`，且 `p27_mutation.py` 取锁必写 `<pid> p27a-mutation <时间戳>`（非 0 字节）。⇒ 按红线"不碰别人的锁、不 kill 持有者"，我**没有删它**。后果要提前知道：0 字节里没有 owner pid，下一棒的接管逻辑走到 `hp = int(stale.split()[0])` 会 `ValueError → hp=None`，于是把它判成"死锁"直接 `unlink` 并接管 —— 若真实持有者还活着，这道闸**形同虚设**（登记为 **P27b-G7**，见 §9.1；本棒不改锁逻辑，因为改法要先定"0 字节算谁的"）。
 
+---
+
+## §11 主编在合并树（main）复测：p27b 欠下的三处 `SURVIVED` 的去向（09-27 00:2x，实测）
+
+**这一节只回答 §收口"下一步 2"那条欠账**：`M13`/`M17`/`M19` 三支在 `w11-p27` 树上全绿的那三个位置，
+到了 main 上是**补上了捕手**还是**确认这一档证据取不到**。三支走了三条不同的路，每条都带注入读数，
+没有一条是"看代码觉得应该"。
+
+### 11.1 量具与身份（探针不重抄表）
+
+探针 `~/.cache/zbot-p27-tests/teeth_probe.py`：锚点、文件路径、flock、surefire 解析器**全部 import
+真尺** `_doc/acceptance/p27/p27_mutation.py` 现取（在探针里另抄一份表 = 让探针和被量的那把尺各自漂移）。
+逐支协议与 §6 同：锚点命中数恰好 1 ⇒ 先跑"未注入必须绿"当**非空跑对照** ⇒ 注入 ⇒ 跑同一套具名判据 ⇒
+只从注入前读到的那份字节写回 + 复验 md5（绝不用 `git checkout` 还原，那会连带抹掉被测量的未提交改动）⇒
+两支都还原后再合跑一遍，证明回到绿。
+
+一处**探针自己的失真**要先记：`ran=` 原来只从 `^[INFO] Tests run:` 取，于是"跑齐了且全红"被读成 `ran=0`。
+第一遍实测就撞上了（`MUTATED|M17…|rc=1|ran=0|red=['flyingPredicate…']` —— 看着像"一条没跑"，
+实际是 1 条跑了且红了）。改成 `[INFO]`/`[ERROR]` 两种汇总行都取之后，同一个判据报 `ran=1`。
+这不是产品读数，但它会让人误判"非空跑对照没过"，所以和结论一起留档。
+
+### 11.2 `M17` —— 谓词抽出来之后有牙（00:20:53 那一遍，逐字节原文）
+
+```
+TARGET|repo=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot head=d8a3e43 branch=main dirty_lines=5
+LOCK|acquired=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot/.git/zbot-mutlock pid=22579 proto=flock
+ANCHOR|M17-gate-counts-running-only|file=DelegateManager.java|hits=1
+BASELINE|M17-gate-counts-running-only|sel=DelegateManagerLedgerTest#flyingPredicateCountsQueuedRowsButNotTerminals|rc=0|ran=1|red=[]
+MUTATED|M17-gate-counts-running-only|rc=1|ran=1|red=['flyingPredicateCountsQueuedRowsButNotTerminals']
+VERDICT|M17-gate-counts-running-only|RED-OK|killed=1/1|missing=[]|unexpected_extra=[]
+RESTORE|M17-gate-counts-running-only|md5_same=YES
+ANCHOR|M19-stale-copy-overwrites-scene|file=DelegationLedger.java|hits=1
+BASELINE|M19-stale-copy-overwrites-scene|sel=DelegationLedgerTest#staleCopyCannotOverwriteATerminalSceneOnDisk|rc=0|ran=1|red=[]
+MUTATED|M19-stale-copy-overwrites-scene|rc=1|ran=1|red=['staleCopyCannotOverwriteATerminalSceneOnDisk']
+VERDICT|M19-stale-copy-overwrites-scene|RED-OK|killed=1/1|missing=[]|unexpected_extra=[]
+RESTORE|M19-stale-copy-overwrites-scene|md5_same=YES
+AFTER_RESTORE|sel=DelegateManagerLedgerTest#flyingPredicateCountsQueuedRowsButNotTerminals,DelegationLedgerTest#staleCopyCannotOverwriteATerminalSceneOnDisk|rc=0|ran=2|red=[]
+TEETH_DONE|rc=0 2 支都有牙且现场已还原
+LOCK|released
+```
+
+**做法**：把并发闸里那句判定抽成 `DelegateManager.isFlying(String)`（包私有 `static`，注释写明"QUEUED 必须在飞"
+的理由），新用例 `flyingPredicateCountsQueuedRowsButNotTerminals` 四种取值各问一次 —— 无时序、无线程，
+摘掉 QUEUED 那半边必红。`M17` 的锚点也随之改打到谓词本体（旧锚点在闸门里，抽完就不存在了）。
+
+**为什么把连发用例从预期红集里摘出去**：`concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth` 用
+`Scripted().blocking(gate)` 卡的是 `chat()`，而池线程在进 `chat()` **之前**就把 `d.status` 置成 `RUNNING` ⇒
+到第 4 次提交时三条早已 RUNNING，"只数 RUNNING"照样报 `3/3` —— 它结构上看不到 QUEUED 那半边。
+这是**机制 + 一轮实测**（00:19:09 那一遍：注入后红的只有谓词那支，连发那支仍绿），不是"读数不好看就删"。
+它留在套件里继续钉"槽位数对不对"这件产品级的事。
+
+### 11.3 `M19` —— 盘上等价的两个不可等价点
+
+`reconcileLifeFromDisk` 摘掉 `if (disk.state.terminal())` 之后**不是**"什么都不做"：它会落到
+"采纳盘上事实"那半边，把盘上的 `STOPPED` 写进调用方握着的副本，再由迁移表因为"终态无出口"而抛 ——
+`state.json` 逐字节一样。**这就是 p27b 那轮它 SURVIVED 的原因**（§6.4 当时记的是"要并发驱动才咬得到"，
+方向对了一半：真正的差异不在盘上，在下面两处）。新用例
+`staleCopyCannotOverwriteATerminalSceneOnDisk` 钉的就是那两处：
+① 判词点名"盘上已是 STOPPED／握着的副本是 QUEUED"与 `fromState()==STOPPED`；
+② 被拒的那一步**不许顺手改写调用方那份副本**（`stale.state` 必须仍是 `QUEUED`），
+且 `saveCount()` 与 `tail()` 行数一字不动。
+
+同一轮里我还造了第二支 `aBehindCopyAdoptsTheDiskStateBeforeAdvancing`（盘上 `RUNNING`、副本停在 `QUEUED`）。
+它**不是** M19 的判据 —— 这一条我先在注释里写了"抓不到"，但那是**推的**；00:21:45 我把它塞进预期红集真跑了
+一遍，量下来注入后 `red=['staleCopy…']`、`missing=['aBehindCopy…']` ⇒ **实测仍绿**，与"被摘的那个 `if`
+只在盘上已终态时才进得去"这个机制一致。它钉的是 reconcile 的另一半边语义（采纳盘上更靠前的**非终态**状态），
+此前一条测试都没钉住，所以留着；`M19` 的预期红集里只有那**一支**被证明有牙的。
+
+### 11.4 `M13` —— 判定为**等价变异**，不补测试（并写清为什么不补）
+
+不靠"觉得"。判据形状：`rename` 会把**源文件的 inode 搬到目标名上**，`copy+delete` 会生成新 inode ⇒
+"摘掉 `ATOMIC_MOVE` 之后 JVM 在这台机器上走哪条路"是可直接量的。独立探针 `~/.cache/zbot-p27-probe/MoveProbe.java`
+（与 mvn 无关，另起一个 JVM），摘与不摘各跑，`probe.log` 原文（09-26 23:47）节选：
+
+```
+PROBE|volume name=/dev/disk3s5 type=apfs tmp/target 同目录=true
+PROBE|with-ATOMIC      atomic=true  后=139185307 换成了源inode=true(⇒rename) 沿用旧inode=false(⇒copy+delete) 残留tmp=false 耗时ns=207416
+PROBE|no-ATOMIC        atomic=false 后=139185310 换成了源inode=true(⇒rename) 沿用旧inode=false(⇒copy+delete) 残留tmp=false 耗时ns=112083
+（with/no 交替 4 轮，共 8 条读数：8/8 全部"换成了源inode=true"、0 条 copy+delete）
+PROBE_DONE
+```
+
+⇒ 两条路都是 rename，落盘结果与"半截文件不会取代完整现场"这条保证**同效**；而 `tmp` 与 `target`
+写在同一个目录里（`DelegationLedger.save`），会退化成 copy+delete 的那条跨卷路径**结构上到不了**。
+所以 `M13` 的 SURVIVED 不是"并发测试仍缺"，是**这一档证据在本平台上不存在**。
+我拒绝为它写"源码里必须出现 `ATOMIC_MOVE` 字样"那种守卫 —— 那种绿在任何真实行为变化面前都不会红。
+
+**顺带登记一处真实的覆盖缺口（今天不补，下一棒的活）**：`save()` 里
+`catch (AtomicMoveNotSupportedException)` 那条**跨卷回落**路径，21 支变异的锚点没有一支打到它
+（机械核对：`FALLBACK_TOUCHED_BY_MUTANTS=NONE`，碰 `Files.move` 的只有 `M13` 一支）。
+也就是说"卷不肯原子改名时仍然落盘成功"这件事目前**既没有变异、也没有用例**。
+补法要先想清楚：得让 tmp 与 target 真跨设备，否则又是一支假绿。
+
+### 11.5 这张表的自证（新增守卫，四支对照实测）
+
+改这张表时我自己造出过"同一个 `dict(...)` 里两份 `why=`"。四支注入对照量下来，归因分开写清
+（**别把解释器的功劳记成尺的**）：
+
+| 注入 | 结果（实测） | 谁拦下的 |
+|---|---|---|
+| `dict(why=…, why=…)` | `SyntaxError: keyword argument repeated: why`，`rc=1`，走不到守卫 | 解释器 |
+| 键名拼错 `expct=` | 合法语法、**静默**（该支从此没有预期红集）⇒ `rc=9` | `self_check_table()` |
+| `expect=[]` | 合法语法、**静默**（只能判 SURVIVED/KILLED，对账成空话）⇒ `rc=9` | `self_check_table()` |
+| 两支 id 撞车 | 合法语法、**静默**（台账行互相顶）⇒ `rc=9` | `self_check_table()` |
+
+`p27_mutation.py` 现在 `main()` 第一行就跑 `self_check_table()`（真表读数：
+`TABLE_SELFCHECK|mutants=21 ids_unique=yes fields_exact=yes dup_keys=0 expectations_nonempty=yes`），
+单点探针也调同一个函数。另做了一次全表预期红集对账：**25 个去重用例名全部在 `src/test` 里声明存在**
+（`DISTINCT_EXPECT=25 declared_methods=1292 missing=NONE`）—— 名字漂了会让该支永远"预期红却没红"。
+
+### 11.6 台账口径的变化（写清楚，免得下一轮拿旧数对不上）
+
+- `M17` 预期红集 2→**1**、`M19` 预期红集 2→**1**。两支被摘出的用例都还在套件里跑，且各自另有归属：
+  连发那支钉槽位数（产品级），`stopOnFlyingChild…` 是 **M20** 的预期红，`aBehindCopy…` 钉 reconcile 非终态那半边。
+  ⇒ 下一轮杠② 的 `SURVIVED` 数应当只剩 **1**（`M13`，且它现在是"已判定等价"而不是"缺测试"）。
+- 新增 3 支用例：`committed @Test` **1154** → 工作树 **1157**（前者 `git grep -c '@Test' HEAD`，
+  后者 `grep -rc --include='*.java'`，两把尺分别量的，不是同一个口径）。
+- 杠④ 在这一节所有测量之后复测仍是 `entries=8 cfg=2dadaed0 db=690ddbc0 keylen=125`
+  （真 key 只量长度，值未被读取）；锁 `pid=22579` 已 `LOCK|released`，`src/main` 两支文件 md5 逐支 `md5_same=YES`。
+
 
 
