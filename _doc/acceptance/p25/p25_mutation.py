@@ -25,7 +25,10 @@ import shutil
 import subprocess
 import sys
 
-REPO = "/private/tmp/zbot-wt-p25"
+# 量具钉在目标树。原先硬 `/private/tmp/zbot-wt-p25`：那棵树还留在盘上、冻结在 443f5f6，
+# 今天照原样跑会静默改那棵树的 src/main 并把 LEDGER 写回去（tracked 那份就是它的自证）。
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    os.pardir, os.pardir, os.pardir))
 LEAD = os.path.expanduser("~/.cache/zbot-p25-lead")
 
 
@@ -290,8 +293,40 @@ def run_e2e(catcher_token, tag):
                 log=os.path.join(LOGS, tag + ".e2e.log"))
 
 
+def assert_target_tree():
+    """开工前证明 REPO 就是**这支尺自己所在的那棵目标仓根**（病根见 REPO 上方注释）。
+
+    两重缺一不可：写手树 `/private/tmp/zbot-wt-p25` 自己也是合法 git 工作树，
+    只问"toplevel 等不等于 REPO" 拦不住它（这条是被 p27 那支的注入对照实测出来的）。
+    """
+    own = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       os.pardir, os.pardir, os.pardir))
+    if REPO != own:
+        print("FATAL|REPO 不在这支尺自己所在的仓里 ⇒ 量的是别的树\n"
+              "      REPO=%s\n      tool_own_repo=%s" % (REPO, own))
+        sys.exit(6)
+    out = subprocess.Popen(["git", "rev-parse", "--show-toplevel"], cwd=REPO,
+                           stdout=subprocess.PIPE).communicate()[0].decode().strip()
+    if os.path.abspath(out) != REPO:
+        print("FATAL|REPO 不是 git 仓库根（半棵树/被删的树）⇒ 本轮不出读数\n"
+              "      REPO=%s\n      git_toplevel=%s" % (REPO, out or "<空>"))
+        sys.exit(6)
+    missing = [rel for rel in set(SRC.values()) if not os.path.isfile(os.path.join(REPO, rel))]
+    if missing:
+        print("FATAL|目标树里没有变异锚点所在文件 %d 个（第一个=%s）⇒ 尺的锚点不在被量的那棵树上"
+              % (len(missing), missing[0]))
+        sys.exit(6)
+    head = subprocess.Popen(["git", "rev-parse", "--short", "HEAD"], cwd=REPO,
+                            stdout=subprocess.PIPE).communicate()[0].decode().strip()
+    branch = subprocess.Popen(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=REPO,
+                              stdout=subprocess.PIPE).communicate()[0].decode().strip()
+    print("TARGET|repo=%s head=%s branch=%s anchors=%d" % (REPO, head or "<未知>",
+                                                           branch or "<未知>", len(SRC)))
+
+
 def main():
     print("RUN|%s repo=%s ledger=%s" % (RUN_ID, REPO, LEDGER), flush=True)
+    assert_target_tree()
     lock_fd = acquire_lock()
     manifest = snapshot_reference()
     if os.path.exists(LEDGER):

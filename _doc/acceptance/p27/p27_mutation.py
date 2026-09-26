@@ -20,7 +20,7 @@
 动笔前先做无界 await()/waitFor() 体检：委托这一路天生等子进程，无界等待会把全编队的锁占死。
 """
 
-import errno
+import fcntl
 import hashlib
 import os
 import re
@@ -30,7 +30,11 @@ import subprocess
 import sys
 import time
 
-REPO = "/private/tmp/zbot-wt-p27"
+HERE = os.path.dirname(os.path.abspath(__file__))
+# 量具必须钉在**目标树**上。原先这里硬 `/private/tmp/zbot-wt-p27`（写手树），而那次杠② 之后
+# main 又并了 P19 与控制台三处修复 ⇒ 今天再跑，改的是 09-26 16:57 冻结的那份分支树、
+# LEDGER 也是写回那棵树（tracked 的 LEDGER 第 2 行 `# repo=/private/tmp/…` 就是自证）。
+REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 LEAD = os.path.expanduser("~/.cache/zbot-p27-lead")
 BAK = os.path.join(LEAD, "mutbak")
 OUT = os.path.join(LEAD, "mutation")
@@ -253,64 +257,69 @@ def die(msg, code=1):
     sys.exit(code)
 
 
-def pid_alive(pid):
-    """只问"这个 pid 还在不在"，绝不发信号（0 号信号是探活不是杀）。"""
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError as e:
-        return e.errno == errno.EPERM      # 活着，只是不是我放的
-    except Exception:
-        return False
-
-
 def acquire_lock():
-    """锁文件语义：owner 进程死了留下的锁是**死锁**，接管（先备份原读数）。
+    """共享锁 = `flock(LOCK_EX|LOCK_NB)`，与 `p19_mutate.py` / `p25_mutation.py` 同一协议。
 
-    为什么要接管而不是 rc=4 走人：p14 那一棒 16:29 崩在半路，锁文件留在原地，
-    此后全编队每一棒都会 rc=4 —— 死锁过期不等于可以白跑一整轮四杠。
-    红线仍然守住：不 sleep 死等、不 kill 别人、别人的锁若**主人还活着**一律不碰。
+    为什么不再"读 owner pid、死了就接管"（P27b-G7）：接管这一步在 flock 下本来就是多余的
+    ——持有者一死内核就释放，下一棒直接取到。而**按文件内容判生死**会把活着的持有者判成死锁:
+    p19/p25 取锁后一个字都不写（锁文件 0 字节），旧码 `int("".split()[0])` 抛 ValueError
+    ⇒ `hp=None` ⇒ 落进 unlink 接管分支，于是两根杠② 在同一份 `src/main` 上交错改写、
+    各自的 `md5_restored` 都还能对上（因为它们还原的是自己那一版）。
+    所以 owner 内容只当**诊断信息**读，判据一律交给 flock；读不到内容也算"别人占着"。
+    红线守住：不 sleep 死等、不 kill 别人、不 unlink 别人的锁。
     """
     lp = lock_path()
-    for _ in range(3):
-        stale = None
+    try:
+        fd = os.open(lp, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+        die("锁文件打不开 %s: %s" % (lp, e.strerror), 5)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
         try:
-            fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except OSError as e:
-            if e.errno != errno.EEXIST:
-                raise
-            try:
-                with open(lp) as f:
-                    stale = f.read().strip()
-            except OSError:
-                stale = "<读不到>"
-            hp = None
-            try:
-                hp = int(stale.split()[0])
-            except (ValueError, IndexError):
-                hp = None
-            if hp is not None and pid_alive(hp):
-                print("rc=4 LOCK_BUSY 锁被别人占着（主人还活着）：" + stale)
-                print("P27 杠② NO-RUN（不 sleep 死等、不 kill 别人），回头整批重跑。")
-                sys.exit(4)
-            bak = os.path.join(OUT, "stale-lock-owner.txt")
-            try:
-                with open(bak, "w") as f:
-                    f.write(stale + "\n")
-            except OSError:
-                pass
-            print("== 锁是死锁（owner 已不在）：原读数 %s ⇒ 备份到 %s 后接管 ==" % (stale, bak))
-            try:
-                os.unlink(lp)
-            except OSError:
-                pass
-            time.sleep(1)
-            continue
-        os.write(fd, ("%d p27a-mutation %s\n" % (os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S"))).encode())
+            with os.fdopen(os.dup(fd), "r") as f:
+                who = f.read().strip() or "0 字节（p19/p25 型持有者不写 owner 内容）"
+        except OSError:
+            who = "<读不到>"
         os.close(fd)
-        return lp
-    die("锁始终取不到（连续 3 次）", 4)
-    return None
+        print("rc=4 LOCK_BUSY 锁被别人占着（flock 未释放 ⇒ 持有者还活着）owner=<%s> path=%s" % (who, lp))
+        print("P27 杠② NO-RUN（不 sleep 死等、不 kill 别人、不 unlink 活锁），回头整批重跑。")
+        sys.exit(4)
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, ("%d p27-mutation %s\n" % (os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S"))).encode())
+    except OSError:
+        pass                       # 内容只是诊断，写不进去不影响锁本身
+    print("LOCK|acquired=%s pid=%d proto=flock" % (lp, os.getpid()))
+    return fd
+
+
+def assert_target_tree():
+    """开工前证明 REPO 就是**这支尺自己所在的那棵目标仓根**；不满足 ⇒ FATAL，不出读数。
+
+    为什么两重：只问 `git rev-parse --show-toplevel == REPO` 拦不住写手树 ——
+    `/private/tmp/zbot-wt-p27` 自己就是一棵合法的 git 工作树，那把尺量它照样"通过"
+    （这条是被本函数自己的注入对照抓出来的，不是推出来的）。所以先钉"尺与被量的树同仓"，
+    再钉"那棵树真的是仓根"，最后把 head/branch 打进读数里供台账归因。
+    """
+    own = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+    if REPO != own:
+        die("FATAL|REPO 不在这支尺自己所在的仓里 ⇒ 量的是别的树\n"
+            "     REPO=%s\n     tool_own_repo=%s" % (REPO, own), 6)
+    rc, out = sh(["git", "rev-parse", "--show-toplevel"])
+    top = os.path.abspath(out.strip())
+    if rc != 0 or top != REPO:
+        die("FATAL|REPO 不是 git 仓库根（半棵树/被删的树）⇒ 本轮不出读数\n"
+            "     REPO=%s\n     git_toplevel=%s" % (REPO, out.strip() or "<空>"), 6)
+    for d in (MAIN_DIR, TEST_DIR):
+        if not os.path.isdir(os.path.join(REPO, d)):
+            die("FATAL|目标树里没有 %s ⇒ 这支尺的锚点不在被量的那棵树上" % d, 6)
+    rc, head = sh(["git", "rev-parse", "--short", "HEAD"])
+    rc2, branch = sh(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    rc3, dirty = sh(["git", "status", "--porcelain"])
+    print("TARGET|repo=%s head=%s branch=%s dirty_lines=%d"
+          % (REPO, head.strip() or "<未知>", branch.strip() or "<未知>",
+             len([l for l in dirty.splitlines() if l.strip()])))
 
 
 def md5(path):
@@ -392,6 +401,7 @@ def restore(path, backup, want_md5):
 
 
 def main():
+    assert_target_tree()
     os.makedirs(BAK, exist_ok=True)
     os.makedirs(OUT, exist_ok=True)
     for f in os.listdir(OUT):
@@ -400,22 +410,14 @@ def main():
         shutil.rmtree(BAK)
     os.makedirs(BAK, exist_ok=True)
 
-    try:
-        lp = acquire_lock()
-    except OSError:
-        rc, who = sh(["cat", lock_path()])
-        print("rc=4 LOCK_BUSY 锁被别人占着：" + (who or "").strip())
-        print("P27 杠② NO-RUN（不 sleep 死等、不 kill 别人），回头整批重跑。")
-        sys.exit(4)
-    print("== 锁已取: " + lp + " ==")
+    lock_fd = acquire_lock()
     try:
         code = run_all()
     finally:
-        try:
-            os.unlink(lp)
-            print("== 锁已释放 ==")
-        except OSError:
-            pass
+        # 只关 fd：内核随关即放锁。绝不 unlink —— 锁路径是全编队共用的，
+        # 删掉它只会让下一棒在一个已死的 inode 上取锁（别人还锁在旧 inode 上）。
+        os.close(lock_fd)
+        print("== 锁已释放 ==")
     sys.exit(code)
 
 
