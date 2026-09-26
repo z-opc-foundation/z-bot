@@ -192,25 +192,22 @@ public final class KeyPoolLlmProvider implements LlmProvider {
                 : LlmRouter.create(template.withApiKey(keys.get(0)));
     }
 
-    /** key 作用域判定。 */
+    /** key 作用域判定（P26 起走 {@link LlmErrorClassifier}，不再对消息里的裸数字做正则）。 */
     static boolean isKeyScoped(Throwable e) {
         if (e == null) {
             return false;
         }
-        String msg = e.getMessage() == null ? "" : e.getMessage();
-        return KEY_SCOPED.matcher(msg).find();
+        LlmErrorClassifier.FailureClass cls = LlmErrorClassifier.classify(e).getFailureClass();
+        return cls == LlmErrorClassifier.FailureClass.ROTATE_KEY
+                || cls == LlmErrorClassifier.FailureClass.RATE_LIMIT;
     }
 
-    /** 冷却时长：429 优先 Retry-After，鉴权类给固定长冷却。 */
+    /** 冷却时长：限流优先 {@code Retry-After}，其余 key 作用域失败给固定长冷却。 */
     private long cooldownMs(Throwable e) {
-        if (e != null && e.getMessage() != null
-                && Pattern.compile("(?i)\\b429\\b|rate.?limit|too many requests")
-                        .matcher(e.getMessage()).find()) {
-            long after = ResilientLlmProvider.retryAfterMs(e);
-            if (after > 0) {
-                return after;
-            }
-            return RATE_COOLDOWN_MS;
+        LlmErrorClassifier.Decision d = LlmErrorClassifier.classify(e);
+        if (d.getFailureClass() == LlmErrorClassifier.FailureClass.RATE_LIMIT) {
+            long after = d.getRetryAfterMs();
+            return after > 0 ? after : RATE_COOLDOWN_MS;
         }
         return AUTH_COOLDOWN_MS;
     }

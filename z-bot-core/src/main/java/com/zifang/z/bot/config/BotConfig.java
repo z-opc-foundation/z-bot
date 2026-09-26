@@ -32,6 +32,16 @@ public final class BotConfig {
     }
 
     /**
+     * 主源码里唯一读 {@code user.home} 的地方。需要"宿主家目录"（而非 profile 目录，
+     * 例如 docker socket 的 {@code ~/.docker/run/docker.sock}）的调用方一律走这里 ——
+     * 各模块自己抄一遍 {@code System.getProperty("user.home")}，就没法用
+     * {@code --config-dir} 把整个进程关进临时 profile。
+     */
+    public static String userHome() {
+        return System.getProperty("user.home");
+    }
+
+    /**
      * 红线 1 的单一解析点：{@code -Dzbot.home} &gt; {@code ZBOT_HOME} &gt; {@code ~/.zbot}。
      *
      * <p>{@code ZBOT_HOME} 这个名字在 {@code PairCommand} 的报错文案里已经写了很久，但此前
@@ -43,8 +53,7 @@ public final class BotConfig {
         if (home.isEmpty()) {
             home = trim(System.getenv("ZBOT_HOME"));
         }
-        return new File(home.isEmpty()
-                ? System.getProperty("user.home") + "/.zbot" : home);
+        return new File(home.isEmpty() ? userHome() + "/.zbot" : home);
     }
 
     /**
