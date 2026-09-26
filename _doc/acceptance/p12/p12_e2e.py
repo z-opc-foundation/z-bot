@@ -883,6 +883,7 @@ def main():
                     help="stop / repl / cache / home / creds（单选一段；默认全跑）")
     ap.add_argument("--json", default=None, help="把逐条读数写成 JSON")
     args = ap.parse_args()
+    only = args.only
     if not os.path.isdir(LOGS):
         os.makedirs(LOGS)
     if not os.path.isdir(REQ_DIR):
@@ -903,7 +904,6 @@ def main():
           % ((bsha or "MISSING")[:16], bhead, "无" if not bdirty else "%d 行" % len(bdirty.splitlines())),
           "build")
     srv, base_url = start_stub()
-    only = args.only
     try:
         if only in (None, "stop", "repl"):
             profile = make_profile("main", base_url)
