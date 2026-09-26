@@ -21,6 +21,8 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -32,17 +34,25 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+import javax.crypto.Cipher;
 import javax.crypto.Mac;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * 飞书消息通道：入站用 HTTPS webhook + 签名校验，
+ * 飞书消息通道：入站用 HTTPS webhook + 签名校验（+ 加密模式解密），
  * 出站走飞书 open API（{@code tenant_access_token} 换取 + {@code im/v1/messages} 发送）。
+ *
+ * <p>入站这一面（{@code POST /feishu/event}）按顺序过四道：
+ * 原始 body 字节的 SHA-256 验签（配了 {@code encrypt-key} 才关，缺头即 401）⇒
+ * {@code {"encrypt": …}} 解密成事件 JSON ⇒ verification-token 比对（v2 在 {@code header.token}，
+ * v1 在顶层）⇒ 事件投递（v1 平铺字段与 v2 的 {@code sender}/{@code message.content} 都认）。
+ * {@code url_verification} 只在过了 token 门之后回显 challenge。</p>
  *
  * <p>配置三选一（构造时传 {@code null} 则该通道不启动）：</p>
  * <ul>
  *   <li>{@code appId} + {@code appSecret} — 标准自建应用，token 自取</li>
- *   <li>{@code verificationToken} + {@code encryptKey} — webhook 签名校验</li>
+ *   <li>{@code verificationToken} + {@code encryptKey} — webhook 签名校验 + 事件解密</li>
  *   <li>{@code staticToken} — 跳过 token endpoint，直接给一个长 token（dev / sandbox）</li>
  * </ul>
  *
@@ -392,39 +402,65 @@ public final class FeishuChannel implements Channel {
                 text(ex, 405, "method not allowed");
                 return;
             }
-            String body = readBody(ex);
-            // 飞书事件订阅的签名算在**原始 body** 上 ⇒ 必须赶在解析之前验；
+            byte[] raw = readBodyBytes(ex);
+            // 飞书事件订阅的签名算在**原始 body 字节**上 ⇒ 必须赶在解密/解析之前验；
             // 配了 encrypt-key 却缺任一头也拒（fail-closed，不能让攻击者靠"不带头"绕过）。
             if (encryptKey != null && !encryptKey.isEmpty()) {
                 String ts = header(ex, HEADER_REQUEST_TIMESTAMP);
                 String nonce = header(ex, HEADER_REQUEST_NONCE);
                 String signature = header(ex, HEADER_SIGNATURE);
-                if (!verifySignature(ts, nonce, body, signature)) {
+                if (!verifySignature(ts, nonce, raw, signature)) {
                     text(ex, 401, "{\"error\":\"signature mismatch\"}");
                     return;
                 }
             }
-            Map<String, Object> parsed = parseObject(body);
-            String token = str(parsed.get("token"));
+            Map<String, Object> parsed = parseObject(new String(raw, StandardCharsets.UTF_8));
+            String cipher = str(parsed.get("encrypt"));
+            if (!cipher.isEmpty()) {
+                // 加密模式：外层 {"encrypt": …} 里那层明文才是真事件。解不开就当没收到，
+                // 绝不拿密文字段去凑 token/event（那等于把"解不开的垃圾"降级成"未授权也能过"）。
+                String plain = decryptEvent(cipher);
+                if (plain == null) {
+                    text(ex, 400, "{\"error\":\"decrypt failed\"}");
+                    return;
+                }
+                parsed = parseObject(plain);
+            }
+            // v2.0 事件的 token 在 header 里，v1 在顶层 ⇒ 只看顶层会把每一条真事件都判成 401。
+            String token = nestedStr(parsed.get("header"), "token");
+            if (token.isEmpty()) {
+                token = str(parsed.get("token"));
+            }
             if (verificationToken != null && !verificationToken.isEmpty()
                     && !verificationToken.equals(token)) {
                 text(ex, 401, "{\"error\":\"token mismatch\"}");
                 return;
             }
-            Object event = parsed.get("event");
-            if (event instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> evt = (Map<String, Object>) event;
-                String sender = str(evt.get("sender_id"));
-                Object msg = evt.get("message");
-                String text = str(evt.get("text"));
-                String chatId = str(evt.get("chat_id"));
-                String chatType = str(evt.get("chat_type"));
+            if ("url_verification".equals(str(parsed.get("type")))) {
+                // challenge 只在过了 token 门之后回显：否则未鉴权请求能拿它验证"我打到了你的回调地址"。
+                Map<String, Object> echo = new HashMap<String, Object>();
+                echo.put("challenge", str(parsed.get("challenge")));
+                byte[] bytes = JSON.writeValueAsBytes(echo);
+                ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+                ex.sendResponseHeaders(200, bytes.length);
+                ex.getResponseBody().write(bytes);
+                return;
+            }
+            Map<String, Object> evt = asMap(parsed.get("event"));
+            if (!evt.isEmpty()) {
+                // 两种形状都得认，否则"解得开却投不出"：
+                //   v2（im.message.receive_v1）sender/message 各一层对象，正文埋在 message.content 的字符串化 JSON 里；
+                //   v1 把这些字段直接平铺在 event 上。
+                String sender = firstNonEmpty(
+                        nestedStr(evt.get("sender"), "sender_id", "open_id"),
+                        nestedStr(evt.get("sender"), "sender_id", "user_id"),
+                        str(evt.get("sender_id")));
+                Map<String, Object> msg = asMap(evt.get("message"));
+                String chatId = firstNonEmpty(str(msg.get("chat_id")), str(evt.get("chat_id")));
+                String chatType = firstNonEmpty(str(msg.get("chat_type")), str(evt.get("chat_type")));
+                String text = firstNonEmpty(messageText(msg), str(evt.get("text")));
                 String conversationId = chatType.isEmpty() ? chatId : (chatType + ":" + chatId);
-                if (sender.isEmpty()) {
-                    sender = str(evt.get("user_id"));
-                }
-                if (!text.isEmpty()) {
+                if (!text.isEmpty() && !chatId.isEmpty()) {
                     bus.deliver(new ChannelMessage(name(), conversationId, sender, text));
                 }
             }
@@ -593,7 +629,8 @@ public final class FeishuChannel implements Channel {
         ex.getResponseBody().write(bytes);
     }
 
-    private static String readBody(HttpExchange ex) throws IOException {
+    /** 原始请求体字节：验签必须用这份，任何"先转字符串再转回去"的中间步都可能改动字节。 */
+    private static byte[] readBodyBytes(HttpExchange ex) throws IOException {
         try (InputStream is = ex.getRequestBody()) {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             byte[] buf = new byte[4096];
@@ -601,7 +638,7 @@ public final class FeishuChannel implements Channel {
             while ((len = is.read(buf)) != -1) {
                 baos.write(buf, 0, len);
             }
-            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            return baos.toByteArray();
         }
     }
 
@@ -636,6 +673,43 @@ public final class FeishuChannel implements Channel {
 
     private static String str(Object v) {
         return v == null ? "" : v.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object v) {
+        return v instanceof Map ? (Map<String, Object>) v : Collections.<String, Object>emptyMap();
+    }
+
+    /** 沿路径逐层取字符串（任一层不是对象或取不到 ⇒ 空串），用来读 v2 的 {@code header.token} / {@code sender.sender_id.open_id}。 */
+    private static String nestedStr(Object parent, String... path) {
+        Object cur = parent;
+        for (String key : path) {
+            cur = asMap(cur).get(key);
+        }
+        return str(cur);
+    }
+
+    private static String firstNonEmpty(String... candidates) {
+        for (String s : candidates) {
+            if (!s.isEmpty()) {
+                return s;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * v2 的 {@code message.content} 是<b>字符串化</b>的 JSON：文本消息形如 {@code {"text":"你好"}}
+     * （与出站侧 {@code body.put("content", JSON.writeValueAsString(content))} 互为逆运算）。
+     *
+     * <p>非 {@code text} 类型（富文本 / 图片 / 卡片回传）本期不投递：返回空串 ⇒ 上层按"没有正文"
+     * 处理，既不会投一条空消息，也不会因为遇到陌生形状而 500。</p>
+     */
+    private static String messageText(Map<String, Object> message) {
+        if (message.isEmpty() || !"text".equals(str(message.get("message_type")))) {
+            return "";
+        }
+        return nestedStr(parseObject(str(message.get("content"))), "text");
     }
 
     private static String header(HttpExchange ex, String name) {
@@ -673,27 +747,83 @@ public final class FeishuChannel implements Channel {
         return lastPlatformCode;
     }
 
-    // ===== 签名校验（飞书 Encrypt Key）=====
+    // ===== 入站：签名校验 + 加密模式解密（飞书 Encrypt Key）=====
 
     /**
-     * 飞书事件订阅加密校验：timestamp + nonce + encryptKey 拼接 → SHA1 → 与 signature 比对。
-     * 解密后的 event payload 还要再做 timestamp 防重放（此处只演示签名）。
+     * 飞书事件订阅验签：{@code sha256((timestamp + nonce + encryptKey) 的 UTF-8 字节 + 原始 body 字节)} 的 hex。
+     *
+     * <p>算法照官方 Python SDK 的 {@code lark_oapi/event/dispatcher_handler.py}
+     * （commit {@code 0b9e6e48b74bb4b34462fc67b7e738b27e73e697}，{@code _verify_sign} 那一支：
+     * {@code bs = (timestamp + nonce + encrypt_key).encode(UTF_8) + request.body}）与飞书"签名校验"文档。
+     * <b>不是 SHA-1</b>：P18 那版写成 SHA-1，而单测用同一个 helper 复算签名 ⇒ 本地全绿、
+     * 真飞书每一条入站都会 401（口径订正见 {@code _doc/hermes-roadmap.md} §8.14）。</p>
+     *
+     * <p>比对走 {@link MessageDigest#isEqual}（定长时间），摘要与签名都是 hex ⇒ 只归一大小写
+     * （文档明说大小写不敏感）。未配 encrypt-key 时返回 {@code true}（= 校验关闭），
+     * 门由 {@link #handleEvent} 那一层把。</p>
      */
-    public boolean verifySignature(String timestamp, String nonce, String body, String signature) {
+    public boolean verifySignature(String timestamp, String nonce, byte[] rawBody, String signature) {
         if (encryptKey == null || encryptKey.isEmpty()) {
-            return true; // 未配 encryptKey 视为关闭校验
+            return true;
+        }
+        if (timestamp == null || nonce == null || signature == null || rawBody == null) {
+            return false;
         }
         try {
-            String s = timestamp + nonce + encryptKey + body;
-            MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
-            byte[] digest = sha1.digest(s.getBytes(StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder();
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            sha256.update((timestamp + nonce + encryptKey).getBytes(StandardCharsets.UTF_8));
+            sha256.update(rawBody);
+            byte[] digest = sha256.digest();
+            StringBuilder hex = new StringBuilder(digest.length * 2);
             for (byte b : digest) {
-                hex.append(String.format("%02x", b));
+                hex.append(Character.forDigit((b >> 4) & 0xf, 16));
+                hex.append(Character.forDigit(b & 0xf, 16));
             }
-            return hex.toString().equals(signature);
+            byte[] mine = hex.toString().getBytes(StandardCharsets.US_ASCII);
+            byte[] theirs = signature.trim().toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII);
+            return MessageDigest.isEqual(mine, theirs);
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    /**
+     * 加密模式解密：请求体是 {@code {"encrypt": base64(IV | ciphertext)}}，
+     * AES key = {@code SHA-256(encryptKey)}（32 字节），IV = base64 解码后的<b>前 16 字节</b>，
+     * AES-256-CBC + PKCS#7（JDK 的 {@code PKCS5Padding} 在 16 字节块上就是 PKCS#7）。
+     *
+     * <p>形状同样照官方 SDK 的 {@code core/utils/decryptor.py}：明文<b>直接就是事件 JSON</b>，
+     * 没有长度前缀 —— 4 字节长度前缀是<b>企业微信</b>那套的形状，别混进来。</p>
+     *
+     * <p>失败返回 {@code null}，调用方必须 fail-closed 回 400。日志只写"哪一步失败"
+     * （异常类型 / 密文字节数），绝不写 encryptKey、密文或明文。</p>
+     */
+    public String decryptEvent(String encryptBase64) {
+        if (encryptKey == null || encryptKey.isEmpty()) {
+            LOG.warn("[feishu] 收到加密事件但未配置 {}", KEY_ENCRYPT_KEY);
+            return null;
+        }
+        if (encryptBase64 == null || encryptBase64.isEmpty()) {
+            return null;
+        }
+        try {
+            byte[] blob = Base64.getDecoder().decode(encryptBase64.trim());
+            if (blob.length < 32 || blob.length % 16 != 0) {
+                // 至少 1 块 IV + 1 块密文，且必须是整块；不满足就是形状不对
+                LOG.warn("[feishu] 密文长度不合法: bytes={}", blob.length);
+                return null;
+            }
+            byte[] key = MessageDigest.getInstance("SHA-256")
+                    .digest(encryptKey.getBytes(StandardCharsets.UTF_8));
+            byte[] iv = Arrays.copyOfRange(blob, 0, 16);
+            byte[] cipherText = Arrays.copyOfRange(blob, 16, blob.length);
+            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
+            return new String(cipher.doFinal(cipherText), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            // 不带 e.getMessage()：填充校验失败的消息里可能含明文片段
+            LOG.warn("[feishu] 事件解密失败: {}", e.getClass().getSimpleName());
+            return null;
         }
     }
 }

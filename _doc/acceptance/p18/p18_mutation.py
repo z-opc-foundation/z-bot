@@ -232,14 +232,20 @@ MUTANTS = [
      "任何人都能伪造成飞书事件打进总线"),
 
     ("D10 verifySignature 恒真（无错签名负例可杀）", "D-飞书协议", "fei",
-     "            return hex.toString().equals(signature);",
-     "            return hex.toString().equals(hex.toString());", 1,
+     "            return MessageDigest.isEqual(mine, theirs);",
+     "            return MessageDigest.isEqual(theirs, theirs);", 1,
      ["FeishuChannelTest#signatureHelperRejectsWrongDigest",
       "FeishuChannelTest#tamperedSignatureIsRejectedWith401AndNeverReachesBus",
-      "FeishuChannelTest#missingSignatureHeadersAreRejectedWhenEncryptKeyConfigured"],
+      "FeishuChannelTest#sha1SignedEventIsRejectedWith401AndNeverReachesBus"],
      "p18b 那两跑这一支是 GREEN-BUT-MUTATED（LEDGER D10 行原样记着）：当时 verifySignature 在 main 里"
      "零调用方、也没有一支断言『错签名必须被拒』。p18c 把它接进 handleEvent 并补了负例 ⇒ 期望集"
-     "随代码变更**重声明**（不是事后凑）：算法层 1 支 + 接线层 2 支，恒真实现三红。"),
+     "随代码变更**重声明**（不是事后凑）：算法层 1 支 + 接线层 2 支，恒真实现三红。\n"
+     "     P30 重锚：原文那行 `hex.toString().equals(signature)` 是 SHA-1 时代的代码，P30 按飞书真规格"
+     "改成 SHA-256 + `MessageDigest.isEqual` 后锚点 found=0（我拿脚本逐条数过：31 支里只坏这一支），"
+     "不重锚就是整族 FATAL。期望集同时换掉一支：`missingSignatureHeaders…` 在新实现里签名传 null，"
+     "于 null 守卫处就返回 false ⇒ 结构上看不见恒真，换成交代 SHA-1 摘要的那支负例（它带的是一条"
+     "格式合法、长度也合法的错签名）。此判据以本跑 RED-OK 为准，红了别人/一部分红都会记成 PARTIAL。"),
+
 
     ("D11 handleEvent 摘掉验签守卫（配了 key 也不验）", "D-飞书协议", "fei",
      "            if (encryptKey != null && !encryptKey.isEmpty()) {",

@@ -463,7 +463,8 @@ public final class ChannelRegistry {
                 return new DingTalkChannel(ctx.bus(), ctx.port(spec),
                         ctx.value(spec, DingTalkChannel.KEY_WEBHOOK_URL),
                         ctx.value(spec, DingTalkChannel.KEY_SECRET),
-                        ctx.host(spec));
+                        ctx.host(spec),
+                        ctx.value(spec, DingTalkChannel.KEY_INBOUND_SECRET));
             }
         });
         return this;

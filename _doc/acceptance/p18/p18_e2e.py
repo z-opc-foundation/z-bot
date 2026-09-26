@@ -498,10 +498,15 @@ _NONCE = [0]
 
 
 def feishu_inbound(port, conv, text, token=FAKE_VERIFY_TOKEN, sign=True, key=FAKE_ENCRYPT_KEY):
-    """按飞书事件订阅口径入站：signature = sha1(timestamp + nonce + encrypt_key + 原始 body)。
+    """按飞书事件订阅口径入站：signature = sha256((timestamp + nonce + encrypt_key) 的字节 + 原始 body 字节)。
 
     `key` 传别的值就是**故意签错**（A21 的猎物）；`sign=False` 是一个头都不发。
     profile 里配了 `channel.feishu.config.encrypt-key` ⇒ 不签就进不来。
+
+    P30 订正（这一行本身就是一份证物）：这里原先写的是 **sha1** —— 与本仓实现逐字同式，
+    于是实现用错摘要时，真进程 E2E 也一路绿（它替实现把错误复制了一遍）。摘要错在哪一层都
+    "看不见"的时候，唯一的解法是拿**外部工具算出的已知答案**当尺，见
+    `FeishuChannelTest#signatureHelperMatchesFeishuKnownAnswer` 与 p30_mutation.py 的 G1。
     """
     chat_type, chat_id = conv.split(":", 1)
     obj = {"token": token,
@@ -514,15 +519,22 @@ def feishu_inbound(port, conv, text, token=FAKE_VERIFY_TOKEN, sign=True, key=FAK
         ts = str(int(time.time()))
         nonce = "e2e-n%d-%d" % (os.getpid(), _NONCE[0])
         headers = {"X-Lark-Request-Timestamp": ts, "X-Lark-Request-Nonce": nonce,
-                   "X-Lark-Signature": hashlib.sha1(
-                       (ts + nonce + key + raw).encode("utf-8")).hexdigest()}
+                   "X-Lark-Signature": hashlib.sha256(
+                       (ts + nonce + key).encode("utf-8") + raw.encode("utf-8")).hexdigest()}
     return http_post("http://127.0.0.1:%d/feishu/event" % port, obj,
                      headers=headers, raw_body=raw)
 
 
-def ding_inbound(port, conv, text):
+def ding_inbound(port, conv, text, secret=DING_SECRET):
+    """P30 起 `/dingtalk/in` 配了密钥就要验签（缺省 fail-closed）⇒ 这一支得把 timestamp/sign 带上。
+
+    注意它过去**无人调用**（grep 全文件只有定义），所以"入站一条断言都没有"这件事
+    在这个量具里同样是空档 —— 真补上入站判据的是 p30_e2e.py。
+    """
+    ts = str(int(time.time() * 1000))
     return http_post("http://127.0.0.1:%d/dingtalk/in" % port,
-                     {"conversationId": conv, "senderId": "u1", "text": text})
+                     {"conversationId": conv, "senderId": "u1", "text": text},
+                     headers={"timestamp": ts, "sign": ding_sign(ts, secret)})
 
 
 # ===== A 段：真 JVM + 假端点，逐字段断言过线字节 =====
