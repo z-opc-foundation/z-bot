@@ -451,7 +451,7 @@ public class DelegateManagerLedgerTest {
             latch.countDown();
         }
 
-        boolean await() {
+        boolean blocked() {
             try {
                 return latch.await(10, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
@@ -507,12 +507,12 @@ public class DelegateManagerLedgerTest {
         @Override
         public ChatCompletionsResponse chat(ChatCompletionsRequest request) {
             if (sticky != null) {
-                sticky.await();
+                sticky.blocked();
                 return textReply("still-flying");
             }
             if (!gates.isEmpty()) {
                 Gate g = gates.remove(0);
-                g.await();
+                g.blocked();
                 return textReply("gate-reply");
             }
             return scripted.isEmpty() ? textReply("exhausted") : scripted.remove(0);

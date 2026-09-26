@@ -1,6 +1,6 @@
 # P27 委托面对齐 —— EVIDENCE
 
-STATUS: 进行中（§0 已实测）
+STATUS: p27b 收口棒进行中（§0 复测已跑；证伪面见 §10；四杠读数按 §5—§8 逐节落）
 
 写域：`z-bot-core/src/main/java/com/zifang/z/bot/delegate/**`、`z-bot-core/src/test/java/com/zifang/z/bot/delegate/**`、`_doc/acceptance/p27/**`、roadmap 自己那一行。
 禁止改动：`agent/BotAgent.java`、`config/BotConfig.java`、`session/**`（p14/p23/p26 在写）。
@@ -49,6 +49,74 @@ z-bot-core/.../agent/BotAgent.java:1847,1849,1854 maxDepth 由 config.getDelegat
 - `~/.cache/zbot-p27-lead/` 已存在，E2E 的 `--config-dir` 一律指它下面，不写 `/tmp`。
 - 本棒未动 `agent/BotAgent.java`、`config/BotConfig.java`、`session/**`、`store/**`（`StateStore` 只在读侧引用）。
 
+## §0.2 p27b 开工复测（2026-09-26 17:5x +0800，工单读数列并排）
+
+工单 §0 那组命令**原样跑过**，逐字输出：
+
+```
+$ cd /private/tmp/zbot-wt-p27
+$ git log --oneline -2; git rev-parse --short HEAD
+07f25a8 wip(P27a): 委托面投递上限(8)+live台账落盘+两轴状态机穷举 — delegate/** 新增 6 类、49 支新用例
+53222e1 docs(roadmap): §8 内核那条"仍未 push / 对外停在 0.2.0"按 16:43 实测作废——…
+07f25a8
+
+$ git status --porcelain
+ M _doc/acceptance/p27/EVIDENCE.md
+ M _doc/acceptance/p27/p27_mutation.py
+ M z-bot-core/src/main/java/com/zifang/z/bot/delegate/DelegateManager.java
+ M z-bot-core/src/test/java/com/zifang/z/bot/delegate/DelegateManagerLedgerTest.java
+?? _doc/acceptance/p27/p27_e2e.py
+?? z-bot-core/src/test/java/com/zifang/z/bot/delegate/P27DelegationDriver.java
+
+$ git grep -c '@Test' HEAD -- z-bot-core/src/test | awk -F: '{s+=$NF} END{print "committed_at="s}'
+committed_at=784
+$ find z-bot-core/src/main/java/com/zifang/z/bot/delegate -name '*.java' | wc -l
+       7
+$ wc -l z-bot-core/src/main/java/com/zifang/z/bot/delegate/*.java | tail -1
+    1780 total
+$ wc -l _doc/acceptance/p27/*.py _doc/acceptance/p27/EVIDENCE.md
+     281 _doc/acceptance/p27/p27_e2e.py
+     539 _doc/acceptance/p27/p27_mutation.py
+     225 _doc/acceptance/p27/EVIDENCE.md
+    1045 total
+```
+
+（`git status --porcelain` 实测就是这 6 行：4 条 `M` + 2 条 `??`，路径与工单逐条对上。）
+
+| 项 | 工单读数 | p27b 实测 | 裁定 |
+|---|---|---|---|
+| 开工 HEAD | `07f25a8`（父 = 旧 main `53222e1`） | `07f25a8`，父 `53222e1` | 一致 |
+| 未提交/未跟踪 | 4 改 + 2 新 | 4 改 + 2 新，路径逐条对上 | 一致 ⇒ 第一动作按 §1 保存现场 |
+| 提交前 `@Test`（`z-bot-core/src/test`） | "以实测为准" | **784**（与前棒 EVIDENCE §4.1 自称的 735→784 对上） | 一致 |
+| `delegate` 目录 `.java` 数 | 未给（wip 提交信息自称"新增 6 类"） | **7 个文件 / 1780 行** = 旧 `DelegateManager.java` 1 + `07f25a8` 新增 6（`git show --name-status` 复算：6 个 `A` + 1 个 `M`） | **不是矛盾**：工单/提交信息说的是"新增 6 类"，目录总数是 7。引用时须带口径 |
+| **`git merge --ff-only main`** | 工单 §3.1 要求 ff 到新基线 | **ff 不可能**：`main = 9ade134`，`git rev-list --left-right --count main...HEAD` = **`27  2`**（main 有 27 笔我们没有、我们有 2 笔 main 没有 ⇒ 分叉，不是落后）。`git merge --ff-only main` ⇒ `fatal: Not possible to fast-forward, aborting.`，**rc=128**，跑后 `git status --porcelain` 空、HEAD 未变 | **推翻工单的前置假设**（工单以为 HEAD 是 main 的祖先）。按工单"不要硬合"的红线：**本棒不合并**，全部四杠都在 `w11-p27`（HEAD `558900b`）上量 |
+| ff 失败之后能不能安全并 | 未给 | 只读探测 `git merge-tree --write-tree main HEAD` ⇒ **rc=0，只输出一个 tree oid `e75448baebf9e117ee76e306156b6d726bd65a78`，没有 CONFLICT 段** | 交给主编：并 `w11-p27` 到 main 是**无冲突**的（三方合并可直接由主编下手），本棒无权合并也不 push |
+| 基线含不含 main 那批修复 | "main 已并 p22/p23/p14/p26 + 一条 `user.home` 回归修复" | 本树 `HEAD` **不含**这 27 笔（含 `user.home` 修复）；`main` 侧对 `delegate/**` 没有独立改动（`git log main -- …/delegate` 只到 `b64d294`/`f12c44e` 两笔旧账） | 杠①②③④ 全部读数是**这条基线**的读数，不等于合并树读数；主编并完后需按工单另跑一遍目标树四杠 |
+| 杠④ 时点①（开工） | 8 / 2dadaed0 / 690ddbc0 | `HOME\|t1_open\|entries=8\|config=2dadaed0\|state=690ddbc0`；`awk` 量 key 长度 = **125**（只量长度，未读内容） | 一致（详见 §8） |
+
+### §0.3 保存现场（第一动作，先于任何新代码）
+
+6 个路径全部用**显式路径** `git add --` / `git commit -- `（共享索引，未用 `add -A`/`add .`）：
+
+```
+$ git diff --cached --stat
+ _doc/acceptance/p27/EVIDENCE.md                    |  12 +-
+ _doc/acceptance/p27/p27_e2e.py                     | 281 +++++++++++++++++++
+ _doc/acceptance/p27/p27_mutation.py                |  75 +++++-
+ .../com/zifang/z/bot/delegate/DelegateManager.java |   7 +-
+ .../z/bot/delegate/DelegateManagerLedgerTest.java  |  15 +-
+ .../zifang/z/bot/delegate/P27DelegationDriver.java | 299 +++++++++++++++++++++
+ 6 files changed, 678 insertions(+), 11 deletions(-)
+
+$ git commit -m "wip(P27b): 保存前棒未提交的委托面改动与量具" -- <同 6 路径>
+558900b wip(P27b): 保存前棒未提交的委托面改动与量具
+$ git status --porcelain
+（空）
+```
+
+⇒ 从 `558900b` 起，前棒的 678 行改动与两支未跟踪量具都进了历史；本棒**没有**用过
+`checkout/clean/restore/stash/reset --hard`（工单红线），还原类操作只按 §6 用 cp 副本 + md5 对账。
+
 ## §1 靶子一：投递有上限、且上限可取证
 
 STATUS: 未跑
@@ -67,11 +135,65 @@ STATUS: 未跑
 
 ## §5 杠① `mvn -o test` 串行三跑
 
-STATUS: 未跑
+STATUS: **已跑（p27b）** —— 三跑全绿，双尺同数 789，F/E/S 全 0，socket 0。
+
+命令（工单 §3.3 原样；本树基线 `HEAD = 558900b`，含本棒新增的 5 支 `P27FalsificationTest`）：
+
+```
+$ rm -rf z-bot-core/target/surefire-reports && mvn -o test      # 全 reactor（3 模块：z-bot / z-bot-core / z-bot-desktop-packager）
+```
+
+三跑逐字读数（`~/.cache/zbot-p27-lead/bar1_{a,b,c}.log`）：
+
+```
+bar1_a: [INFO] Tests run: 789, Failures: 0, Errors: 0, Skipped: 0
+        [INFO] BUILD SUCCESS     [INFO] Total time:  58.582 s
+bar1_b: [INFO] Tests run: 789, Failures: 0, Errors: 0, Skipped: 0
+        [INFO] BUILD SUCCESS     [INFO] Total time:  58.883 s
+bar1_c: [INFO] Tests run: 789, Failures: 0, Errors: 0, Skipped: 0
+        [INFO] BUILD SUCCESS     [INFO] Total time:  54.483 s
+```
+
+现成尺 `python3 ~/.cache/zbot-integrate/b1parse.py bar1_a.log bar1_b.log bar1_c.log` 原样输出：
+
+```
+BAR1PARSE bar1_a.log module_lines=1 class_lines=76 module_sum=789 class_sum=789 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+BAR1PARSE bar1_b.log module_lines=1 class_lines=76 module_sum=789 class_sum=789 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+BAR1PARSE bar1_c.log module_lines=1 class_lines=76 module_sum=789 class_sum=789 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES
+```
+
+- 双尺对账：模块级求和 **789** == 类级 `-- in ` 行求和 **789**（76 条类级行）；
+  `F/E/S` 两侧都是 0；`BUILD SUCCESS`；socket 类错误 0 命中。
+- `@Test` 口径：提交树 `git grep -c '@Test' HEAD -- z-bot-core/src/test` = 784（前棒 49 支 + 历史 735）
+  ⇒ 杠① 实测 **789** = 784 + 本棒 `P27FalsificationTest` 5 支。两把尺同数，没有"少跑一条红"的模块。
+- `module_lines=1` 的口径解释（防误读）：全 reactor 只有 `z-bot-core` 有测试，
+  所以"模块级汇总行"天然只有 1 条；这不是参照集为空（尺在 0 条时会打 `PARSE_FATAL` 并以 rc=2 退出）。
+
+**第一版 bar1_c 是环境事故，不是产品红**（如实记账，日志留在
+`~/.cache/zbot-p27-lead/bar1_c.aborted-foreign-pkill.log`）：
+
+```
+[ERROR] The forked VM terminated without properly saying goodbye. VM crash or System.exit called?
+[ERROR] org.apache.maven.surefire.booter.SurefireBooterForkException: …
+[ERROR] Crashed tests: …（当时正跑 mcp 族：McpBridgeDeregisterTest / McpRealStdioServerTest）
+尺读数：BAR1PARSE … bar1_c.log NOT_GREEN build=FAILURE module_sum=237 class_sum=237（F=0 E=0）
+```
+
+判据：F/E/S 全 0 却 `BUILD FAILURE`、且类级行数（30）远小于 76 ⇒ 是**分叉 JVM 被外因干掉**，不是断言失败。
+根因实测：同一台机器上另一个会话在 18:04 跑了 `pkill -f surefire`
+（`ps` 里能看到它的命令行原文），它按**命令行子串**匹配，
+把我那个后台包装 shell 也一起杀了 —— 因为我的命令串里带着
+`rm -rf z-bot-core/target/surefire-reports` 这个字面 token。
+**记账（量具的错 P27b-G1）**：共享机器上 `pkill -f <token>` 会杀掉任何命令行含该 token 的进程，
+包括量具自己的包装 shell ⇒ 收口棒把删除目录改成
+`find z-bot-core/target -maxdepth 1 -type d -name '*-reports' -exec rm -rf {} +`
+（命令行不再出现该 token），重跑 `bar1_c` 得到上面的全绿读数。
+**这条不是产品缺陷，也不许拿它当"间歇缺陷"证据**：一跑被外因杀 = 一次事故，不是率。
 
 ## §6 杠② 变异测试（p27_mutation.py）
 
 STATUS: 未跑
+
 
 ## §7 杠③ 真进程 E2E（p27_e2e.py，≥3 整跑）
 
@@ -223,3 +345,149 @@ $ mvn -o test -Dtest='com.zifang.z.bot.delegate.*Test'
 [INFO] BUILD SUCCESS
 ```
 新增 4 个测试类 / **49 支**（8+14+17+10），`@Test` 基线 735 → **784**（杠① 三跑读数见 §5）。
+
+## §10 p27b 证伪委托面（工单 §3.2 三问三答）
+
+STATUS: 已跑 —— 本棒新增 5 支具名测试（`P27FalsificationTest`，`@Test` 784 → **789**），
+每条负向断言都在**同一次运行**里配阳性对照；量不出来的点名写"未覆盖"。
+
+### 10.1 问一：上限 8 到底挡什么？
+
+**数在哪一处**（逐字读出）：
+
+```
+z-bot-core/src/main/java/com/zifang/z/bot/delegate/DelegationDelivery.java:35
+    public static final int MAX_DELIVERY_ATTEMPTS = 8;
+```
+
+全部读点分成两类（`git grep` + 逐行读，p27b 实测）：
+
+| 读点 | 用法 | 是守卫吗 |
+|---|---|---|
+| `DelegationDelivery.java:105` `if (e.deliveryAttempts >= MAX_DELIVERY_ATTEMPTS) {` | `release()` 里决定"回 PENDING"还是"收敛成 DROPPED" | **是 —— 全仓唯一一处把 8 当门用** |
+| `:83` / `:109` / `:116` / `:177` / `:225` | 事件详情与 `describe()/summary()` 的 `x/8` 展示 | 否（纯展示） |
+
+**它挡的是"单条委托的被 claim 次数"，既不是队列长度也不是在飞子代理数**：
+
+- 并发/在飞那根数是**另一个数**：`DelegateManager.java:331`
+  `int width = config == null ? 3 : config.getDelegateMaxChildren();`（`BotConfig.java:665` 是唯一 getter），
+  闸门在 `:332-341`；`config == null`（测试桩）时取 **3**，与 8 无干。
+- 队列长度**压根没有上限**：`async` 是 `:320` 的 `LinkedHashMap`，只 `put` 不淘汰，
+  终态条目永久留在内存台账里（`describeAsync()` 的行数就是它的长度）。
+
+**证伪结论（这一问真正的答案）**：**8 这根门挡的是一条生产代码今天走不到的路径。**
+
+`src/main` 里对投递账的调用点只有两处，且在同一个方法里连做
+（`DelegateManager.asyncResult` → `:423 claim` → `:430 complete`）——
+拉一次就当场 ack 一次 ⇒ `attempts` 恒 **1**、`delivery` 直接进 `DELIVERED`。
+而 8 唯一的守卫读点 `:105` 在 `release()` 里，`release()` 与 `drop()` 在 `src/main` 的调用者是 **0**：
+
+```
+$ git grep -n -E 'release\(|drop\(|undeliveredTerminalResults\(|adoptOrphans\(|pruneStale\(|sweepAtStartup\(' HEAD -- 'z-bot-core/src/main/java' | grep -v -E 'cron/|channel/|Supervisor|TurnLease'
+HEAD:.../delegate/DelegateManager.java:136:        int adopted = liveLedger.adoptOrphans(…);
+HEAD:.../delegate/DelegateManager.java:137:        int pruned = liveLedger.pruneStale(…);
+HEAD:.../delegate/DelegateManager.java:148:    public String sweepAtStartup() {
+HEAD:.../delegate/DelegationDelivery.java:96:    public synchronized boolean release(String id, String token) {
+HEAD:.../delegate/DelegationDelivery.java:100:    public synchronized boolean release(String id, String token, long now) {
+HEAD:.../delegate/DelegationDelivery.java:146:    public synchronized boolean drop(String id, String reason) {
+HEAD:.../delegate/DelegationDelivery.java:186:    public synchronized List<DelegationLedger.Entry> undeliveredTerminalResults() {
+HEAD:.../delegate/DelegationLedger.java:437:    public int adoptOrphans(…)
+HEAD:.../delegate/DelegationLedger.java:456/457/470:    pruneStale(…)
+HEAD:.../delegate/DelegationLedger.java:494/495:        sweepDefault() 内部自调
+（其余命中都在各自声明处或 Javadoc 里 ⇒ src/main 外部调用者 0；:136/:137 的调用者是 :134 sweepLiveLedger ← :148 sweepAtStartup ← 0 个调用者）
+```
+
+⇒ 前棒 §1.3 那些判词（"烧完 ⇒ `DROPPED(8/8)`""上限可取证""重启恢复只捞 `PENDING`"）**在测试面与 E2E 驱动面成立**
+（`DelegationDeliveryTest` 4 支 + `P27DelegationDriver` 的 claim/release 循环都是**直接调 API**造出来的），
+但作为**产品性质**不成立：真进程既不 release 也不 drop，也没人调 `undeliveredTerminalResults()` 去重放。
+本棒不为了绿灯改这条，只把它钉成记账：**P27b-D1（产品）投递上限与恢复面都没有生产入口。**
+
+**具名测试**：`P27FalsificationTest#q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth`
+
+| 断言 | 方向 | 实测 |
+|---|---|---|
+| 同一条现场 claim+release 8 轮 ⇒ 第 9 次 `claim()` 返 `null`、`attempts=8`、`DROPPED(8/8)` | **阳性**（门真的会走动） | 通过 |
+| 另一条现场同时 `attempts=0` / `PENDING(0/8)` | 负向 ⇒ 8 **不是**全局队列长度或共享预算 | 通过 |
+| 真 `submitBackground` + `backgroundResult` 连拉 **6 次** ⇒ `attempts=1`、`DELIVERED(1/8)`、每次都回正文 | 负向 ⇒ 生产投递入口撞不到 8 | 通过 |
+| `describe("q1-no-such-scene")` == `MISSING(-/1)` | 记账 **P27b-D2**：现场不在时判词分母写死 **1**，与同一本账的 8 打架（操作员会读成"只许领一次"） | 通过 |
+| `load("q1-no-such-scene")` 返 `null`，而 `load("q1-没有这条现场")` **抛** `IllegalArgumentException` | 记账 **P27b-D3**：`load()` 的注释是"盘上没有 / 解析失败 ⇒ null"，但 id 形状不合 `checkedId`（`DelegationLedger:117-123`，`[A-Za-z0-9]` 起头）时它抛 ⇒ 用户输入的 id 直达这一层时不是"未知委托"而是异常 | 通过 |
+
+### 10.2 问二：两轴状态机 —— 哪些组合实现里根本没有
+
+两张表的实际分支（`DelegateTransitions.java:55-78` 逐字读）：生命周期轴 **12 条边**
+（6 状态 × 12 事件 = 72 格里 12 格有分支，其余 60 格抛）；投递轴 **5 条边**
+（4 × 12 = 48 格里 5 格有分支，其余 43 格抛）。
+
+**问题不在单轴的格子，在交叉**：两条轴各自查表（`next` / `nextDelivery`）、
+`DelegationLedger` 各自推进（`advance:359` / `advanceDelivery:380`），而
+`DelegationDelivery.claim()` 只查 `e.delivery.terminal()`（`:71`）—— **对 `e.state` 零查询**。
+⇒ 迁移表里没有任何一格表达"两轴的组合合法性"，"结果还不存在就被签收"是合法操作：
+
+```
+(QUEUED, CLAIMED) / (QUEUED, DELIVERED) / (RUNNING, DELIVERED) —— 实现里全部可产出，表里零分支
+```
+
+**按生产入口能落进的组合只有 7 个**（`submitAsync` / `asyncResult` / `stopChildren` / 生命周期异常路径）：
+
+```
+(QUEUED, PENDING) (RUNNING, PENDING) (DONE, PENDING) (FAILED, PENDING)
+(STOPPED, PENDING) (UNKNOWN, PENDING) (DONE, DELIVERED)
+```
+
+**实现里根本没有对应分支的组合 = 其余 17 个**，点名：
+全部 6 个 `(X, DROPPED)`（`release`/`drop` 无生产调用者，见 §10.1）、
+全部 6 个 `(X, CLAIMED)` 稳态（`asyncResult` 里 claim 与 ack 之间不留可观测稳态，
+只有写盘失败降级时才可能滞留，本棒**未覆盖**——见下）、
+以及 `(QUEUED/RUNNING/STOPPED/FAILED/UNKNOWN, DELIVERED)` 这 5 个"没跑完就送达"（唯一门在内存，见对照 B）。
+⚠ 这一条的判据是 §10.1 那段 `git grep` 原文 + 下面 `q3b` 的实测，不是形式推导。
+
+**具名测试**：`q2_deliveryAxisHasNoLifecycleGateWhileOnlyTheInMemoryStatusGuardsThePullEntry`
+
+| 断言 | 方向 | 实测 |
+|---|---|---|
+| `create` 之后现场是 `(QUEUED, PENDING)` | 阳性对照（起点） | 通过 |
+| 直接 `claim`+`complete` ⇒ 盘上 `state=QUEUED` 而 `delivery=DELIVERED` | **负向**（跨轴门缺失，未收工可被记成送达） | 通过 |
+| 该组合**不进** `undeliveredTerminalResults()`（`size=0`） | 后果：恢复面永远不会再提议它 | 通过 |
+| 另建一条 `(DONE, PENDING)` ⇒ 恢复面恰好返回它（`[q2-done]`） | **阳性对照**：表里唯一被承认的"跑完没人接"组合 | 通过 |
+| 子代理被闸门挡住时 `backgroundResult()` 判词含"还在"、`attempts=0`、`PENDING` | **阳性对照**：生产入口确实"没跑完不许投"，但那道门是 `DelegateManager:419` 的**内存 status**，不在迁移表里 | 通过 |
+| 放开闸门后同一条能拉到 `q2-child-reply` | 阳性对照（闸门测试自证，不是空跑） | 通过 |
+
+**未覆盖（点名，不假装绿）**：
+① 两轴**交叉合法表**本期没有实现也没有测试，前棒 §3 的 6×12 / 4×12 穷举只证"每根轴自己的格子有判词"；
+② `(X, CLAIMED)` 在写盘降级（`ok=false` 之后全 no-op）下会不会滞留成稳态 —— 没有测试；
+③ 交叉表要不要允许 `DONE` 之前投递，是**产品语义决定**，本棒只点名不动刀。
+
+### 10.3 问三：进程中途被杀，台账会不会留幻影在飞条目？有没有"读回时对账"那一层？
+
+**答：会留幻影；读回侧没有对账那一层。**
+
+- `load()`（`DelegationLedger:186-201`）只做"读 `state.json` + `Entry.fromJson`"；
+  `list()`（`:204-230`）只是逐子目录 `load()`。两者都**不看 `updatedAt`、不判超期、不回写** ⇒
+  `kill -9` 之后新进程读回来还是 `RUNNING`，且 `delivery.summary()` 把它算进
+  `delegations=/pending=`。
+- 对账只存在于推进侧：`reconcileLifeFromDisk:394` / `reconcileDeliveryFromDisk:409`，
+  用途是"别被陈旧副本覆盖已落的终态"，**不是**"把死了的判死"。
+- "把死了的判死"那一层是 `adoptOrphans():437`，入口 `sweepLiveLedger():134` / `sweepAtStartup():148`
+  —— **`src/main` 0 个调用者**（§10.1 那段 grep 原文），`WIRING.md` §接线 1 自己也写着
+  "`adoptOrphans` / `pruneStale` 两个能力在产品里没人调（单测/E2E 会调，真进程不会）"。
+- 后果链（每一环都有断言）：幻影非终态 ⇒ `pruneStale()` 只碰终态 ⇒ **幻影目录永不回收**；
+  同时新进程的 `async`（`DelegateManager:320`）是内存 `LinkedHashMap` ⇒
+  `/agents` 说"暂无异步委托"、`/background result <id>` 说"未知委托 id" ⇒
+  **操作员看到的面与盘上的面对不上，而且盘上那一条还占着并发闸的额度**（`:335` 数的是内存条目，
+  重启后归零 ⇒ 幻影既不占额度也看不见，两种判词互相矛盾，本棒只量出"看不见"这一半）。
+
+**具名测试（三支）**：
+
+| 测试 | 负向断言（证伪） | 同一次运行里的阳性对照 |
+|---|---|---|
+| `q3a_killedDelegatorLeavesAPhantomInFlightSceneAndNoReadPathReconcilesIt` | 新实例 `load()` 读回 `RUNNING`（非终态）；`summary()` 含 `delegations=1`；连读三次之后仍是 `RUNNING`；`pruneStale(保留期)` 返 **0** ⇒ 删不掉、目录留着 | ① `adoptOrphans(ORPHAN_STALE_MILLIS)` 对没超期的返 **0**（真在飞不许误判）；② `adoptOrphans(0)` 返 **1** ⇒ `UNKNOWN`；③ 判完再 `pruneStale(0)` 返 **1** 且目录消失（对账层存在，**但必须有人手动调**） |
+| `q3b_afterARestartTheUserFacingEntriesLoseTheSceneWhileTheDiskStillHoldsIt` | 换一个 `BotAgent`（同台账根）= 重启：`describeAgents()` 含"暂无异步委托"、`backgroundResult(id)` 以"未知委托 id"开头，而 `liveLedger().exists(id)` 为真 | 同根新实例读回 `DONE/PENDING`；`undeliveredTerminalResults()` **正好**列出这一条（读侧 API 是好的，缺的是接线）；`sweepAtStartup()` 自己返回 `adopted=0 pruned=0`（它能在，没人叫它） |
+| `q3c_unparsableAndZeroTimestampScenesEscapeEveryReadAndPrunePath` | 第三种幻影：按她的**线面值**（小写 `dropped`，`async_delegation.py:354` 那套 SQL 面值）写的 `delivery_state` ⇒ `DeliveryState.valueOf`（`DelegationLedger:630`）抛 ⇒ `load()` 的 `catch (Exception)` 静默返 `null`（`:197-200`）⇒ 该现场从 `list()`／`adoptOrphans`／`pruneStale` **全部射程里消失**，`pruneStale(0)` 之后目录仍在（**永久泄漏**） | 完好现场 `load()` 非 null 且被 `list()` 看见；`pruneStale(0)` 返回值 == **2**（`q3-good` 与 `q3-no-timestamps` 都被删）；顺带钉住反面：字段缺失、时间戳为 0 的**终态**现场在第一次 sweep 就被判"超期"当场删除（数据丢失的另一侧） |
+
+**修法（本棒没动产品代码，交下一棒/主编）**：
+① `BotAgent` 构造器接上 `delegation.sweepAtStartup()`（`WIRING.md` 已有 hunk，那支文件本棒无权改）；
+② `asyncResult` 的"没跑完不许投"那道门从内存 status 挪进迁移表（交叉轴一格判词），
+   或让 `claim()` 显式拒绝非终态现场；
+③ 读侧对**解析不了**的面值不许静默返 null：保留目录 + 标 quarantine（否则 `pruneStale` 永远碰不到它）；
+④ `DeliveryState` 读侧改成大小写无关，认 hermes 的线面值。
+
