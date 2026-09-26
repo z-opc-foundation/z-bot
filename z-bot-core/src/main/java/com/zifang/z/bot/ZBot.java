@@ -3,6 +3,7 @@ package com.zifang.z.bot;
 import com.zifang.z.bot.cli.AgentOptions;
 import com.zifang.z.bot.cli.ChatCommand;
 import com.zifang.z.bot.cli.GatewayCommand;
+import com.zifang.z.bot.cli.McpCommand;
 import com.zifang.z.bot.cli.PairCommand;
 import com.zifang.z.bot.cli.ReplCommand;
 import com.zifang.z.bot.cli.SendCommand;
@@ -29,6 +30,7 @@ import java.util.concurrent.Callable;
  *   z-bot status                     打印生效配置
  *   z-bot send webhook <conv> <text> 脚本化外发到 channel
  *   z-bot pair <8位码>                消费 gateway 发出的配对码
+ *   z-bot mcp serve                  反向：把 z-bot 当 MCP server（stdio，只读会话/消息）
  * </pre>
  *
  * <p>模型 / key 默认取<b>当前 profile</b>（{@code -Dzbot.home} &gt; {@code ZBOT_HOME} &gt;
@@ -36,7 +38,8 @@ import java.util.concurrent.Callable;
  */
 @Command(name = "z-bot", mixinStandardHelpOptions = true, version = "z-bot 0.2.0",
         subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, GatewayCommand.class,
-                StatusCommand.class, SessionsCommand.class, SendCommand.class, PairCommand.class},
+                StatusCommand.class, SessionsCommand.class, SendCommand.class, PairCommand.class,
+                McpCommand.class},
         description = "本地 agent 应用（ReAct + 工具 + 沙箱 + 会话）")
 public class ZBot implements Callable<Integer> {
 
