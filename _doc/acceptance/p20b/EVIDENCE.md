@@ -796,10 +796,29 @@ PY
   "审计有没有把清单里的空能力报出来"而不是"清单写得对不对"（后者由 `everyCapabilityToolsetDeclaresConsumerAndMembers`
   与字面量表那条判）。诚实记账：这条腿对 **TS6**（`capabilityNames` 自己漂）确实是**一起漂**的 ⇒
   TS6 不靠它判红，靠的是另外三条（台账 `TS6 … RED-OK 3/3`，红名单三条都在）⇒ 网还在，只是不挂在这一条上。
-- 字面量表 `EXPECTED_TOOLSET_BY_TOOL`（`ToolsetsManifestTest.java:222-236`）本棒**重新手工对过**
+- 字面量表 `EXPECTED_TOOLSET_BY_TOOL`（`ToolsetsManifestTest.java:222` 起，方法体 224-237）本棒**重新手工对过**
   `Toolsets.java:106-114` 的 `declare(...)` 表：core 5（echo/time/counter/health/sysinfo）、
   file 3（read_file/write_file/search）、exec 2（exec/mvn_build）、net 1（curl_test）= 11 个，逐字相同；
   且 `:132-134` 那条"键集 == 注册表工具名集"的笼子保证这张表不会漏工具而空跑。
+
+**第二轮扫（另一种形状：期望位是生产侧 getter/常量）**，命令与读数：
+```
+grep -rn "assertEquals(\s*[A-Za-z_.]*\.\(toolsetOf\|namesOfToolset\|getToolNames\|resultCapFor\|generation\|schemaFingerprint\|toolsetsInUse\|registeredNames\|snapshot\)(" z-bot-core/src/test/java   ⇒ 0 行
+grep -rn "assert[A-Za-z]*(Toolsets\.\|assert[A-Za-z]*(Toolkit\.\|assert[A-Za-z]*(BuiltinTools\." z-bot-core/src/test/java                                        ⇒ 12 行，逐条看完
+```
+12 行命中逐条看完：**4 行**是布尔谓词断言（`:79/:81/:83/:84` 的 `assertTrue/assertFalse(Toolsets.isDeclared(…))`，
+期望是真值不是同源值）、**2 行**是 `null`/兜底常量期望（`:164/:174`）、**3 行**是枚举常量期望
+（`:50/:75/:78`，其中 `:50` 见下表）、**3 行**是本表后两行。
+另：`ToolsetsManifestTest.java:96-99` 不在这两个 grep 的命中里（期望位写作 `Arrays.asList(…)`），
+本棒手工补进来一起判 ⇒ 下面这张表共四行。
+
+| 行 | 形状 | 判定 |
+| --- | --- | --- |
+| `ToolsetsManifestTest.java:45-50` | 遍历 `capabilityNames()`，逐条 `assertEquals(Kind.CAPABILITY, d.kind())` | **同义反复**（`capabilityNames` 本身就是按 `kind==CAPABILITY` 过滤的）⇒ 这一条腿只能检出"**多报**"（TS6 判红的正是它，台账 `TS6 … 3/3`），**检不出"少报"**。"少报"由下一行那把常量尺兜着，不是靠它 |
+| `ToolsetsManifestTest.java:96-99` | `assertEquals(asList(Toolsets.CORE, EXEC, FILE, NET), capabilityNames())` | 期望取自**常量**不是函数 ⇒ `capabilityNames` 少一个名字就红，形状正确。诚实记一笔残留：若 `Toolsets.NET` 这个**常量本身**漂成 `"network"`，这一条两侧一起漂 ⇒ 判不出来；但它被 `:132-136` 那张字面量表（写死 `"core"/"file"/"exec"/"net"`）间接钉住了 —— 常量漂了 ⇒ MANIFEST 的键漂了 ⇒ `tk.toolsetOf(name)` 与字面量不相等 ⇒ 红。⇒ **网还在**，交下一棒的动作是把 `:99` 的四个常量直接写成字面量（一行的事，本期不做，理由见 §9.10(9)） |
+| `ToolkitRegistryTest.java:205` | `:203` 用 `Toolsets.CORE` 注册，`:205` 用同一个常量断言 `tk.toolsetOf("a")` | 这是**存取往返**测试（判的是"注册表有没有把给它的 toolset 存下来"），期望与写入同源是**语义要求**，不是 TS4 那种漂移 ⇒ 保留；TS4 的账在"清单归属"那一族，不在这一条 |
+| `McpBridgeDeregisterTest.java:140/:187` | `assertEquals(Toolsets.MCP_PREFIX + "mine"/"deep_kb", …)` | 期望 = 前缀常量 + **手写的归一化名**（`deep-kb` → `deep_kb` 是本棒/上一棒手工算的，不是调 `mcpToken` 算的）⇒ 不同源，TS5 判红的正是这一族 |
+
 
 
 ## 9.3 TK3 —— 注点从 accessor 改到快照键
@@ -1096,6 +1115,12 @@ M4/M5 的裁决结论**沿用 §3.4 不改**（工单明写"这三段结论都�
    它不覆盖"第三级解析被改成读别的 env 名"这类形状（那种注点本棒没试）。
 7. **MB2 的新用例是替身级**（`InMemoryMcpTransport`）：真进程侧仍只有 §3.3 的 M11/M12。
 8. **本棒没集成、没合并、没 push**；`w2-p20b` 停在本地，`main` 一字未动。
+9. **`ToolsetsManifestTest.java:96-99` 的期望仍取 `Toolsets.CORE/EXEC/FILE/NET` 四个常量，没换成字面量**（§9.2.1 表第二行）：
+   本棒**没动**它，两个理由 —— ① 它不是 §2.2 那七条之一；② R1 与 R2 必须打在**同一批测试字节**上（§9.9.1 的口径），
+   再往 `src/test` 加一个字节就得再跑第三轮全量台账。风险实测低：常量真漂了会被 `:132-136` 那张字面量表判红。
+   交主编定：下一棒若动测试字节，就顺手把这四个常量写成 `"core","exec","file","net"`。
+10. **第三实例没重跑 TK5 的 V0/V1/V2 等价变异探针**：那三把是第二实例 10:53:14-10:55:06 的实测（§9.4 原文读数），
+    本棒核的是它的**结论落进了台账**（R1 `TK5 RED-OK 1/1`）与探针脚本仍在库（`p20d_tk5_equiv_probe.py`，复算命令 §9.11）。
 
 ## 9.11 本棒复算命令
 
