@@ -697,21 +697,40 @@ $ git ls-files _doc/acceptance/p20b/
 | 锁与邻居 | `--want-lock` / `foreign_mvn_running()` | 10:41 当场 `FATAL 锁被占`（兄弟 worktree 的 mutator，锁文件里 `pid=53499 tag=mutator`）；本机今晚六棒同跑，`ps` 里 maven 真身常在 3-15 个 ⇒ 本棒所有注入都走"拿不到锁就不跑"的路径，等待期间只写 `_doc`，一个源文件都不碰 |
 
 
+### 9.0.2 本棒接手时是"第三棒实例"（前两棒都把交付跑死在收尾前，以实测为准）
+
+| 项 | 命令 | 读数 |
+| --- | --- | --- |
+| 接手 HEAD / 分支 | `git rev-parse --short HEAD` / `--abbrev-ref HEAD` | `1067b77` / `w2-p20b` ⇒ 简报写的 `84ca7b9` 与"status 应为空"都不成立 |
+| 在途状态 | `git status --porcelain` | ` M LEDGER.tsv` ` M LEDGER_RESTORE.tsv`（第二棒 R1 全量取证跑的产物，md5 `7258d957…`/`86f21d52…`）+ `?? logs/LEDGER_R1.tsv` `?? logs/LEDGER_RESTORE_R1.tsv`（同字节留档，md5 逐字同）+ `?? __pycache__/` ⇒ 本棒第一笔把 R1 台账与留档一起收下，不覆盖历史 |
+| R1 是否真跑完 | `tail ~/.cache/zbot-p17/p20d/chain.log` + `~/.cache/zbot-p17/p20d/r1_console.log` | `[r1] FINAL rc=0`、`CHAIN_DONE probe_rc=0 r1_rc=0 2026-09-26 11:08:50`、tally `RED-OK 17 / PARTIAL 4 / GREEN-BUT-MUTATED 0 / BROKEN 0`、`SRC_MD5_STABLE=yes` ⇒ **R1 是全量 21 个的真跑，不是子集**；第二棒死在 R1 之后、R2 之前 |
+| 四个被测源文件 | `python3 -c "…disk_md5 vs git_md5(HEAD)…"` | 与 §9.0.1 同一口径，四个 `True`（`Toolsets f1d8195f / Toolkit 4ae1a491 / McpBridge 2938f85b / McpManager 37a14145`）⇒ 接手时盘上没有残留注入 |
+| `~/.zbot` 三数 | 同 §9.0 | `8` / `2dadaed0` / `690ddbc0` ⇒ 红线仍未被破坏 |
+| 锁与邻居 | `python3 -u _doc/acceptance/p20b/p20b_mutation.py --check` 起手的锁格 + `ps` | 11:2x 当场锁被兄弟 worktree 的 mutator 攥着 ⇒ 本棒的 R2 走"拿不到锁就等（60 s × 30 轮）"的重试路径；`--check` 在等锁之前完成：`预检过：锚点次数 + 盘上原文 == git show + 无漂移`（基线 rev `1067b775…`） |
+| R1 的 25 份 mvn 原文 | `mv logs/r1_mut_*.log ~/.cache/zbot-p17/p20d/r1_mut/` | 仓内只留台账（mvn 原文按本仓惯例不入库，§8.1 只列五件交付物），原文 25 份在缓存位；本棒把要引用的行**原文粘进本节**，不写"见日志"就算了 |
+
+
+
 ## 9.1 七行总账（本棒前 ⇒ 本棒后）
 
-| 行 | 本棒前 | 本棒后 | 本棒动作（一句话） | 支撑读数在 |
-| --- | --- | --- | --- | --- |
-| TS4 | PARTIAL 4/5 | 待填 | 期望换成测试侧字面量表，不再与 `toolsetForTool` 同源 | §9.2 / §9.9 |
-| TK3 | PARTIAL 3/7 | 待填 | 注点从 accessor 挪到快照键那一行，期望集按"先暖过快照"的出处收窄 | §9.3 / §9.9 |
-| TK5 | GREEN-BUT-MUTATED 0/1 | 待填 | 实测确认原注点是等价变异 ⇒ 换不等价注点 + 用例补两把钥匙（正反腿） | §9.4 / §9.9 |
-| TK9 | GREEN-BUT-MUTATED 0/0 | 待填 | 起真带 `$ZBOT_HOME` 的子 JVM 探针（带假 `user.home` 笼子），正反两把 | §9.5 / §9.9 |
-| MB2 | GREEN-BUT-MUTATED 0/0 | 待填 | 桥级"注册表有、桥没记住"现场（同名第二个桥实例 + 僵尸槽 + 旁观 server） | §9.6 / §9.9 |
-| MB3 | PARTIAL 8/8 | 待填 | **不动**（工单明写"保留 PARTIAL、不硬凑"），只把因果写明 | §9.7 / §9.9 |
-| TK11 | PARTIAL 13/13 | 待填 | 差集机械补进期望集（4 条，每条注明是哪一跑钉的） | §9.8 / §9.9 |
+> "本棒后"分两栏记，是因为 §9.9.1 的两轮口径：**R1 是取证跑**（期望集 = `cde236b` 那份，用来看现状与差集），
+> **R2 才是交付跑**（期望集 = R1 之后按 §9.9.2 机械补集/收窄的那一份）。两栏都是脚本台账原文，不是转述。
+
+| 行 | 本棒前 | 本棒后（R1 取证跑，11:08:50） | 本棒后（R2 交付跑） | 本棒动作（一句话） | 支撑读数在 |
+| --- | --- | --- | --- | --- | --- |
+| TS4 | PARTIAL 4/5 | **RED-OK 5/5** | 待填 | 期望换成测试侧字面量表，不再与 `toolsetForTool` 同源 | §9.2 / §9.9 |
+| TK3 | PARTIAL 3/7 | PARTIAL 4/5（点名=4/5，红的正是那 4 条；没出处的那 1 条 R2 前摘掉） | 待填 | 注点从 accessor 挪到快照键那一行，期望集按"先暖过快照"的出处收窄 | §9.3 / §9.9 |
+| TK5 | GREEN-BUT-MUTATED 0/1 | **RED-OK 1/1** | 待填 | 实测确认原注点是等价变异 ⇒ 换不等价注点 + 用例补两把钥匙（正反腿） | §9.4 / §9.9 |
+| TK9 | GREEN-BUT-MUTATED 0/0 | **RED-OK 1/1** | 待填 | 起真带 `$ZBOT_HOME` 的子 JVM 探针（带假 `user.home` 笼子），正反两把 | §9.5 / §9.9 |
+| MB2 | GREEN-BUT-MUTATED 0/0 | **RED-OK 1/1** | 待填 | 桥级"注册表有、桥没记住"现场（同名第二个桥实例 + 僵尸槽 + 旁观 server） | §9.6 / §9.9 |
+| MB3 | PARTIAL 8/8 | PARTIAL 8/8（+3 条多红未点名，**故意不回填**） | 待填 | **不动**（工单明写"保留 PARTIAL、不硬凑"），只把因果写明 | §9.7 / §9.9 |
+| TK11 | PARTIAL 13/13 | **RED-OK 17/17** | 待填 | 差集机械补进期望集（4 条，每条注明是哪一跑钉的） | §9.8 / §9.9 |
 
 tally 并排（原账不许覆盖）：
 ```
 本棒前：RED-OK 14 / PARTIAL 4 / GREEN-BUT-MUTATED 3 / BROKEN 0        （21 个变异体，§2 交付态那一跑）
+R1 取证跑：RED-OK 17 / PARTIAL 4 / GREEN-BUT-MUTATED 0 / BROKEN 0     （11:08:50，logs/LEDGER_R1.tsv，md5 7258d957…；
+              仍 PARTIAL 的 4 条 = TK3（期望集宽了 1 条，§9.3）+ TK4/TK7（本棒新用例的多红未点名，§9.1.1）+ MB3（不回填，§9.7））
 本棒后：待填                                                          （R2 交付跑，§9.9.6）
 ```
 

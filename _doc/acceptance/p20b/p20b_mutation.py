@@ -133,10 +133,15 @@ MUTANTS = [
     # p20d 改注点：上一棒的注点是 accessor Toolkit#generation()（:222，全仓只 1 处读），
     # 快照键用的是 snapshot() 里的 :310 ⇒ 期望集里那 4 条读快照的用例根本不碰被注入的那一行，
     # 判成 PARTIAL 3/7 是"量具的账"。本棒把注点挪到真正的缓存键那一行（p20d EVIDENCE §9.3）。
+    # p20d R1 之后收窄一条：`deregisterActuallyRemovesTheSlotFromEveryView` 从期望里摘掉。
+    # 依据（不是印象）：R1 实跑 `TK3 … 点名=4/5`（logs/r1_mut_TK3.log: Tests run: 527, Failures: 4），
+    # 没红的正是它 —— ToolkitRegistryTest.java:42 那条在注册表变化之前从没读过任何快照视图
+    # （:50/:51 两次读都在 :45 deregister 之后，第一次 snapshot() 就是新状态 ⇒ 键对不对都看不出来），
+    # 且它读的是 tk.generation() 那个 accessor（:53），accessor 已不是本变异体的注点。
+    # ⇒ 量具的账（期望写宽），不是产品的红；判定文本与注点语义一字未改（p20d EVIDENCE §9.3）。
     ("TK3 schema 快照键里的代际被钉死 0", "toolkit",
      "long generation = registry.generation();", "long generation = 0L;", 1,
-     ["deregisterActuallyRemovesTheSlotFromEveryView",
-      "registerAndDeregisterEachInvalidateTheSchemaSnapshot",
+     ["registerAndDeregisterEachInvalidateTheSchemaSnapshot",
       "exposedNamesTrackTheRegistryAfterNukeAndRepave",
       "unregisteringIsNotStubOverwrite",
       "reloadDropsTheDeadServersToolNamesFromGetToolNames"],
@@ -145,9 +150,14 @@ MUTANTS = [
      "注点在 snapshot() 的键那一行，不是 Toolkit#generation() 那个 accessor"),
 
     # ---- 结果上限（全局 / 单工具声明 / UNBOUNDED）与溢出落盘 ----
+    # p20d 机械补集（TK4）：R1 实跑读数 `TK4 … 点名=1/1 | 多红未点名: unboundedSentinelMeansNoTruncationAtAll`
+    # （logs/LEDGER_R1.tsv TK4 行）。这一把红是**因果成立**的：上限不走注册表 ⇒ 声明 NO_MAX_RESULT_CHARS
+    # 的工具退回全局 1000 的那条反向腿读不到全局值、被硬编码魔数顶掉 ⇒ 反向腿判红
+    # （p20d EVIDENCE §9.1.1/§9.9.2）。判定文本与注点没动，只把实跑的差集补进期望集。
     ("TK4 上限不走注册表", "toolkit",
      "return registry.maxResultChars(name, maxResultChars);", "return maxResultChars;", 1,
-     ["perToolDeclarationBeatsTheGlobalDefault"],
+     ["perToolDeclarationBeatsTheGlobalDefault",
+      "unboundedSentinelMeansNoTruncationAtAll"],
      "活猎物=声明 64 的工具 resultCapFor 必须回 64 而不是全局 9000",
      "工单点名：上限走 registry 的 maxResultChars，不许自己再写一个魔数"),
 
@@ -170,13 +180,21 @@ MUTANTS = [
      "活猎物=previewChars=10000 / cap=300 时正文必须只留 300",
      "配错了不许把上下文撑爆"),
 
+    # p20d 机械补集（TK7）：R1 实跑读数 `TK7 … 点名=3/3 | 多红未点名:
+    # unboundedSentinelMeansNoTruncationAtAll,zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot`
+    # （logs/LEDGER_R1.tsv TK7 行）。两条都是因果成立的多红，不是巧合：
+    #   - unboundedSentinel… 的反向腿钉"被截的那一份必须恰有 1 个溢出文件"⇒ 落盘被摘掉就判红；
+    #   - zbotHomeEnvLevel… 钉 PROBE_DIR_COUNT=1 / PROBE_SPILLED_BYTES=4000 ⇒ 同一把刀。
+    # 判定文本与注点没动，只把实跑的差集补进期望集（p20d EVIDENCE §9.1.1/§9.9.2）。
     ("TK7 溢出落盘被摘掉", "toolkit",
      "String path = dir == null ? null : spillToFile(dir, result.getName(), "
      "result.getCallId(), content);",
      "String path = null;", 1,
      ["oversizedResultSpillsFullTextToDiskAndKeepsOnlyAPreview",
       "spillGoesToADirectoryCreatedOnDemand",
-      "errorResultsAreCappedTheSameWayAndStayMarkedError"],
+      "errorResultsAreCappedTheSameWayAndStayMarkedError",
+      "unboundedSentinelMeansNoTruncationAtAll",
+      "zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot"],
      "活猎物=落盘文件必须存在、字节与原文逐字相同、路径要回在回执里",
      "只截断不落盘 = 全文永久丢失"),
 
