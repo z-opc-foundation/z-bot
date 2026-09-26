@@ -684,11 +684,16 @@ def main():
                         "lsof -nP -a -p %d -iTCP -sTCP:LISTEN 2>/dev/null | tail -n +2" % srv.pid],
                        timeout=40)
     listen_lines = [l for l in ls_out.splitlines() if "LISTEN" in l]
+    # 原写法在找 "(127.0.0.1:" —— 那个左括号是 lsof 打在 `*:49236 (LISTEN)` 里的，
+    # 回环地址后面**不带**括号（`TCP 127.0.0.1:60942 (LISTEN)`），于是自家回环监听每一条
+    # 都被当成违规（lead_v2_r1 实测：sockets=1 且唯一那条就是 offenders[0]，看着像"绑了 0.0.0.0"）。
+    # 取地址字段自己比，别再用括号当锚。
     nonloop = [l for l in listen_lines
-               if "(127.0.0.1:" not in l and "[::1]:" not in l]
+               if not (addr_of(l).startswith("127.") or addr_of(l).startswith("[::1]"))]
     chk("S0b listen_sockets_are_loopback_only", bool(listen_lines) and not nonloop,
         "缺省绑到 0.0.0.0（本机 --host 没给）",
-        "sockets=%s offenders=%s" % (len(listen_lines), nonloop[:1]))
+        "sockets=%d addrs=%s offenders=%s"
+        % (len(listen_lines), [addr_of(l) for l in listen_lines][:4], nonloop[:1]))
 
     # ================= B 组：SSE 线上字节 =================
     fake.script = ["第一行\n第二行\r\n第三行"]
@@ -980,6 +985,12 @@ def main():
         print("FAILED_CHECK|%s|%s" % (name, detail), flush=True)
     print("ARTIFACTS|%s" % sorted(os.listdir(OUT)), flush=True)
     sys.exit(0 if not fails else 1)
+
+
+def addr_of(line):
+    """取 lsof 那一行的地址字段（倒数第二个 token，最后一个就是 `(LISTEN)`）。"""
+    toks = line.split()
+    return toks[-2] if len(toks) >= 2 else ""
 
 
 def unescape(s):
