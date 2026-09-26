@@ -24,6 +24,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -132,6 +133,216 @@ public final class HttpChannel {
         }
     }
 
+    // ===== 路由台账（对位面的单一来源） =====
+
+    /** 全表共用的鉴权口径 — 本期 HTTP 面<b>没有任何一条</b>要求凭据，唯一的门是"只绑回环"。 */
+    public static final String AUTH_NONE_LOOPBACK_ONLY = "NONE(loopback-only)";
+    /** 全表共用的绑址口径 — 要暴露到别的网卡得显式写 {@code --host}（见 {@link ChannelBind}）。 */
+    public static final String BIND_LOOPBACK_DEFAULT = "LOOPBACK_DEFAULT(opt-in via --host)";
+
+    /** "200" 本身不算证据：这一列规定每条路由要断言到什么形状才算过。 */
+    public enum BodyShape {
+        CONSOLE_HTML, PLAIN_TEXT, JSON_ARRAY, JSON_OBJECT, SSE_STREAM
+    }
+
+    /**
+     * 台账里的一行 = 一个 <b>(方法, 路径)</b> 对。
+     *
+     * <p>三处必须同时对得上，任何一处单独改都会红：</p>
+     * <ol>
+     *   <li>{@link #dispatch} 里的 {@code "<path>".equals(path)} 字面量 ⇄ {@link #paths()}
+     *       —— 由 {@code HttpRouteLedgerTest#ledgerPathsMatchDispatchLiterals()} 从<b>源码</b>机械复算；</li>
+     *   <li>本表 ⇄ {@code _doc/acceptance/p28/ROUTES.tsv}
+     *       —— 由 {@code HttpRouteLedgerTest#routesTsvIsInSyncWithLedger()} 逐字节对账；</li>
+     *   <li>{@code ROUTES.tsv} ⇄ 真进程 E2E 的分母 —— {@code p28_e2e.py} 逐行打，缺一行即红。</li>
+     * </ol>
+     *
+     * 形状契约（{@link #fields()} 那一列的语法）。原子上界用 {@code ;}，原子内列表用 {@code ,}，
+     * 这样 JUnit 断言和 {@code p28_e2e.py} 能用同一把尺解析，不必两边各抄一份清单。
+     * <ul>
+     *   <li>{@code nonempty} — 体非空</li>
+     *   <li>{@code literal:X[,Y]} — 体里必须出现 X（逗号分隔则每个都要出现）</li>
+     *   <li>{@code key:X[,Y]} — 体里必须出现 {@code X=} 与 {@code Y=}（文本键值面）</li>
+     *   <li>{@code resource:P} — 体逐字节等于 classpath 资源 P</li>
+     *   <li>{@code array} / {@code object} — JSON 顶层形状（"被包了一层"就靠这对原子区分）</li>
+     *   <li>{@code fields:a,b} — 顶层必须有的字段名</li>
+     *   <li>{@code count-of:k} — 顶层 {@code count} 必须等于数组 {@code k} 的长度（防恒 0 / 防自相矛盾）</li>
+     *   <li>{@code rowfields:k:a,b} — 数组 {@code k}（顶层就是数组时写 {@code -}）每行的字段名</li>
+     *   <li>{@code sse-events:a,b} — SSE 帧 {@code event:} 的名词表</li>
+     * </ul>
+     */
+    public static final class Route {
+        private final String method;
+        private final String path;
+        private final BodyShape shape;
+        private final String auth;
+        private final String bindScope;
+        /** 形状契约原子串，语法见本类 javadoc 的 {@code 形状契约} 一节。 */
+        private final String fields;
+        /** 这个响应的"行数"从哪个控件来（实数据对拍用）；空串 = 没有行数概念。 */
+        private final String rowCountFrom;
+        /** 已知缺陷编号；空串 = 无。非空的必须在 EVIDENCE.md 里点名记账。 */
+        private final String defect;
+
+        Route(String method, String path, BodyShape shape, String fields, String rowCountFrom, String defect) {
+            this.method = method;
+            this.path = path;
+            this.shape = shape;
+            this.auth = AUTH_NONE_LOOPBACK_ONLY;
+            this.bindScope = BIND_LOOPBACK_DEFAULT;
+            this.fields = fields;
+            this.rowCountFrom = rowCountFrom;
+            this.defect = defect;
+        }
+
+        public String method() {
+            return method;
+        }
+
+        public String path() {
+            return path;
+        }
+
+        public BodyShape shape() {
+            return shape;
+        }
+
+        public String auth() {
+            return auth;
+        }
+
+        public String bindScope() {
+            return bindScope;
+        }
+
+        public String fields() {
+            return fields;
+        }
+
+        public String rowCountFrom() {
+            return rowCountFrom;
+        }
+
+        public String defect() {
+            return defect;
+        }
+
+        @Override
+        public String toString() {
+            return method + " " + path;
+        }
+    }
+
+    private static final List<Route> ROUTES = Collections.unmodifiableList(Arrays.asList(
+            // ---- 控制台（同一份 HTML 的四个别名） ----
+            new Route("GET", "/", BodyShape.CONSOLE_HTML, "resource:/web/index.html", "", ""),
+            new Route("GET", "/index.html", BodyShape.CONSOLE_HTML, "resource:/web/index.html", "", ""),
+            new Route("GET", "/web", BodyShape.CONSOLE_HTML, "resource:/web/index.html", "", ""),
+            new Route("GET", "/console", BodyShape.CONSOLE_HTML, "resource:/web/index.html", "", ""),
+            // ---- 控制面（纯文本） ----
+            new Route("GET", "/bot/status", BodyShape.PLAIN_TEXT,
+                    "key:model,tools,provider,instance", "", ""),
+            new Route("GET", "/bot/clear", BodyShape.PLAIN_TEXT,
+                    "literal:Memory cleared", "", ""),
+            new Route("POST", "/bot/stop", BodyShape.PLAIN_TEXT, "nonempty", "", ""),
+            new Route("POST", "/bot/steer", BodyShape.PLAIN_TEXT, "nonempty", "", ""),
+            // ---- 对话 ----
+            new Route("GET", "/bot/tools", BodyShape.JSON_ARRAY,
+                    "array;rowfields:-:name,description", "agent.getToolkit().getAllTools()", ""),
+            new Route("POST", "/bot/chat", BodyShape.PLAIN_TEXT, "nonempty", "", ""),
+            new Route("POST", "/bot/confirm", BodyShape.PLAIN_TEXT, "nonempty", "", ""),
+            new Route("POST", "/bot/chat/stream", BodyShape.SSE_STREAM,
+                    "sse-events:step,thought,tool_call,tool_result,steer,compact,final,done,error,confirm",
+                    "每个 ReAct 步骤一帧", ""),
+            // ---- 会话 ----
+            new Route("GET", "/api/sessions", BodyShape.JSON_ARRAY,
+                    "array;rowfields:-:id,title,createdAt,messageCount",
+                    "sessions/_index.json 的行数", ""),
+            new Route("POST", "/api/sessions", BodyShape.JSON_OBJECT, "object;fields:ok,id", "", ""),
+            new Route("GET", "/api/session/messages", BodyShape.JSON_ARRAY,
+                    "array;rowfields:-:role,content,toolCalls,toolCallId,contentType,toolName,isFinal",
+                    "sessions/<id>.json 的消息行数", ""),
+            new Route("POST", "/api/session/switch", BodyShape.JSON_OBJECT, "object;fields:ok", 
+                    "sessions/_index.json 里该 id 在不在", ""),
+            new Route("POST", "/api/session/delete", BodyShape.JSON_OBJECT, "object;fields:ok",
+                    "sessions/_index.json 里该 id 在不在", ""),
+            // ---- 模型 / 技能 / 定时 / center ----
+            new Route("GET", "/api/models", BodyShape.JSON_OBJECT,
+                    "object;fields:provider,model,count,models,fetchedAt,stale,refreshing;"
+                            + "count-of:models;rowfields:models:id,displayName,provider,contextWindow,"
+                            + "maxOutputTokens,capabilities",
+                    "ModelCatalogCache#catalog()（供应商 GET /v1/models）", ""),
+            new Route("GET", "/api/skill/list", BodyShape.JSON_OBJECT,
+                    "object;fields:instanceCode,count,skillCodes;count-of:skillCodes",
+                    "configDir/skills 下的技能目录数", ""),
+            new Route("GET", "/api/skill/sync", BodyShape.JSON_OBJECT,
+                    "object;fields:ok,installed,instanceCode,timestamp", "", "D-P28-1"),
+            // 同一个 sync 今天有**两个**方法面：控制台 fetch 用 GET（index.html:1368），
+            // 既有单测用 POST（HttpChannelTest.skillEndpointsReportLocalOnlyState）⇒ 两条都登记，
+            // 口径不一致这件事记在 EVIDENCE §1.4，不当成"新方法"。
+            new Route("POST", "/api/skill/sync", BodyShape.JSON_OBJECT,
+                    "object;fields:ok,installed,instanceCode,timestamp", "", "D-P28-1"),
+            new Route("POST", "/api/skill/push", BodyShape.JSON_OBJECT,
+                    "object;fields:ok,installed,instanceCode,timestamp", "", "D-P28-2"),
+            new Route("GET", "/api/cron", BodyShape.JSON_OBJECT,
+                    "object;fields:count,jobs;count-of:jobs;"
+                            + "rowfields:jobs:id,name,prompt,schedule,enabled,lastRun,lastResult",
+                    "CronScheduler#list() 落盘的任务数", ""),
+            new Route("POST", "/api/cron", BodyShape.JSON_OBJECT, "object;fields:ok", "", ""),
+            // center 未配置时这一条只回 {ok,error}；配置了才多 {instanceCode,timestamp} ⇒
+            // 顶层字段按状态分叉，台账只钉"必有的那一列"，分叉本身记 EVIDENCE §1.1。
+            new Route("POST", "/api/agent/register", BodyShape.JSON_OBJECT,
+                    "object;fields:ok", "", "")));
+
+    /** 台账全量（<b>方法</b>粒度）。渲染与断言都从这一张表出发，别处不许再抄一份清单。 */
+    public static List<Route> routes() {
+        return ROUTES;
+    }
+
+    /** 台账里出现过的<b>路径</b>集合 —— 与 dispatch 的字面量一比一对账的就是这个。 */
+    public static List<String> paths() {
+        List<String> out = new ArrayList<String>();
+        for (Route r : ROUTES) {
+            if (!out.contains(r.path())) {
+                out.add(r.path());
+            }
+        }
+        return out;
+    }
+
+    /** 按路径查台账；不在表里 = 未登记的路由（漂移卫兵会红，运行时会 404）。 */
+    public static List<Route> routesOf(String path) {
+        List<Route> out = new ArrayList<Route>();
+        for (Route r : ROUTES) {
+            if (r.path().equals(path)) {
+                out.add(r);
+            }
+        }
+        return out;
+    }
+
+    private static boolean ledgerAllows(String path, String method) {
+        for (Route r : ROUTES) {
+            if (r.path().equals(path) && r.method().equals(method)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String ledgerMethods(String path) {
+        StringBuilder sb = new StringBuilder();
+        for (Route r : ROUTES) {
+            if (r.path().equals(path)) {
+                if (sb.length() > 0) {
+                    sb.append(", ");
+                }
+                sb.append(r.method());
+            }
+        }
+        return sb.length() == 0 ? "OPTIONS" : sb + ", OPTIONS";
+    }
+
     // ===== 路由 =====
 
     private void dispatch(HttpExchange ex) throws IOException {
@@ -141,6 +352,16 @@ public final class HttpChannel {
             cors(ex);
             if ("OPTIONS".equals(method)) {
                 ex.sendResponseHeaders(204, -1);
+                return;
+            }
+            // 台账是唯一的门：不在表里的路径 404，在表里但方法没登记的回 405 + Allow。
+            if (routesOf(path).isEmpty()) {
+                json(ex, 404, error("not found: " + path));
+                return;
+            }
+            if (!ledgerAllows(path, method)) {
+                ex.getResponseHeaders().set("Allow", ledgerMethods(path));
+                json(ex, 405, error(method + " 不是登记方法: " + path + "（登记：" + ledgerMethods(path) + "）"));
                 return;
             }
             if ("/".equals(path) || "/index.html".equals(path) || "/web".equals(path) || "/console".equals(path)) {
@@ -387,6 +608,12 @@ public final class HttpChannel {
             json(ex, 400, error("id 不能为空"));
             return;
         }
+        // 判词必须问过库：原先无条件 ok:true，切到一个不存在的 id 也照样说成功
+        // （SessionManager#switchSession 对未知 id 是静默 no-op，BotAgent#switchSession 又把入参原样返回）。
+        if (!sessionExists(id)) {
+            json(ex, 404, error("未找到会话: " + id));
+            return;
+        }
         agent.switchSession(id);
         json(ex, 200, ok());
     }
@@ -397,8 +624,23 @@ public final class HttpChannel {
             json(ex, 400, error("id 不能为空"));
             return;
         }
+        // 库里没有就是没有：原先 deleteSession("不存在的 id") 也回 ok:true。
+        if (!sessionExists(id)) {
+            json(ex, 404, error("未找到会话: " + id));
+            return;
+        }
         agent.deleteSession(id);
         json(ex, 200, ok());
+    }
+
+    /** 会话在不在库里 —— 只读 {@link BotAgent#listSessions()}，不改 {@code BotAgent} 一个字节。 */
+    private boolean sessionExists(String id) {
+        for (SessionManager.SessionSummary s : agent.listSessions()) {
+            if (id.equals(s.id)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void sessionMessages(HttpExchange ex) throws IOException {
