@@ -404,6 +404,12 @@ def read(path):
         return f.read()
 
 
+def bopen(path):
+    """原始字节。缺文件不当"空集"处理：那是 0 字节，量具要把这条判红而不是判绿。"""
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def table_A(slash_src):
     """P19 之前的形状：`SlashRegistry` 里每条匿名命令的 `name()` 都是纯字面量。
     P19 把名字搬进 `CommandCatalog` 后这里恒为空 —— 现在只当**回归探测器**用
@@ -468,7 +474,9 @@ def table_C(html):
 
 
 def table_D(html):
-    """WIRING §3.4 的尺：`命令列表：` 到下一个反引号+括号 之间的行首 /x。"""
+    """P19 之前的形状：web 侧 `命令列表：` 后面硬抄一份广告清单。搬进 `/api/commands` 之后
+    这里恒为空 ⇒ 与 table_A/table_B 一样只当**回归探测器**（非空 = 有人又手抄了一份广告）。
+    历史口径：`命令列表：` 到下一个反引号+括号 之间的行首 /x。"""
     seg = []
     inside = False
     for line in html.splitlines():
@@ -478,7 +486,7 @@ def table_D(html):
                 continue
             continue
         if "`)" in line:
-            # 最后一条广告和收尾的 `) 在同一行（index.html:1197 的 /exit）。
+            # 最后一条广告和收尾的 `) 在同一行（旧 index.html:1197）。
             # 先收进行再停：早停一个字符，3.4 桶就会从 1 掉成 0（lead_r1 实测假红，
             # 而 WIRING.md 里那条 `/exit 广告了没分支` 其实是对的）。
             seg.append(line)
@@ -486,6 +494,45 @@ def table_D(html):
         seg.append(line)
     body = "\n".join(seg)
     return sorted(set(re.findall(r"^(/[a-z-]+)", body, re.M)))
+
+
+def js_functions(html):
+    """控制台那一个 <script> 块里的顶层函数声明：返回 {名字: [缩进为顶层的行号, …]}。
+
+    顶层 = 缩进等于所有声明里最常见的那个缩进（本文件 36 支全在 4 空格）。这条尺是为
+    "定义了但没人接住"那一类缺陷加的：浏览器层实测 `loadCommands()` 从来没被 INIT 调过
+    ⇒ WEB_COMMANDS 恒空、/help 恒说"命令表没取到"；`newSession` 有两份顶层声明时后声明者
+    胜出 ⇒ 真走 POST /api/sessions 的那一份是死代码。JVM 侧的任何尺都看不见这两件事。
+    """
+    m = re.search(r"<script>(.*?)</script>", html, re.S)
+    if not m:
+        return {}
+    body = m.group(1)
+    decl = re.compile(r"^(\s*)(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(", re.M)
+    found = {}
+    indents = []
+    for idx, line in enumerate(body.splitlines(), 1):
+        d = decl.match(line)
+        if d:
+            found.setdefault((len(d.group(1)), d.group(2)), []).append(idx)
+            indents.append(len(d.group(1)))
+    if not indents:
+        return {}
+    top = max(set(indents), key=indents.count)
+    out = {}
+    for (indent, name), lines in found.items():
+        if indent == top:
+            out[name] = lines
+    return out
+
+
+def js_unreferenced(html, fns):
+    """顶层函数中"整份文件只出现一次（就是它自己那句声明）"的名字 ⇒ 定义了没人接住。"""
+    out = []
+    for name in fns:
+        if len(re.findall(r"\b%s\b" % re.escape(name), html)) <= 1:
+            out.append(name)
+    return sorted(out)
 
 
 def wiring_number(md, key):
@@ -840,7 +887,8 @@ def main():
     # ================= C 组：三张表 + 台账一致性 =================
     slash_src = read(os.path.join(REPO, "z-bot-core/src/main/java/com/zifang/z/bot/slash/SlashRegistry.java"))
     reader_src = read(os.path.join(REPO, "z-bot-core/src/main/java/com/zifang/z/bot/ui/RawTerminalReader.java"))
-    html_src = read(os.path.join(REPO, "z-bot-core/src/main/resources/web/index.html"))
+    index_path = os.path.join(REPO, "z-bot-core/src/main/resources/web/index.html")
+    html_src = read(index_path)
     http_src = read(os.path.join(REPO, "z-bot-core/src/main/java/com/zifang/z/bot/channel/HttpChannel.java"))
     wiring_md = read(os.path.join(HERE, "WIRING.md"))
     # P19 之后：命令名的单源在 CommandCatalog，对外口径是 GET /api/commands 的 endpoints 分段。
@@ -870,16 +918,30 @@ def main():
            stale_A, stale_B, stale_D))
 
     _raw, hs_i, status_i, body_i, _ = raw_http(port_s, "GET", "/console", hard_seconds=20)
-    served_html = body_i.decode("utf-8", "replace")
-    Cs, Ds = table_C(served_html), table_D(served_html)
-    print("SERVED|status=%r bytes=%d C_from_served=%s D_from_served=%s"
-          % (status_i, len(served_html), " ".join(Cs), " ".join(Ds)), flush=True)
     # 状态行是 "HTTP/1.1 200 OK"，endswith("200") 恒假（lead_r1：两份 html 的 C/D 逐条相同却判红）。
     code_i = status_i.split(" ")[1] if len(status_i.split(" ")) > 1 else "?"
-    chk("T1_web_tables_from_disk_equal_from_served_bytes",
-        Cs == C and Ds == D and code_i == "200",
-        "resources 里的 index.html 与 classpath 里被 serve 出去的那份分叉（文档派生尺读的是盘上文件）",
-        "status=%r disk C=%s D=%s served C=%s D=%s" % (status_i, C, D, Cs, Ds))
+    # 这一格在 P19 之前比的是 C/D 两张表（HTML 里那份手抄命令清单是分叉的显形处）。P19 之后
+    # table_D(任何一份 html) 恒空 ⇒ "空 == 空"在两份字节毫无关系时照样绿（lead_r2 实测）。
+    # 换成这条尺能量到的那件事：真进程吐出的字节 == 盘上那份。classpath 那份只打印不判：
+    # serveConsole 是从 classpath 逐字节写的，所以 classes 与 disk 分叉必然带出 served != disk，
+    # 多钉一格只会把判定绑到构建布局上（换成从 jar 起进程就假红）。打印它是为了归因：
+    # served==classes 而 != disk ⇒ target/classes 是旧的；三者两两不同 ⇒ 服务在改写响应体。
+    classes_html = os.path.join(CLASSES, "web", "index.html")
+    disk_b = bopen(index_path)
+    classes_b = bopen(classes_html) if os.path.isfile(classes_html) else None
+    served_b = body_i
+    n = lambda b: -1 if b is None else len(b)
+    dig = lambda b: "-" if b is None else hashlib.md5(b).hexdigest()[:8]
+    print("SERVED|status=%r served=%dB/%s disk=%dB/%s classpath=%dB/%s"
+          % (status_i, len(served_b), dig(served_b), n(disk_b), dig(disk_b),
+             n(classes_b), dig(classes_b)), flush=True)
+    chk("T1_served_console_bytes_equal_disk_html",
+        code_i == "200" and n(disk_b) > 0 and served_b == disk_b,
+        "被 serve 出去的 HTML 与盘上那份分叉（target/classes 没重拷、资源被过滤改写、"
+        "或 serveConsole 不再逐字节写 resource）—— 文档派生尺读的是盘上文件，抓不到这一层",
+        "status=%r served=%dB md5=%s | disk=%dB md5=%s (%s) | classpath=%dB md5=%s (%s)"
+        % (status_i, len(served_b), dig(served_b), n(disk_b), dig(disk_b), index_path,
+           n(classes_b), dig(classes_b), classes_html))
 
     diffs = {
         "3.1 只在服务端注册表": [x for x in A if x not in set(B) | set(C)],
@@ -943,8 +1005,12 @@ def main():
     chk("T4_routes_tsv_equals_dispatch_literals",
         tsv_paths == lit and len(tsv_rows) == ROUTES_ROWS and len(tsv_paths) == ROUTES_PATHS,
         "ROUTES.tsv 手改一个字、或 dispatch 加了路由没登记（M9 型）",
-        "tsv_paths=%d dispatch_literals=%d rows=%d awk_slice_lines=%d diff=%s"
-        % (len(tsv_paths), len(lit), len(tsv_rows), dispatch_lines,
+        # 三个判定项各自表态：lead_p19_emit 那次读着像"diff=[] 却判红"（其实是进程加载的是改常量
+        # 之前的这份尺），消息里分不清是哪一项塌了。取证缺陷也是缺陷。
+        "sets_equal=%s rows_const_ok=%s paths_const_ok=%s | tsv_paths=%d dispatch_literals=%d "
+        "rows=%d awk_slice_lines=%d diff=%s"
+        % (tsv_paths == lit, len(tsv_rows) == ROUTES_ROWS, len(tsv_paths) == ROUTES_PATHS,
+           len(tsv_paths), len(lit), len(tsv_rows), dispatch_lines,
            sorted(set(tsv_paths) ^ set(lit))))
 
     not_found = []

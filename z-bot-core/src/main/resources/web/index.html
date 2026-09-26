@@ -868,6 +868,7 @@
         loadStatus();
         loadTools();
         loadSessions();
+        loadCommands();
         $input.focus();
     });
 
@@ -903,6 +904,23 @@
                 <div class="session-time">${time} (${s.messageCount}条)</div>
             </div>`;
         }).join('');
+        // 删除口：服务端 POST /api/session/delete 早已登记在台账（ROUTES.tsv 第 21 行）并有
+        // 4 例测试，但本页从来没接住过 ⇒ deleteSession() 定义了零引用。这里补上：用
+        // createElement + dataset 绑，不把 id 拼进 HTML 字符串（escapeHtml 不转义引号）。
+        const rows = $sessionList.querySelectorAll('.session-item');
+        for (let i = 0; i < rows.length && i < list.length; i++) {
+            const id = list[i].id;
+            const btn = document.createElement('span');
+            btn.className = 'session-del';
+            btn.title = '删除会话';
+            btn.textContent = '✕';
+            btn.style.cssText = 'float:right;color:var(--text-dim);cursor:pointer;padding:0 6px';
+            btn.addEventListener('click', ev => {
+                ev.stopPropagation();
+                deleteSession(id);
+            });
+            rows[i].appendChild(btn);
+        }
     }
 
     async function newSession() {
@@ -1274,7 +1292,12 @@
     }
 
     // ===== SESSION =====
-    async function newSession() {
+    // 这里曾有第二个 newSession 声明（只 fetch /bot/clear 再把 currentSessionId 编成
+    // 'new_' + Date.now()）。同一个 <script> 里后声明者胜出 ⇒ 上面那个真走 POST /api/sessions
+    // 的实现从来没被执行过：浏览器层实测点"新会话"只发了一条 GET /bot/clear，
+    // 服务端既没建会话、侧栏也不刷新（p28 WIRING §3.6′ 记的 P28b-W1）。删掉假的那一份。
+    async function clearSession() {
+        // /clear 的语义是"清记忆"（服务端 agent.clearMemory() ⇒ "Memory cleared"），不是换会话。
         $messages.innerHTML = '';
         $welcome.classList.remove('hidden');
         msgCount = 0;
@@ -1284,13 +1307,9 @@
         try {
             await fetch('/bot/clear');
         } catch (e) {
+            appendMsg('assistant', '❌ 清空失败：' + e.message, 'error');
+            return;
         }
-        currentSessionId = 'new_' + Date.now();
-        document.getElementById('session-badge').textContent = 'session: new';
-    }
-
-    async function clearSession() {
-        await newSession();
         appendMsg('assistant', '🧹 记忆已清空');
     }
 
@@ -1531,10 +1550,7 @@
         }
     });
 
-    $input.addEventListener('input', () => {
-        $input.style.height = 'auto';
-        $input.style.height = Math.min($input.scrollHeight, 120) + 'px';
-    });
+    $input.addEventListener('input', autoResize);
 
     // auto-resize
     function autoResize() {
