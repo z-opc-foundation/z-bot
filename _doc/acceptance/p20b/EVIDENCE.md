@@ -791,13 +791,30 @@ V1 上一棒原注点：if (cap == ToolDescriptor.UNBOUNDED_RESULT_CHARS || cont
 V2 本棒注点：        → if (content.length() <= (cap == ToolDescriptor.UNBOUNDED_RESULT_CHARS ? 0L : cap)) {
 ```
 
-读数（〔待填：V0/V1/V2 三把的 rc / ran / 红名单 / landed / restored〕）：
+读数（三把，10:53:14-10:55:06，控制台 `~/.cache/zbot-p17/p20d/probe_console.log`，mvn 原文 `logs/mut_p20d_tk5_{V0,V1,V2}.log`）：
 ```
-〔待填〕
+-- V0  控制跑（不注入）
+   rc=0 ran=527 红=无
+   取证 before=4ae1a491cd73b0f1c1ac869db59723ad during=4ae1a491…(同) landed=NO(注入没进盘!) after=4ae1a491… git_show=4ae1a491… restored=ok
+-- V1  上一棒原注点：摘掉析取项（推理上恒真 ⇒ 预期 0 条红）
+   rc=0 ran=527 红=无
+   取证 before=4ae1a491cd73b0f1c1ac869db59723ad during=3819a417c36b6c709628b200b7df5bc5 landed=yes(disk!=git show) after=4ae1a491… git_show=4ae1a491… restored=ok
+-- V2  本棒注点：哨兵当成零上限（预期 unboundedSentinelMeansNoTruncationAtAll 红）
+   rc=1 ran=527 红=unboundedSentinelMeansNoTruncationAtAll
+   取证 before=4ae1a491cd73b0f1c1ac869db59723ad during=aaf853dbff45c9221ce2aa1029d3228e landed=yes(disk!=git show) after=4ae1a491… git_show=4ae1a491… restored=ok
+== 收尾 SRC_MD5_STABLE=yes
 ```
-⇒ V1 若 0 红，"等价变异"成立（`int` 长度提升成 `long` 与 `Long.MAX_VALUE` 比恒真，摘掉析取项不改任何行为），
-**任何用例都判不出来**，补测试救不了它 ⇒ 唯一正确的动作是换**不等价**的注点：
-把"哨兵 = 不设限"顶成"哨兵 = 零上限"，这一改只影响声明 UNBOUNDED 的那批结果，别的工具一律不动（窄注入）。
+三把各要点：
+- **V1 全量 527 条 0 红 ⇒ "等价变异"这句话被实测证实**（不是照抄上一棒推理）：
+  本棒已经把活猎物补进用例之后（V2 能红就是证明），摘掉析取项那一种写法**仍然一条都判不出来**。
+  这不是"测试没猎物"，是"这个写法根本不改变行为" ⇒ 补测试救不了它，唯一正确的动作是换**不等价**的注点。
+- **V2 的 `during` md5 `aaf853db…` 与 §9.0.1 留档的 `logs/LEDGER_subset_1022.tsv` TK5 行
+  `disk_md5_injection` 逐字同** ⇒ 本棒探针注入的字节与第一个实例诊断跑的字节是同一份，两把尺对上了。
+- 还原取证：V1/V2 两把 `landed=yes(disk!=git show)`、`after == git_show`、`restored=ok`，
+  收尾 `SRC_MD5_STABLE=yes`；V0 那把 `landed=NO` 是**故意不注入**，那一格读作"没进盘"正是期望值。
+⇒ 换成不等价的形式：把"哨兵 = 不设限"顶成"哨兵 = 零上限"，
+   这一改只影响声明 UNBOUNDED 的那批结果，别的工具一律不动（窄注入，锚点次数仍 1、判定文本没动）。
+
 
 **用例补活猎物（双向，同一条里两把钥匙）**：`ToolkitResultCapTest.unboundedSentinelMeansNoTruncationAtAll`
 （`z-bot-core/src/test/java/com/zifang/z/bot/tool/ToolkitResultCapTest.java:86-115`）——
