@@ -226,6 +226,59 @@ public class ToolSideInterruptTest {
         }
     }
 
+    // ===== 工具入口：置位之后连进程都不该起 =====
+
+    @Test
+    public void execWithFlagAlreadySetStartsNoChildProcessAtAll() throws Exception {
+        final String token = "9" + (1_000_000 + (int) (System.nanoTime() % 8_000_000L));
+        final Tool exec = BuiltinTools.exec(new Sandbox(sandboxDir.getAbsolutePath()), "off");
+        final String command = "sleep " + token + " & wait";
+
+        InterruptFlag flag = new InterruptFlag();
+        flag.request("用户已按停止");
+        InterruptFlag previous = InterruptScope.bind(flag);
+        try {
+            try {
+                exec.execute(Collections.<String, Object>singletonMap("command", command));
+                fail("已置位时 exec 不许把子进程拉起来");
+            } catch (InterruptFlag.AgentInterruptedException expected) {
+                // ok
+            }
+        } finally {
+            InterruptScope.restore(previous);
+        }
+        assertEquals("入口检查点没拦住：进程表里已经出现了匹配 " + token + " 的进程",
+                0, countProcessesMatching(token));
+
+        // 反空跑对照：同一句命令、同一套代码，旗子没置位时必须在进程表里数得到 ——
+        // 没有这一半，上面那句 assertEquals(0, …) 可以是"命令根本没跑起来"的空跑。
+        final AtomicReference<Throwable> thrown = new AtomicReference<Throwable>();
+        Thread worker = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                InterruptScope.bind(new InterruptFlag());
+                try {
+                    exec.execute(Collections.<String, Object>singletonMap("command", command));
+                    thrown.set(null);
+                } catch (Throwable t) {
+                    thrown.set(t);
+                } finally {
+                    InterruptScope.restore(null);
+                }
+            }
+        }, "p12-control-worker");
+        worker.start();
+        try {
+            long appeared = waitForProcessCount(token, 2, 15_000);
+            assertTrue("对照组里 bash + sleep 两个进程没出现（实测 "
+                    + countProcessesMatching(token) + "），这条对照测不到任何东西", appeared >= 0);
+        } finally {
+            killAllMatching(token);
+            worker.join(15_000);
+        }
+        assertTrue("对照线程没收工，说明 pkill 没生效", !worker.isAlive());
+    }
+
     // ===== 主循环接线 =====
 
     @Test
@@ -291,6 +344,15 @@ public class ToolSideInterruptTest {
             sleep(20);
         }
         return -1;
+    }
+
+    /** 收尾：把对照组拉起来的进程真清掉（pkill 不存在也不能让测试挂死）。 */
+    private static void killAllMatching(String token) {
+        try {
+            new ProcessBuilder("pkill", "-f", token).start().waitFor();
+        } catch (Exception ignored) {
+            // 清不掉由后面的 join 超时兜住
+        }
     }
 
     private static void sleep(long ms) {

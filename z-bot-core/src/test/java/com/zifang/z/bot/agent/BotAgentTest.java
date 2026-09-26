@@ -329,7 +329,25 @@ public class BotAgentTest {
         assertEquals(0, agent.getMemory().size());
         agent.switchSession(oldSession);
         assertEquals(2, agent.getMemory().size());
-        assertEquals("hello", agent.getMemory().getMessages().get(0).getContent());
+        // P12 起「运行时上下文」改道进 user 消息，所以这里不能整串相等，但也不能只写个
+        // contains 了事（那样把上下文搬回 system prompt 都能过）。两条腿都要钉住：
+        //  ① 用户原文仍在 USER 消息里，且按协议分隔符剥头之后**逐字**相等；
+        //  ② 这块运行时上下文（抬头 + 时钟行）不许出现在 system prompt 的任何位置。
+        Msg restored = agent.getMemory().getMessages().get(0);
+        assertEquals(MessageRole.USER, restored.getRole());
+        String stored = restored.getContent();
+        int sep = stored.indexOf(BotAgent.VOLATILE_CONTEXT_FOOTER);
+        assertTrue("user 消息应以运行时上下文头开头，实得:\n" + stored,
+                stored.startsWith(BotAgent.VOLATILE_CONTEXT_HEADER));
+        assertTrue("user 消息里找不到上下文头与原文的分隔符，实得:\n" + stored, sep >= 0);
+        assertEquals("剥掉运行时上下文头之后，用户原文必须逐字相等",
+                "hello", stored.substring(sep + BotAgent.VOLATILE_CONTEXT_FOOTER.length()));
+        String system = agent.getMemory().getSystemPrompt();
+        assertFalse("运行时上下文抬头不许进 system prompt:\n" + system,
+                system.contains(BotAgent.VOLATILE_CONTEXT_HEADER));
+        assertFalse("运行时上下文（时钟）不许进 system prompt:\n" + system,
+                system.contains("当前时间"));
+        assertFalse("用户原文不许被搬进 system prompt:\n" + system, system.contains("hello"));
         assertEquals(oldSession, agent.currentSessionId());
     }
 
