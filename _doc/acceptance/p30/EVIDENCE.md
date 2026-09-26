@@ -228,6 +228,7 @@ C2 那半轴证的是"门不是恒关"：`inbound-secret` 与 `secret` 都没配
   | http `/bot/*` | `:385,388,391,401,415,417,425,427` | 无 | 否 |
 
   hermes 在同位置是"先限量再谈签名"：`plugins/platforms/wecom/callback_adapter.py:57-59`（`# Cap pre-auth request bodies` + `_MAX_BODY = 65_536`）、`:147`（`# (413) before our handler — and before any signature work — runs.`）、`:294`（`web.Response(status=413, text="payload too large")`）。已开任务 #47（P30b：共享的有界读取 + 门在分配之前，配具名测试和两支互补变异：常量层 / 接线层）。
+  **→ 09-27 已闭合**（`InboundLimits` 单一来源 64 KiB、四面共用、门是按字节累加而不是 `Content-Length`、四处 413 映射、鉴权门仍在尺寸门之前）：主体码 `fcbc2fc`、量具 `90f361f`，四杠读数与两处我自己的量具账在 `_doc/acceptance/p30b/EVIDENCE.md`（杠① 3×1194/0/0/0、杠② run1 6/6 + run2 7/7 RED-OK、杠③ 36/36×3、杠④ 不变）。上面那张"门在读之前？"的表是**当时的实测**，保留不改写；它现在只有钉钉那一行仍按原义成立（鉴权排在读之前 ⇒ 未签名的超限 body 先得 401）。飞书是"读了才能验签"，绕不开，它拿的是"读取本身有界 + 413 先于验签"；webhook / 控制台两面本来就没有鉴权门 ⇒ 只剩尺寸门。三种形状各有测试钉住，见 `_doc/acceptance/p30b/EVIDENCE.md` §6。
 
 ---
 

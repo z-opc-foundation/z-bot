@@ -70,6 +70,13 @@ models-cache.json    # 模型目录缓存
 （`channel.http.default-port`）说话，`--port` 覆盖它；启动时打印的是**实际**监听地址，
 绑了通配不会谎报成回环（`channel/HttpChannel.java:93`）。
 
+入站 body 也**只有一个**读取口：`channel/InboundLimits.java`，上限 64 KiB（与 hermes wecom 的
+`_MAX_BODY = 65_536` 同值），飞书 / 钉钉 / webhook / http 四面共用。门是**已读字节数**而不是
+`Content-Length` 头 ⇒ 不带长度的分块上传同样超不过去；超限在把 body 读进堆之前抛出，四个 handler
+各自排在通用 `catch (Exception)` **之前**映射成 413，而鉴权门仍排在尺寸门之前（未签名的超限 body 先得 401）。
+守卫是 `InboundBodyLimitTest`（含"还有谁自己调了 `getRequestBody()`"那支接线守卫），变异检验见
+`_doc/acceptance/p30b/LEDGER.tsv`。
+
 ## 命令面只有一份源
 
 斜杠命令的注册表是唯一单源，TUI / HTTP / web 控制台 / ACP 四个端都从它派生
@@ -104,16 +111,20 @@ mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.
    量具如 `_doc/acceptance/p28/p28_e2e.py`；
 4. **杠④** 测试与 E2E 一个字都不许动 `~/.zbot/`（一律 `--config-dir` 指临时根）。
 
-最近一次目标树读数（`7dc51ba`，09-27 01:0x）：**1158 个测试 ×3 全绿**，
-测试文件 108 个，socket 命中 0，杠④ 三点不变；杠② 三族
+最近一次目标树读数（`90f361f`，09-27 06:5x 复测杠①；README/roadmap/EVIDENCE 是随后落的文档笔，
+被测量的 6 个生产文件 + 新测试类逐字节未变，md5 对账见 `_doc/acceptance/p30b/EVIDENCE.md` §0）：
+**1194 个测试 ×3 全绿**，测试文件 111 个（同一数字三把尺对着读：surefire 合计 1194 == 跑后 111 份
+`*/target/surefire-reports/*.xml` 求和 1194 == 文本 `@Test` 1197 − 注释里的 3 处字样），
+socket 命中 0，杠④ 三点不变；杠② 五族
 P19 8/8 KILLED、P27 21 支 `10 RED-OK / 10 PARTIAL / 1 SURVIVED`、P28 14 支 `13 RED-OK / 1 SURVIVED`
-（两族的 SURVIVED 分别是判为等价的 M13 与故意注入的阳性对照 M5）。
+（两族的 SURVIVED 分别是判为等价的 M13 与故意注入的阳性对照 M5）、P30 15 支与 P30b 7 支全 RED-OK
+（**每族的读数都是它自己收口那一跑的**，不是同一遍扫出来的；跨族汇总别照着这一行做减法）。
 
 ## 明确没做的（别当成已完成）
 
 - **`0.2.0` / `0.3.0` 都没发 Central**，repo1 上只有 `z-bot-core:0.1.0`；P29（抬号 + 发布 + 外部工程真 pull 验证）未开工。
 - 入站的**真凭据握手**仍然零验证：飞书 `{"encrypt": …}` 解密、飞书 **SHA-256** 事件验签、钉钉入站 `sign`+1 小时窗口校验三条 P30 都已实现并具名钉住（`_doc/hermes-roadmap.md` §8.14），但进出站的全部证据仍是"对 127.0.0.1 假端点发出的字节"——本机没有飞书/钉钉凭据。
-- 入站 body 长度**无上限**，四个入站面里只有钉钉把门放在读 body 之前（待做，P30b）；`GET /feishu/event?echostr=` 是验签门外的回显、v1 平铺事件的 `event.content` 没有读取点——这两条在等一份权威出处才动，记账见 `_doc/acceptance/p30/EVIDENCE.md` §6。
+- 入站 body 上限 64 KiB（四面共用、门在分配之前）已闭合（`_doc/hermes-roadmap.md` §8.15）；还没动的是：`GET /feishu/event?echostr=` 是验签门外的回显、v1 平铺事件的 `event.content` 没有读取点——这两条在等一份权威出处才动，记账见 `_doc/acceptance/p30/EVIDENCE.md` §6。
 - `POST /api/skill/push` 的语义（推 vs 拉）尚未裁定（D-P28-2）；`POST /api/agent/register` 该返 200 还是 501 未定。
 - 真 tty 下的人机体验（渲染、光标键、中文宽字符）没有自动化验收，只有 pty 探针取证，记 NO-RUN。
 - `z-bot-desktop-packager` 只有 jpackage 配置，本机没打过 .dmg/.exe/.deb。
