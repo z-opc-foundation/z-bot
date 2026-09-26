@@ -319,7 +319,16 @@ public class BuiltinToolsExecWiringTest {
                 lines++;
             }
         }
-        int exit = p.waitFor();
+        // P22b 永挂体检：原样是 `int exit = p.waitFor();`（无界）。这段参照实现会被杠② 的每一次变异注入
+        // 重跑，而杠② 的锁是全编队共享的 —— 一旦某个变异体让这个 bash 堵在管道上，无界 waitFor 会把锁占死。
+        // 改成有界等待 + 显式判词（超时即判红，绝不静等）；正常退出路径取到的 exit 与原来逐字节相同。
+        boolean finished = p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS);
+        if (!finished) {
+            com.zifang.z.bot.tool.env.ProcessTree.killTree(p);
+            fail("参照实现 legacyBash 的 waitFor 超过 20s 未返回（脚本：" + abbrev(script)
+                    + "）⇒ 判红，不再无界等待");
+        }
+        int exit = p.exitValue();
         String result = out.toString();
         if (maxChars > 0 && result.length() > maxChars) {
             result = result.substring(0, maxChars) + "\n...(已截断)";
