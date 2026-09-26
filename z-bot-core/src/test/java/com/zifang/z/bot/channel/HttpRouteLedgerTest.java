@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -202,6 +203,8 @@ public class HttpRouteLedgerTest {
         byte[] served = Bytes.of(c.getInputStream());
         assertEquals("控制台回的不是 classpath 里那份 index.html",
                 resource.length, served.length);
+        assertArrayEquals("长度相等只证明没截断，不证明 serve 出去的就是那一份字节",
+                resource, served);
     }
 
     // ===== 小工具 =====
