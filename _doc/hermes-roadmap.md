@@ -243,6 +243,12 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
 - **强制并发宽度** (§1#5 的账: 配置项现在是装饰; 改成 `newFixedThreadPool` 或信号量, 且去掉 `static` 使池随 agent 生命周期关闭);
 - 子代理审批自动 deny; 结果摘要上限 + 溢出落文件; async 台账补投递重试次数与保留期。
 - 验收: 配 `max.children=2` 后**同时最多 2 个在跑**的实测证据 (并发探针 + 时间戳), 配置生效前的旧行为也要跑一次作对照。
+- **P27a 实测 (本棒复算)**: §1#5 那句"`agent.delegate.max.children` 被解析后无任何逻辑读取、宽度是装饰"**已不成立** ——
+  `grep -rn 'MaxChildren' z-bot-core/src/main/java` = `BotConfig` 三处 (字段/解析/getter) + `delegate/DelegateManager.java:311` 一个逻辑读点,
+  闸门在 `:318`; 但闸门修之前只数 `RUNNING`, 连发的条目还停在 `QUEUED` 时可越过 `width` ⇒ 本期改成数"非终态",
+  用例 `DelegateManagerLedgerTest#concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth` (width=3 时第 4 条被顶回"并发已满（3/3）")。
+  投递上限 `DelegationDelivery.MAX_DELIVERY_ATTEMPTS=8` 与保留期 `DelegationLedger.LIVE_RETENTION_DAYS=7` 已落 `state.json`
+  (被 `kill -9` 之后仍从盘上读得回尝试数, 见 E2E); 未做: 子代理审批自动 deny、结果摘要 24k 上限+溢出落文件、`static` 线程池随 agent 生命周期关闭。
 
 **P28 前端 parity 收口 (不移植 React)** · 边界 `ui/*.java`, `web/index.html`, `channel/HttpChannel.java`
 - 只做 JLine 侧对等 (多行输入、Ctrl-R 搜索历史、粘贴折叠) 与 web 侧最小可用; **明确不做**她的 Ink 分屏/鼠标选择/滚轮加速 (理由在 §4)。
