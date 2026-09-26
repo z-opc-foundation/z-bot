@@ -122,7 +122,7 @@ MUTANTS = [
 
     ("C2 抛了但不点名缺哪个键", "C-显式降级", "reg",
      '                    + "）缺配置键: " + String.join(", ", lacking)\n',
-     '                    + "）缺配置键（未点名）\n', 1,
+     '                    + "）缺配置键（未点名）"\n', 1,
      ["ChannelRegistryTest#requiresMissingKeysAreNamedExplicitly",
       "ChannelRegistryTest#createAllCollectsFailuresInsteadOfSilentlyDegrading"],
      "报错有、键名没有：用户对着 manifest 猜哪个键没配"),
