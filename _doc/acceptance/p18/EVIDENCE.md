@@ -107,7 +107,16 @@ LEDGER 列（逐字）：`id	family	target	testcase	injection	expected_red_set	v
 | E | 钉钉 webhook 签名 | 签名原文 `timestamp + "\n" + secret`、URL 上 `timestamp`/`sign` 拼接、`errcode != 0` 判定、`scrubUrl` |
 | F | `HttpConsoleChannel` 拆分后 web 面不回归 | `HttpConsoleChannel.name()`、`start()` 的委托、`send()` 的空转 |
 
-实测读数：（待填 —— 脚本跑完直接贴 LEDGER 汇总）
+实测读数（每跑一次的 `#tally` 行都逐字抄，LEDGER 只在脚本里生成）：
+
+| 跑 | 命令 | 汇总（逐字） |
+|---|---|---|
+| run1（13:56，`~/.cache/zbot-p18/bar2_run1.log`） | `python3 -u _doc/acceptance/p18/p18_mutation.py` | `#tally … RED-OK=27\|PARTIAL=0\|GREEN-BUT-MUTATED=1\|BROKEN=1\|NO-RUN=1`；`#mutants_injected 30`、`#baseline_total_full_tests 668`；6 行 `CTRL-*` 全 `OK`；30 行逐条尾部 `还原=True`；跑完 `git diff --name-only` 为空 |
+| run3（run1 之后我只动过 C2 的注入串和杠③ 的量具，预期红集一字未动） | 同一命令 | 见下（跑完即贴） |
+
+`wc -l _doc/acceptance/p18/LEDGER.tsv` = `41` = 1 表头 + 30 变异体 + 6 阳性对照 + 4 汇总行（`#tally`/`#mutants_injected`/`#baseline_total_full_tests`/`#generated_by`）。
+
+一次本棒自己造成的中断（不藏）：14:07 杠② 的第二次重跑刚过 6 族阳性对照（LEDGER 只写到 `CTRL-D`）就被我用 `kill -9` 打断 —— 因为同一 worktree 里不能同时有两件改 `src` 的事在飞（我要做 F2 对撞实验）。那份半成品**没有**提交（`git checkout -- _doc/acceptance/p18/LEDGER.tsv`），被打断的注入也随 `git checkout` 还原（`md5 -q ChannelRegistry.java` = `d59b339c0404e6104b2262ed416c2233` 与 HEAD 同值，`git status --porcelain` 对 `z-bot-core/src` 干净）。下表汇总是随后完整跑出的那一份。
 
 ### 阳性对照（每族先跑 `injection=NONE`，猎物进不来就不给分）
 
@@ -152,7 +161,44 @@ LEDGER 列（逐字）：`id	family	target	testcase	injection	expected_red_set	v
 - (c) 无凭据路径 ⇒ 进程 stderr 原文进本文 §3。
 - 收尾：`lsof -nP -iTCP -sTCP:LISTEN` 复扫 + `ps -o lstart` 分清每个 pid 是不是本次跑的。
 
-实测读数：（待填）
+实测读数（`python3 -u _doc/acceptance/p18/p18_e2e.py` 整跑 ×3 + 还原后复核 ×1；日志 `~/.cache/zbot-p18/bar3_full_r{1,2,3,4}.log`，`.gitignore` 里 `*.log` 收不走，故决定性读数逐字抄在这里）：
+
+| 跑 | 范围 | 汇总行（逐字） |
+|---|---|---|
+| r1 | A+B+C+H | `PASS=38 FAIL=0 用时 14.5s` |
+| r2 | A+B+C+H | `PASS=38 FAIL=0 用时 11.3s` |
+| r3 | A+B+C+H | `PASS=38 FAIL=0 用时 5.9s` |
+| r4 | A+B+C+H（F2 还原、jar 与 HEAD 源码一致后复跑） | `PASS=38 FAIL=0 用时 5.3s`，脚本 `R4_RC=0` |
+
+38 支全部有名（逐条点名，不数行数）：
+
+- **A 段 20 支**（真 JVM + 进程内假 IM 端点，按**服务端收到**的字节断言）：A1 控制台端口在听（`lsof` 按 pid 过滤）、A2 `GET /index.html` 状态码+形状、A3 第四层 manifest 真进 `通道声明来源`、A4 feishu/dingtalk 真被产出、A5 入站 200 `{"ok":true}`、A6 假端点收到 token 换取、A7 token 请求体 `app_id`/`app_secret` 逐键＝manifest 声明值、A8 `Content-Type: application/json`、A9 假端点收到 `/im/v1/messages`、A10 `Authorization: Bearer <刚换来的那个 token>`、A11 `receive_id_type=chat_id`（声明值，不是缺省 `open_id`）、A12 发送体三字段 `receive_id`/`msg_type`/`content`、A13 过线原文（请求行/Host/Content-Length）、A14 两次发送只换一次 token（缓存真生效）、A15 钉钉入站 200 且假端点收到 `/robot/send`、A16 query 带 `access_token`+`timestamp`+`sign`、A17 `sign` 独立重算比对、A18 钉钉体 `msgtype=text` 且 `text.content` 就是回复串、A19 真域名零外连、A20 A 段 JVM 已收尸。
+- **B 段 7 支**（投递途中 `kill -9` × P16 `DeliveryLedger` 对账）：B1 单路 gateway 起来、B2 `rc=-9 在飞请求=1`、B3 kill 时刻无 `delivered`、B4 同一数据根重启后又起来、B5 重启后 `delivered` 行能在假端点收到的 body 里找到同文、B6 恢复语义仍走 P16（标记串从被测源码读）、B7 未送达义务没被抹掉。
+- **C 段 6 支**（无凭据路径与第四层不许静默）：C1 报错点名 `app-id, app-secret`、C2 点名到实例名 `feishu`、C3 显式降级而不是崩（进程仍活、控制台仍可服务）、C4 缺凭据时假端点零请求、C5 stdout 有"不是静默降级"这一行、C6 `--channel-manifest` 指向不存在文件 ⇒ `rc=1` 且点名文件。
+- **H 段 5 支**（收尾卫生）：H1 JVM 全部收尸、H2 端口全部释放、H3 `ps -o lstart` 复核、H4 真数据根三条读数不变、H5 现场文件里没有 100+ 字符令牌串（正控＝125 字符合成串能命中）。
+
+关键逐字读数（r1/r2/r3 三次相同，说明不是靠撞运气）：
+
+- (a) 过线原文（A13，服务端视角）：`first_line=POST /open-apis/im/v1/messages?receive_id_type=chat_id HTTP/`；A10 `authorization=Bearer t-fake-002`；A12 `receive_id=p2p:oc_a1 msg_type=text content={"text":"P18-E2E-REPLY-001"}`；A19 `JVM TCP 行=6 其中非回环=0；假端点收到=4 对端=['127.0.0.1']（阳性对照：收到数>=4）`。
+- (b) 断点重投：B2 `rc=-9 在飞请求=1` ⇒ kill 确实落在投递途中；B3 `rows=1 状态分布={'attempting': 1} 在飞=1` ⇒ 此刻台账里**没有** `delivered`；B5（重启后）`rows=1 状态分布={'delivered': 1} 假端点 send=2` ⇒ 收敛由 P16 的重投完成；B6 `RECOVERED_MARKER 前 24='♻️ 断点重投 —— 网关在投递途中重启过，这条'`；B7 `仍非 delivered 的行=0`。台账只在 `state.db` 的**副本**上用 `sqlite3` 读。
+- (c) 无凭据路径 stderr 原文（C1 两行）已逐字进 §3。
+- 收尾：H4 `n=8 config=2dadaed0 state=690ddbc0`，脚本自身末尾再报一次 `数据根条目 before/after=8/8`。
+
+一处不粉饰的账（量具的，不是产品的）：B3 第一版判 `FAIL`（kill 时刻读到 `{'delivered': 1}`）—— 因为我的假端点**答完才入账**，`kill -9` 于是落在投递完成之后，B2/B3 的"途中"是假的。改成"到达即入账"并给 B3 自带正控（`rows>=1 且 delivered==0`，同时 B2 断言在飞数=1）之后才拿到 `{'attempting': 1}`。复算：`git log --oneline -4 -- _doc/acceptance/p18/p18_e2e.py`（`14dad64` 到达即入账、`64beebc` A2 不许量具自己栈炸）。
+
+### F2 对撞实验（杠② 的 `NO-RUN` 行到底有没有杀手）
+
+杠② 里 `F2`（`HttpConsoleChannel.start()` 不委托 `inner.start()`）在单测层配不到猎物 ⇒ 判 `NO-RUN`。杀手实测在杠③：
+
+```bash
+# 1) 逐字注入 p18_mutation.py 的 F2 串：inner.start(); → // 变异：不委托
+# 2) mvn -o -DskipTests package -pl z-bot-core        # BUILD_RC=0
+# 3) P18_ONLY=A python3 -u _doc/acceptance/p18/p18_e2e.py   # A 段 + H 段 = 25 支
+```
+
+读数（`~/.cache/zbot-p18/f2_xp_A2.log`）：`FAIL A1 ... pid=33941 listening=0 alive=True`、`FAIL A2 ... GET 直接被拒（端口没人听）: URLError(ConnectionRefusedError(61, 'Connection refused'))`，而 A3–A19、A20、H1–H5 全 `PASS`（出站面一点没坏），汇总 `PASS=23 FAIL=2 用时 49.3s`、脚本 rc=1。⇒ F2 打掉的恰好只有 web 面，A1/A2 是有牙的。
+
+还原复核：`md5 -q z-bot-core/src/main/java/com/zifang/z/bot/channel/HttpConsoleChannel.java` = `79f01adf3aeff05e4cf04b5e0ba84fea`，与 `git show HEAD:...HttpConsoleChannel.java | md5 -q` 同值；`git status --porcelain` 对 `z-bot-core/src` 干净，重建 jar（`~/.cache/zbot-p18/cleanbuild.log` `BUILD SUCCESS`）后整跑 r4 复验。
 
 ## 杠④ 用户数据根未被触碰
 
@@ -165,7 +211,7 @@ md5 -q ~/.zbot/state.db | cut -c1-8
 | 时点 | `ls -A ~/.zbot \| wc -l` | config.properties md5 前 8 | state.db md5 前 8 |
 |---|---|---|---|
 | T1 开工（13:40:10） | `8` | `2dadaed0` | `690ddbc0` |
-| T2 杠② 在飞 | （待填） | （待填） | （待填） |
+| T2 杠② 在飞（14:13 前后，含杠③ 全程与 F2 对撞） | `8` | `2dadaed0` | `690ddbc0` |
 | T3 收尾 | （待填） | （待填） | （待填） |
 
 T1 列出的 8 项：`.stty.bak`、`config.properties`、`cron`、`memories`、`models-cache.json`、`sessions`、`state.db`、`workspace` —— `cron` 是空目录、`.stty.bak` 均**未删**（工单红线）。
@@ -178,5 +224,7 @@ T1 列出的 8 项：`.stty.bak`、`config.properties`、`cron`、`memories`、`
 4. **未做 ServiceLoader/内核侧 SPI**：`z-agent-kernel-app:0.2.1` 是空模块（§0-6），本期注册表完全落在 z-bot 侧，内核仓一个字节未动。
 5. **未接 `BotConfig`**：`config/BotConfig.java` 是禁改区（P21 在飞），通道配置入口只有 `<configDir>/channels.properties` + `--channel-manifest`；`rawProps` 无公开 getter，本期没有从 BotConfig 读通道键。
 6. **未做出站重试/退避**：飞书只做"token 被判废 ⇒ 作废缓存重取一次并重发一次"，其余失败按 P16 语义记 `failed`，没有新增定时器或队列。
-7. （待填：杠② 若出现 `GREEN-BUT-MUTATED`/`NO-RUN`，逐条落到这里，不粉饰）
+7. **杠② 台账里剩下的三笔**（`LEDGER.tsv` 里都在，不在这里圆场）：`D10` = `GREEN-BUT-MUTATED`（→ 第 8 条）；`F2` = `NO-RUN`（单测层配不到猎物，杀手改由杠③ 的 A1/A2 承担并做了对撞实验，见 §杠③ 末尾）；`C2` = 第一跑判 `BROKEN`（我的注入串漏了收尾引号 ⇒ 编译不过，属量具自坏，已修，由 run3 复验）。其余 27 笔 `RED-OK`、`PARTIAL` 0 笔。
+8. **`FeishuChannel.verifySignature` 是"广告了但没接线"的入站签名能力**：生产码里没有调用方（`git grep -n verifySignature -- 'z-bot-core/src'` ⇒ main 侧唯一命中就是它自己的定义 `FeishuChannel.java:663`，test 侧 4 处），也没有一支断言"错签名必须被拒" ⇒ 把它改成恒真没有任何测试变红（LEDGER `D10` 行）。本期**未做**：把 `verifySignature` 接进 `handleEvent` 的入站鉴权路径并补负例断言；真被接线的那道门是 `verificationToken` 比对（`D9` 判红）。
+9. **杠③ 只跑单实例 gateway**：没有做"两个 gateway 抢同一 `state.db` 时的并发投递"验证（那是 P16 `DeliveryLedger` 的锁语义，本期只在其上重投，未另加断言）；也没有覆盖"飞书真返回业务错误码时的分类"端到端 —— `DeadTargets` 分类只在单测层由假端点返回码驱动（`FeishuOutboundTest#chatLevelNotFoundIsClassifiedAsDeadTarget`），杠③ 的假端点全部返回 200 形状。
 
