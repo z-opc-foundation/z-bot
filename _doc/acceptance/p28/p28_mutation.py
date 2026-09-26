@@ -35,6 +35,9 @@ TERM = "z-bot-core/src/main/java/com/zifang/z/bot/channel/TerminalChannel.java"
 CLS_TERM = "z-bot-core/target/classes/com/zifang/z/bot/channel/TerminalChannel.class"
 WEB = "z-bot-core/src/main/resources/web/index.html"
 CLS_WEB = "z-bot-core/target/classes/web/index.html"
+README = "README.md"
+ZBOT = "z-bot-core/src/main/java/com/zifang/z/bot/ZBot.java"
+CLS_ZBOT = "z-bot-core/target/classes/com/zifang/z/bot/ZBot.class"
 LEDGER = os.path.join(REPO, "_doc/acceptance/p28/LEDGER.tsv")
 BAK = os.path.join(CACHE, "mutbak")
 JARLESS_CP = os.path.join(REPO, "z-bot-core/target/test-classes") + ":" + os.path.join(REPO, "z-bot-core/target/classes")
@@ -184,6 +187,18 @@ MUTANTS = [
          old='onclick="clearSession()"', new='onclick="clearSessioon()"',
          gate="mvn", mvn="WebConsoleWiringTest#everyInlineHandlerNamesAnExistingConsoleFunction",
          red=None, expect="点下去就是 ReferenceError，必须在编译期之前被结构尺拦住"),
+    # M15/M16：README 是对外第一面，它写死的每个数都得有人问代码"现在还是吗"（ReadmeClaimsTest）。
+    # 预期红集现在（09-27 01:3x）写死，跑之前不改；M15 打文档侧漂移，M16 打代码侧漂移 ——
+    # 同一把尺的两端各钉一次，避免"只证明了改文档会红"这种半边覆盖。
+    dict(id="M15", file=README, cls=None, name="README 的路由行数手改一个字（文档与台账分家）",
+         old="**26 行（方法粒度）", new="**27 行（方法粒度）",
+         gate="mvn", mvn="ReadmeClaimsTest#everyQuantitativeReadmeClaimMatchesTheRecomputation",
+         red=None, expect="README 的定量主张必须等于 HttpChannel.routes() 的重算值；手抄就是第二份清单"),
+    dict(id="M16", file=ZBOT, cls=CLS_ZBOT, name="从 CLI 注解里摘掉一支子命令（README 仍列着它）",
+         old="StatusCommand.class, SessionsCommand.class, SendCommand.class, PairCommand.class,",
+         new="StatusCommand.class, SessionsCommand.class, SendCommand.class,",
+         gate="mvn", mvn="ReadmeClaimsTest#everyQuantitativeReadmeClaimMatchesTheRecomputation",
+         red=None, expect="顶层子命令支数与名单都必须跟 @Command(subcommands=…) 对齐（少一支 ⇒ 支数与名单双双红）"),
 ]
 
 
