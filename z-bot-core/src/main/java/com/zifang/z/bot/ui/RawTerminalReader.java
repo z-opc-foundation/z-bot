@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Raw-mode terminal 输入读取器 — 实现 Tab 补全、方向键、Backspace 等交互。
@@ -68,13 +69,76 @@ public final class RawTerminalReader implements AutoCloseable {
                 || os.contains("freebsd") || os.contains("openbsd");
     }
 
-    private static boolean isSttyAvailable() {
+    /**
+     * 外部子进程（{@code which stty} / {@code stty raw} / {@code stty <恢复>}）的<b>有界</b>等待。
+     *
+     * <p>原先三处都是无参 {@code waitFor()}：{@code stty} 挂在 tty 驱动上时读线程永不到来，
+     * 整个 REPL 静死，而测试里它<b>既不红也不返回</b> —— 一把能占死全局变异锁的雷
+     * （P22 记过 {@code :238/:252}，本棒复算发现 {@code :74} 还有第三处同型的）。</p>
+     */
+    static final long EXTERNAL_WAIT_TIMEOUT_MS = 5000L;
+
+    /** 一次外部 stty 调用的显式判词 —— 超时/非零/异常各走各的，不再揉进"静悄悄"。 */
+    public enum ExternalVerdict {
+        /** 正常退出且 0 */
+        DONE,
+        /** 超 {@link #EXTERNAL_WAIT_TIMEOUT_MS} 没回来，已被 destroyForcibly 砍掉 */
+        TIMED_OUT,
+        /** 回来了但退出码非 0（不在 tty 上跑 stty 就是这个） */
+        NONZERO_EXIT,
+        /** 连进程都没起来（没 stty / 没 sh / IO 异常） */
+        SPAWN_FAILED
+    }
+
+    private volatile ExternalVerdict enableVerdict = null;
+    private volatile ExternalVerdict restoreVerdict = null;
+
+    /** {@code stty raw -echo} 那一步的判词；null = 压根没走 raw 分支（非 Unix 或没有 stty）。 */
+    public ExternalVerdict rawSwitchVerdict() {
+        return enableVerdict;
+    }
+
+    /** {@code close()} 时还原终端那一步的判词；null = 没还原过。 */
+    public ExternalVerdict restoreVerdict() {
+        return restoreVerdict;
+    }
+
+    /** {@code stty -g} 的落点路径（{@link #close()} 里会被删掉）；测试据此核对"备份有没有还原"。 */
+    String sttyBackupPath() {
+        return sttyBackup;
+    }
+
+    /** 有界地跑一个子进程并给判词；任何情况下都不把调用方挂住。 */
+    private static ExternalVerdict runBounded(String... argv) {
+        Process p = null;
         try {
-            Process p = new ProcessBuilder("which", "stty").start();
-            return p.waitFor() == 0;
+            p = new ProcessBuilder(argv)
+                    // stdin 必须继承本进程的 fd 0：`stty` 是拿 **stdin 这个 fd** 当被操作
+                    // 对象的，ProcessBuilder 缺省给的是管道 ⇒ 真终端上 stty 也永远报
+                    // "not a tty"，raw 模式在改动前后其实从没切成功过（p28b 杠③ 用真 PTY
+                    // 才看见：判词恒为 NONZERO_EXIT，且父端同时收到 tty 回显 + 应用回显的
+                    // 双份字节）。这一步继承之后，真 PTY 上判词才成其为 DONE。
+                    .redirectInput(ProcessBuilder.Redirect.INHERIT)
+                    .redirectOutput(ProcessBuilder.Redirect.to(new File("/dev/null")))
+                    .redirectError(ProcessBuilder.Redirect.to(new File("/dev/null")))
+                    .start();
+            if (!p.waitFor(EXTERNAL_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                p.destroyForcibly();
+                // 收尸也是有界的：砍完还不走就认 TIMED_OUT，绝不无限等
+                p.waitFor(EXTERNAL_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                return ExternalVerdict.TIMED_OUT;
+            }
+            return p.exitValue() == 0 ? ExternalVerdict.DONE : ExternalVerdict.NONZERO_EXIT;
         } catch (Exception e) {
-            return false;
+            if (p != null) {
+                p.destroyForcibly();
+            }
+            return ExternalVerdict.SPAWN_FAILED;
         }
+    }
+
+    private static boolean isSttyAvailable() {
+        return runBounded("which", "stty") == ExternalVerdict.DONE;
     }
 
     /**
@@ -235,10 +299,14 @@ public final class RawTerminalReader implements AutoCloseable {
             // 保存当前设置（"sane"），切换到 raw -echo
             File bak = File.createTempFile("zbot-stty-", ".bak");
             sttyBackup = bak.getAbsolutePath();
-            Runtime.getRuntime().exec(new String[]{"sh", "-c",
-                    "stty -g 2>/dev/null > \"$1\"; stty raw -echo 2>/dev/null", "zbot",
-                    sttyBackup}).waitFor();
+            enableVerdict = runBounded("sh", "-c",
+                    "stty -g 2>/dev/null > \"$1\"; stty raw -echo 2>/dev/null", "zbot", sttyBackup);
+            if (enableVerdict == ExternalVerdict.TIMED_OUT) {
+                System.err.println("[RawTerminalReader] stty raw 切换 " + EXTERNAL_WAIT_TIMEOUT_MS
+                        + "ms 没回来，已砍掉子进程；本次按键按 raw 帧解析，终端可能没真切过去");
+            }
         } catch (Exception e) {
+            enableVerdict = ExternalVerdict.SPAWN_FAILED;
             // fallback: ignore — reader will still work in line mode if raw failed
         }
     }
@@ -247,12 +315,18 @@ public final class RawTerminalReader implements AutoCloseable {
         try {
             // 恢复保存的设置；备份只属于本进程，读完即删
             if (sttyBackup == null) {
+                // 没备份 = 从没切过 raw，还原这一步没有判词可言
                 return;
             }
-            Runtime.getRuntime().exec(new String[]{"sh", "-c",
+            restoreVerdict = runBounded("sh", "-c",
                     "if [ -s \"$1\" ]; then stty \"$(cat \"$1\")\" 2>/dev/null; fi;"
-                            + " rm -f \"$1\"", "zbot", sttyBackup}).waitFor();
+                            + " rm -f \"$1\"", "zbot", sttyBackup);
+            if (restoreVerdict == ExternalVerdict.TIMED_OUT) {
+                System.err.println("[RawTerminalReader] 终端还原 " + EXTERNAL_WAIT_TIMEOUT_MS
+                        + "ms 没回来，已砍掉子进程；终端可能留在 raw 模式，必要时手敲 stty sane");
+            }
         } catch (Exception e) {
+            restoreVerdict = ExternalVerdict.SPAWN_FAILED;
             // ignore
         } finally {
             sttyBackup = null;
