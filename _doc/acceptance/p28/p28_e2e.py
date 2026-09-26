@@ -21,6 +21,7 @@
 退出码：0=判词全过 / 1=有 CHECK 失败 / 2=环境或构建缺失（NO-RUN）/ 3=量具自己抛异常
 """
 
+import atexit
 import hashlib
 import json
 import os
@@ -66,6 +67,11 @@ WIRING_BUCKETS = {
 }
 ROUTES_PATHS = 22
 ROUTES_ROWS = 25
+
+# 一帧的语法：`event: <name>\ndata: <单行正文>`，帧与帧之间由 \n\n 分隔（分隔符已被 split 吃掉，
+# 所以帧内没有收尾 \n —— 原先内联写的 `\n$` 就是这个意思上的错，三帧全被判"语法坏"）。
+# 用 \Z 而非 $：$ 会放过"帧尾多一个 \n"的坏形状。提到模块级是为了能被离线探针喂真字节自证。
+FRAME_RE = re.compile(rb"^event: ([a-z_]+)\ndata: ([^\n]*)\Z")
 
 CHECKS = []
 
@@ -515,7 +521,7 @@ def main():
     os.makedirs(CFG)
     print("E2E|run=%s repo=%s out=%s" % (RUN_TAG, REPO, OUT), flush=True)
 
-    home_line0, home_names0, home_st0 = bar4("t0_before_build")
+    _l0, home_names0, home_st0 = bar4("t0_before_build")
 
     t0 = time.time()
     rc_build, build_out = sh(["mvn", "-o", "-pl", "z-bot-core", "test-compile"],
@@ -540,7 +546,7 @@ def main():
     cp = os.path.join(CLASSES, "") + os.pathsep + dep_cp
     cp_probe = TESTCLASSES + os.pathsep + CLASSES + os.pathsep + dep_cp
 
-    bar4("t1_after_build")
+    _l1, names1, st1_map = bar4("t1_after_build")
 
     with open(os.path.join(CFG, "config.properties"), "w", encoding="utf-8") as f:
         f.write("provider=minimax\n"
@@ -635,6 +641,21 @@ def main():
     srv = subprocess.Popen(["java", "-cp", cp, ZBOT, "serve", "--port", str(port_s),
                             "--config-dir", CFG],
                            cwd=REPO, stdout=srv_log, stderr=subprocess.STDOUT, env=env)
+
+    def _reap(_srv=srv, _log=srv_log):
+        # 量具自己在 B/C 组中途抛异常时（lead_r1 之前那一崩就是），回收步骤（下面 D 组那句
+        # srv.terminate）根本走不到，serve 子进程就永久漏在机器上 —— 已实测漏出 3 个 JVM。
+        # 挂在 atexit 上：正常路径重复 terminate 已退出的进程无害。
+        if _srv.poll() is None:
+            _srv.terminate()
+            try:
+                _srv.wait(timeout=5)
+            except Exception:
+                _srv.kill()
+                _srv.wait()
+        _log.close()
+
+    atexit.register(_reap)
     up = ""
     t_up = time.time()
     while time.time() - t_up < 60:
@@ -718,7 +739,7 @@ def main():
         # 帧内不存在收尾 \n。原先的 `\\n$` 让三帧全部判"语法坏"，parsed 空 ⇒ S5/S6/S7 一起空跑红。
         # 用 \\Z 而不是 $：`$` 会放过"帧尾多一个 \\n"的坏形状。
         # 牙还在：data 里若漏出裸换行，帧里就多出第三行，[^\n]*$ 之后剩内容 ⇒ 整帧不匹配 ⇒ 红。
-        m = re.match(rb"^event: ([a-z_]+)\ndata: ([^\n]*)\Z", f, re.S)
+        m = FRAME_RE.match(f)
         if not m:
             grammar_ok = False
             grammar_bad = f[:60].decode("utf-8", "replace")
@@ -921,11 +942,16 @@ def main():
     # 原先这里是 `names2, st2_map, _ = bar4(...)[1], None, None` + `st2_map_ok()` 恒 return True：
     # md5 那半边**从未参与判定**（细节行里印的就是 md5=None），一条把真 key 换掉的写盘也拦不住。
     # 现在三个时点的 (目录名, config/state 两个 md5) 都进等式，且不许 MISSING。
+    # 三个时点彼此相等 **且** 等于工单钉的那两个常量 —— BAR4_CFG/BAR4_DB 在本文件里定义了
+    # 却一处都没读（lead_r1 时是死常量），只比"前后一致"的话，一跑从一开始就读到坏 profile
+    # 也会自洽地绿。
     chk("U1_bar4_three_timepoints_unchanged",
-        home_names0 == names2 and home_st0 == st2_map
-        and "MISSING" not in st2_map.values() and len(names2) == 8,
+        home_names0 == names1 == names2 and home_st0 == st1_map == st2_map
+        and st2_map.get("config.properties") == BAR4_CFG
+        and st2_map.get("state.db") == BAR4_DB and len(names2) == 8,
         "任何一处往真 profile 写东西（比如把 ~/.zbot 当缺省 configDir）",
-        "names %d->%d md5 t0=%s t2=%s" % (len(home_names0), len(names2), home_st0, st2_map))
+        "names %d->%d->%d md5 t0=%s t2=%s 期望 cfg=%s db=%s"
+        % (len(home_names0), len(names1), len(names2), home_st0, st2_map, BAR4_CFG, BAR4_DB))
     chk("U2_real_key_never_read_and_stub_only_on_the_wire",
         all(STUB_KEY in a or a == "<none>" for a in auths) and auths,
         "把真 key 打进请求（Authorization 里出现非 stub 值）",
@@ -933,12 +959,18 @@ def main():
     chk("U3_serve_process_reaped", out_kill.strip() == "",
         "子进程没被回收（量具自己漏进程）",
         "ps_says=%r" % out_kill.strip()[:60])
+    # 最后一支原先写成 `isdir(CFG/sessions) != isdir(BAR4_HOME)`：两个操作数都是 True，
+    # 等式恒假 ⇒ 这条守卫在"用没用真 profile"上从来没有判据（lead_r1 实测 FAIL，
+    # 而它红的原因和它想防的事毫无关系）。要问的是"这两个目录不是同一个、且真在临时根下"。
+    real_cfg, real_home = os.path.realpath(CFG), os.path.realpath(BAR4_HOME)
     chk("U4_temp_profile_used_not_real_home",
         os.path.isfile(os.path.join(CFG, "config.properties"))
         and STUB_KEY in read(os.path.join(CFG, "config.properties"))
-        and os.path.isdir(os.path.join(CFG, "sessions")) != os.path.isdir(BAR4_HOME),
+        and os.path.isdir(os.path.join(CFG, "sessions"))
+        and real_cfg != real_home
+        and not real_cfg.startswith(real_home + os.sep),
         "E2E 用了真 profile（杠④ 立刻会被写花）",
-        "cfg=%s files=%s" % (CFG, sorted(os.listdir(CFG))[:8]))
+        "cfg=%s real=%s files=%s" % (CFG, real_cfg, sorted(os.listdir(CFG))[:8]))
 
     fails = [c for c in CHECKS if not c[1]]
     print("E2E|run=%s checks=%d pass=%d fail=%d llm_hits=%d serve_port=%d result=%s"
@@ -948,10 +980,6 @@ def main():
         print("FAILED_CHECK|%s|%s" % (name, detail), flush=True)
     print("ARTIFACTS|%s" % sorted(os.listdir(OUT)), flush=True)
     sys.exit(0 if not fails else 1)
-
-
-def st2_map_ok(st):
-    return True   # 真正的等式在 U1 里由 names + 下面这行共同判
 
 
 def unescape(s):
