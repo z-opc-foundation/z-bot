@@ -41,7 +41,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-REPO = "/private/tmp/zbot-wt-p26"
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(REPO, "z-bot-core/target/z-bot-core.jar")
 DRIVER_SRC = os.path.join(REPO, "_doc/acceptance/p26/P26E2eDriver.java")
 ROOT = os.path.expanduser("~/.cache/zbot-p26-lead/e2e")
