@@ -408,6 +408,16 @@ public class HttpSseContractTest {
     private static final class SseStream {
         private HttpURLConnection conn;
         private InputStream in;
+
+        /**
+         * p28a 死于 150 轮时漏掉了这个构造器：{@link #open} 在 :377 用
+         * {@code new SseStream(conn)}，而这里只有隐式无参构造 ⇒ testCompile 直接
+         * COMPILATION ERROR（并且即便绕过，close() 里的 conn.disconnect() 也会 NPE）。
+         * 本棒补回最小原样实现，不改 open() 侧的任何取数逻辑。
+         */
+        SseStream(HttpURLConnection conn) {
+            this.conn = conn;
+        }
         private int status;
         private String statusLine;
         private java.util.Map<String, String> headers = new java.util.LinkedHashMap<String, String>();
