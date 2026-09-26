@@ -496,25 +496,79 @@ def table_D(html):
     return sorted(set(re.findall(r"^(/[a-z-]+)", body, re.M)))
 
 
+SCRIPT_OPEN = re.compile(r"^\s*<script[^>]*>\s*$")
+SCRIPT_CLOSE = re.compile(r"^\s*</script>\s*$")
+
+
+def _strip_js_comments(lines):
+    """逐行抹掉 JS 注释（// 与 /* */），尊重引号 ⇒ 字符串里的 `//` 不会被当注释。"""
+    out = []
+    in_block = False
+    for line in lines:
+        buf, quote, i, n = [], None, 0, len(line)
+        while i < n:
+            c = line[i]
+            if in_block:
+                in_block = not (c == "*" and line[i + 1:i + 2] == "/")
+                i += 2 if not in_block else 1
+                continue
+            if quote:
+                buf.append(c)
+                if c == "\\" and i + 1 < n:
+                    buf.append(line[i + 1])
+                    i += 2
+                    continue
+                if c == quote:
+                    quote = None
+            elif c in "\"'`":
+                quote = c
+                buf.append(c)
+            elif c == "/" and line[i + 1:i + 2] == "/":
+                break
+            elif c == "/" and line[i + 1:i + 2] == "*":
+                in_block = True
+                i += 1
+            else:
+                buf.append(c)
+            i += 1
+        out.append("".join(buf))
+    return out
+
+
+def js_script_lines(html):
+    """真 <script> 块里的行 ⇒ {文件行号: 去注释后的文本}。
+
+    只认**独占一行**的标签：修复后的 index.html 里有一句注释写着"同一个 <script> 里后声明者
+    胜出"，按 `<script>` 字符串配对的解析器会把这个字面量当标签（实测过一次误判）。
+    """
+    lines = html.split("\n")
+    idx, inside = [], False
+    for i, line in enumerate(lines, 1):
+        if SCRIPT_OPEN.match(line):
+            inside = True
+            continue
+        if SCRIPT_CLOSE.match(line):
+            inside = False
+            continue
+        if inside:
+            idx.append(i)
+    return dict(zip(idx, _strip_js_comments([lines[i - 1] for i in idx])))
+
+
 def js_functions(html):
-    """控制台那一个 <script> 块里的顶层函数声明：返回 {名字: [缩进为顶层的行号, …]}。
+    """控制台 <script> 块里的顶层函数声明：返回 {名字: [顶层行号, …]}。
 
     顶层 = 缩进等于所有声明里最常见的那个缩进（本文件 36 支全在 4 空格）。这条尺是为
     "定义了但没人接住"那一类缺陷加的：浏览器层实测 `loadCommands()` 从来没被 INIT 调过
     ⇒ WEB_COMMANDS 恒空、/help 恒说"命令表没取到"；`newSession` 有两份顶层声明时后声明者
     胜出 ⇒ 真走 POST /api/sessions 的那一份是死代码。JVM 侧的任何尺都看不见这两件事。
     """
-    m = re.search(r"<script>(.*?)</script>", html, re.S)
-    if not m:
-        return {}
-    body = m.group(1)
-    decl = re.compile(r"^(\s*)(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(", re.M)
-    found = {}
-    indents = []
-    for idx, line in enumerate(body.splitlines(), 1):
+    decl = re.compile(r"^(\s*)(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(")
+    found, indents = {}, []
+    for lineno, line in js_script_lines(html).items():
         d = decl.match(line)
         if d:
-            found.setdefault((len(d.group(1)), d.group(2)), []).append(idx)
+            found.setdefault((len(d.group(1)), d.group(2)), []).append(lineno)
             indents.append(len(d.group(1)))
     if not indents:
         return {}
@@ -522,15 +576,29 @@ def js_functions(html):
     out = {}
     for (indent, name), lines in found.items():
         if indent == top:
-            out[name] = lines
+            out[name] = sorted(lines)
     return out
 
 
 def js_unreferenced(html, fns):
-    """顶层函数中"整份文件只出现一次（就是它自己那句声明）"的名字 ⇒ 定义了没人接住。"""
+    """顶层函数里"没有任何调用点"的名字。
+
+    调用点 = 去注释后的 JS 文本里出现这个名字本身（算 `addEventListener('input', autoResize)`
+    这种当回调传出去的写法），且不算它自己那句声明行；HTML 行只认调用式 `NAME(`，因为那是
+    `onclick="NAME()"` 的形状。注释里提到名字**不算**调用点 —— 本文件就有三处解释性注释点名
+    了 `loadCommands` / `deleteSession`，按整份文件数字符出现的话"删掉接线、留着注释"这一类
+    缺陷会读成绿。
+    """
+    script = js_script_lines(html)
+    decl_lines = set()
+    for lines in fns.values():
+        decl_lines |= set(lines)
+    body = "\n".join(t for i, t in sorted(script.items()) if i not in decl_lines)
+    outside = "\n".join(l for i, l in enumerate(html.split("\n"), 1) if i not in script)
     out = []
     for name in fns:
-        if len(re.findall(r"\b%s\b" % re.escape(name), html)) <= 1:
+        pat = r"\b%s\b" % re.escape(name)
+        if not re.search(pat, body) and not re.search(pat + r"\s*\(", outside):
             out.append(name)
     return sorted(out)
 

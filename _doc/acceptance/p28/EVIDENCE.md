@@ -469,3 +469,71 @@ E2E|run=lead_v3_r3 checks=30 pass=30 fail=0 llm_hits=1 serve_port=63989 result=O
   它们是 p16/p17/p18/p23 那几支 E2E 收尾缺陷留下的，属于别的会话 ⇒ **只记账，不杀**（杀别人的进程不在我的授权里）。
 - 持久产物在 `~/.cache/zbot-p28-lead/e2e_p28c/lead_v3_r{1,2,3}/` 与 `~/.cache/zbot-integrate/p28v3r{1,2,3}.log`；
   `.log` 被 gitignore ⇒ 决定性读数原样贴进本节。
+
+## P28-lead-6 控制台接线的运行时兑现（新增 T9 死函数守卫 + T1 改判字节）
+
+**动因**：杠③ 那 31 条点名的全是"名字在不在分支里"，没有一条问"这个函数有没有被接住"。
+浏览器层实测出三处断接线（能力写好了、页面上一条请求都不发 / 假实现静默覆盖真实现），
+JVM 侧任何一把尺都看不见 ⇒ 加 T9（第 32 条点名判据），并把 T1 从"派生表相等"改成"字节相等"。
+
+### 这一节的量具身份（先钉住"哪把尺量的哪棵树"）
+
+- 提交树 `696c632`；本轮在途未提交的项：`M _doc/acceptance/p28/__pycache__/p28_e2e.cpython-314.pyc`, `M _doc/acceptance/p28/p28_e2e.py`（四杠读数按**盘面字节**记账，md5 见下）。
+- 量具 `p28_e2e.py` md5 = `2e8134bb`；被测控制台 `src` md5 = `bb3ff2e6`（53093 B）。
+- **修复前的参照字节不是固定名副本，而是现取的** `git show 93d27cd:z-bot-core/src/main/resources/web/index.html`。
+  上一轮我把一份名叫 `index_pre_fix.html` 的缓存当"修复前"用，那实际是修复**之后**的字节 ⇒ 得出过
+  "T9 没有牙"的错判（教训已折进量具纪律台账：对照组的输入身份要用**被注入的那个特征字面量的出现次数**验，
+  不能信文件名）。
+
+### 杠①（合并树 + 控制台修复之后，`rm -rf z-bot-core/target/surefire-reports && mvn -o test` ×3 串行）
+
+原文（`~/.cache/zbot-integrate/bar1_x3.log`）：
+
+```
+BAR1_SERIES|dir=/Users/zifang/.cache/zbot-integrate/bar1_262304 start=2026-09-26 23:04:46 HEAD=696c632
+BAR1_SRC_MD5_START|index.html=bb3ff2e6 p28_e2e.py=2e8134bb
+ROUND_START|r=1 ts=2026-09-26 23:04:46 bar4=8/2dadaed0/690ddbc0
+ROUND|r=1 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1151, Failures: 0, Errors: 0, Skipped: 0] class_sum=1151 f=0 e=0 s=0 files=107 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-26 23:06:07
+ROUND_START|r=2 ts=2026-09-26 23:06:07 bar4=8/2dadaed0/690ddbc0
+ROUND|r=2 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1151, Failures: 0, Errors: 0, Skipped: 0] class_sum=1151 f=0 e=0 s=0 files=107 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-26 23:07:31
+ROUND_START|r=3 ts=2026-09-26 23:07:31 bar4=8/2dadaed0/690ddbc0
+ROUND|r=3 rc=0 build_success_rows=1 agg[[INFO] Tests run: 1151, Failures: 0, Errors: 0, Skipped: 0] class_sum=1151 f=0 e=0 s=0 files=107 socket_hits=0 bar4=8/2dadaed0/690ddbc0 ts=2026-09-26 23:08:49
+BAR1_SRC_MD5_END|index.html=bb3ff2e6 p28_e2e.py=2e8134bb
+BAR1_CLASSES|src=bb3ff2e6 classes=bb3ff2e6 src_len=53093 cls_len=53093
+BAR1_DONE|end=2026-09-26 23:08:49 dir=/Users/zifang/.cache/zbot-integrate/bar1_262304
+```
+
+读数：**三跑逐字相同 = Tests run 1151 / F 0 / E 0 / S 0，class_sum=1151（107 个测试类，两把尺同数），
+socket_hits=0，BUILD SUCCESS**；`bar4=8/2dadaed0/690ddbc0` 在 4 个采样点逐格相同（杠④ 未破）；
+`BAR1_CLASSES` 那行说明 `mvn -o test` 之后 `target/classes` 与 `src` 已是同一份字节
+（此前那对 `416774b7 ≠ bb3ff2e6` 的差就是"被伺服的字节比源码旧"这一类缺陷的形状，正是新 T1 要抓的那一层）。
+
+### T9 的有牙性对照（九行判据，注入全在内存副本上，工作树一个字节未动）
+
+原文（`python3 -u ~/.cache/zbot-p28-lead/t9_control.py`，exit 0）：
+
+```
+CTRL|N1_prefix_red                      PASS | top=36 dup=['newSession'] unref=['autoResize', 'deleteSession', 'loadCommands']
+CTRL|N1_prefix_really_has_two_newSession PASS | count=2
+CTRL|N2_fixed_green                     PASS | top=36 dup=[] unref=[]
+CTRL|J1_loadCommands_call_removed       PASS | top=36 dup=[] unref=['loadCommands']
+CTRL|J2_deleteSession_wiring_removed    PASS | top=36 dup=[] unref=['deleteSession']
+CTRL|J3_autoResize_listener_removed     PASS | top=36 dup=[] unref=['autoResize']
+CTRL|J4_duplicate_newSession_back       PASS | top=36 dup=['newSession'] unref=[] 搬回的行=async function newSession() {
+CTRL|J5_stripper_keeps_strings_cuts_comments PASS | lines=["fetch('/a//b')  ", ' code();', '']
+CTRL|J6_no_script_block_is_empty_not_green PASS | top=0
+CTRL_DONE|lines=9 rc=0
+```
+
+口径：`N1` 用修复前的真字节判红并点名三处断接线；`N2` 用修复后的盘面字节判绿；
+`J1–J3` 各摘掉一处接线**且保留那句解释性注释** ⇒ 各自只点名被摘的那一个名字 —— 这正是"注释不算调用点"
+这条规则存在的理由（尺若按整份文件数字符出现，这三支全会读成绿，而缺陷长得和修复前一模一样）；
+`J4` 把被删掉的假 `newSession` 搬回脚本尾部 ⇒ `dup=['newSession']`；
+`J5` 是 stripper 的自证（字符串里的 `//` 必须原样留着，否则"抹注释"会吃掉代码）；
+`J6` 把 `<script>` 标签拿掉 ⇒ `top=0`，配合判据里的 `bool(fns)` 让"尺什么都没量到"蒙不成绿。
+
+顺带两条尺自己的更正（都是被阳性对照逼出来的，不是顺手改的）：
+① `js_functions` 原来按 `<script>` 字符串配对取块 —— 修复后的注释里就写着"同一个 `<script>` 里后声明者胜出"
+这个**字面量**，配对解析会把注释里的字当标签；改成只认**独占一行**的标签。
+② 调用点判定原来要求 `NAME(`，会把 `addEventListener('input', autoResize)` 这种**当回调传出去**的正当接线
+判成孤儿（假红）；改成"去注释后的 JS 里出现这个名字本身"，HTML 那半仍只认调用式。
