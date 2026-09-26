@@ -130,17 +130,19 @@ MUTANTS = [
      "活猎物=unavailableToolNames() 必须点得到 probe_me/flaky/dark/off 这些真被摘掉的名字",
      "探测结果对外露不出来，快照键也退化成只看待注销"),
 
-    ("TK3 代际计数不外露（钉死 0）", "toolkit",
-     "return registry.generation();", "return 0L;", 1,
+    # p20d 改注点：上一棒的注点是 accessor Toolkit#generation()（:222，全仓只 1 处读），
+    # 快照键用的是 snapshot() 里的 :310 ⇒ 期望集里那 4 条读快照的用例根本不碰被注入的那一行，
+    # 判成 PARTIAL 3/7 是"量具的账"。本棒把注点挪到真正的缓存键那一行（p20d EVIDENCE §9.3）。
+    ("TK3 schema 快照键里的代际被钉死 0", "toolkit",
+     "long generation = registry.generation();", "long generation = 0L;", 1,
      ["deregisterActuallyRemovesTheSlotFromEveryView",
-      "sameOwnerOverwriteIsAllowedAndBumpsGeneration",
       "registerAndDeregisterEachInvalidateTheSchemaSnapshot",
       "exposedNamesTrackTheRegistryAfterNukeAndRepave",
       "unregisteringIsNotStubOverwrite",
-      "managerStopAllClearsEveryBridgeToolsetAndReloadRepaves",
       "reloadDropsTheDeadServersToolNamesFromGetToolNames"],
-     "活猎物=注册/注销后 generation() 必须前进、schemaSnapshotRebuilds 必须涨",
-     "代际不外露 ⇒ 上层缓存没有失效键（红线 6：schema 参与 prompt）"),
+     "活猎物=注册/注销之后外发清单/清单文本/指纹必须换（快照键真的吃代际）",
+     "代际不参与缓存键 ⇒ 上层缓存没有失效键（红线 6：schema 参与 prompt）。"
+     "注点在 snapshot() 的键那一行，不是 Toolkit#generation() 那个 accessor"),
 
     # ---- 结果上限（全局 / 单工具声明 / UNBOUNDED）与溢出落盘 ----
     ("TK4 上限不走注册表", "toolkit",
@@ -149,12 +151,18 @@ MUTANTS = [
      "活猎物=声明 64 的工具 resultCapFor 必须回 64 而不是全局 9000",
      "工单点名：上限走 registry 的 maxResultChars，不许自己再写一个魔数"),
 
-    ("TK5 UNBOUNDED 哨兵失效", "toolkit",
+    # p20d 改注点：上一棒的替换（摘掉 `cap == UNBOUNDED ||` 这个析取项）是**等价变异** ——
+    # int 长度与 Long.MAX_VALUE 比恒真，任何用例都判不出来（本棒拿原注入+补完活猎物的用例
+    # 实测复跑过一次，仍全绿，读数在 p20d EVIDENCE §9.4）。换成不等价的形式：哨兵不再表示
+    # "不设限"，而表示"零上限"⇒ 只有声明 UNBOUNDED 的那批结果会被误截，别人一律不动。
+    ("TK5 UNBOUNDED 哨兵失效（当成零上限截）", "toolkit",
      "if (cap == ToolDescriptor.UNBOUNDED_RESULT_CHARS || content.length() <= cap) {",
-     "if (content.length() <= cap) {", 1,
+     "if (content.length() <= (cap == ToolDescriptor.UNBOUNDED_RESULT_CHARS ? 0L : cap)) {", 1,
      ["unboundedSentinelMeansNoTruncationAtAll"],
-     "活猎物=同一条先量 50000 字符正文原样回、再数溢出目录必须为 0 个文件",
-     "声明不设限是给 persist→read→persist 那条死循环留的口子"),
+     "活猎物=同一条里两把钥匙：声明 UNBOUNDED 的 50_000 字符一字不改且溢出目录 0 个文件，"
+     "换 NO_MAX_RESULT_CHARS 的同一份正文必须被全局上限 1000 截掉并落盘 1 个文件",
+     "声明不设限是给 persist→read→persist 那条死循环留的口子；"
+     "上一棒记的等价变异已由本棒实测确认后换成可判形式（p20d §9.4）"),
 
     ("TK6 预览不受上限约束", "toolkit",
      "int keep = (int) Math.min(previewChars, cap);", "int keep = (int) previewChars;", 1,
@@ -185,10 +193,11 @@ MUTANTS = [
      "            return new File(new File(home.trim()), \"tool-results\");\n"
      "        }\n",
      "        // 摘掉 $ZBOT_HOME 这一级\n", 1,
-     [],
-     "单测层无猎物：ToolkitResultCapTest 只覆盖 显式注入 > -D 两级，"
-     "ZBOT_HOME 那一级的活读数只有杠③ E2E 的 C1",
-     "红线 1（跟着 profile 走）；这一条按工单记'未覆盖'，不算过"),
+     ["zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot"],
+     "活猎物=p20d 新用例起一个真带 ZBOT_HOME 的子 JVM（OverflowDirEnvProbe）⇒ 解析必须是 "
+     "<profile>/tool-results 且全文落在那儿；同一把探针摘掉 ZBOT_HOME 必须解析成 NULL 且不落盘",
+     "红线 1（跟着 profile 走）；上一棒记'单测层结构上打不到'，p20d 用子 JVM 把这一级接上了"
+     "（子 JVM 带 -Duser.home=<假 home>，真的 ~/.zbot 一个字节都不许多）"),
 
     ("TK10 溢出文件名净化失效", "toolkit",
      "if (name.length() > 120) {", "if (name.length() > 100000) {", 1,
@@ -209,7 +218,13 @@ MUTANTS = [
       "oldServerToolNamesAreGoneAfterUnregisterInsideTheSameJvm",
       "deregistrationHappensInsideThisJvmNotByRestartingIt",
       "managerStopAllClearsEveryBridgeToolsetAndReloadRepaves",
-      "failedRegisterAllDoesNotLeaveHalfRegisteredTools"],
+      "failedRegisterAllDoesNotLeaveHalfRegisteredTools",
+      # ↓ p20d 机械补进：这三条是上一棒 84ca7b9 那一跑的实跑差集（EVIDENCE §2.2(6) 点过名），
+      #   这条是本棒新写的桥级用例（owner 被顶成内建 owner 之后整组注销直接抛"不能注销"）。
+      "bridgeRegistersAnAvailabilityProbeBackedByTheConnection",
+      "reloadDropsTheDeadServersToolNamesFromGetToolNames",
+      "repavingWithTheSameToolNameWorksAfterUnregister",
+      "unregisterAllCleansSlotsTheBridgeNeverRecorded"],
      "活猎物=owner 传 mcp:srv 时那 3 个成员必须真被摘掉（removed.size()==3）",
      "owner 边界一旦退化，桥级 nuke 变静默 no-op，且别人家的槽也保不住"),
 
@@ -229,10 +244,12 @@ MUTANTS = [
      "                removed.add(name);\n"
      "            }\n"
      "        }\n", 1,
-     [],
-     "单测层无猎物：桥侧现有用例注销前 registered 记账都与注册表一致，"
-     "只有杠③ seg2 那种'server 改名后 reload'才可能体现，而 reload 会先 stopAll 重刷记账",
-     "工单原文：故意不拿'我记住的那批名字'当结论；这一条按'未覆盖'记账"),
+     ["unregisterAllCleansSlotsTheBridgeNeverRecorded"],
+     "活猎物=p20d 新用例造出'注册表里有、桥没记住'的桥级现场（同名 server 的第二个桥实例 + "
+     "上一轮留下的僵尸槽，同一个 mcp-<server> toolset 与 mcp:<server> owner）⇒ 逐个删记住的名字"
+     "必留两个僵尸，整组注销才清得干净",
+     "工单原文：故意不拿'我记住的那批名字'当结论；上一棒说桥级用例造不出这个分岔，"
+     "p20d 用同名双桥 + 僵尸槽造出来了（§9.6）"),
 
     ("MB3 退回同名 stub 覆盖（P20 要杀的旧实现）", "bridge",
      "List<String> removed = toolkit.deregisterToolset(toolset(), owner());",

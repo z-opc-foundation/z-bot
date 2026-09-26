@@ -701,25 +701,168 @@ tally 并排（原账不许覆盖）：
 ```
 
 ## 9.2 TS4 —— 期望与实测同源（`ToolsetsManifestTest.java:128`）
-待填：改法 / 命令 / 读数。
+
+**改法**（只动 `src/test`，产品码一行没动）：`readOnlyToolsDeclareParallelSafetyAndWriteToolsDoNot` 的归属回读
+从 `assertEquals(name, Toolsets.toolsetForTool(name), tk.toolsetOf(name))` 换成
+
+```java
+assertEquals("常量表必须正好覆盖注册表里的工具，否则下面这个循环是空跑",
+        new java.util.TreeSet<String>(tk.getToolNames()),
+        new java.util.TreeSet<String>(EXPECTED_TOOLSET_BY_TOOL.keySet()));
+for (String name : tk.getToolNames()) {
+    assertEquals(name, EXPECTED_TOOLSET_BY_TOOL.get(name), tk.toolsetOf(name));
+}
+```
+
+- `EXPECTED_TOOLSET_BY_TOOL`（`ToolsetsManifestTest.java:213-236`）是**测试侧字面量表**：core 5 个
+  （echo/time/counter/health/sysinfo）、file 3 个（read_file/write_file/search）、exec 2 个（exec/mvn_build）、
+  net 1 个（curl_test）。逐条与 `Toolsets.java:106-114` 的 `declare(...)` 表对过（本棒手工核，不是调函数生成）。
+- 前面那条"键集 == 注册表工具名集"是**防空跑的笼子**：字面量表若漏了一个工具，循环就少判一条，
+  所以先把表本身钉成全覆盖，再谈期望值。
+- 为什么这样就判得出：TS4 注入把 `toolsetForTool` 摘成"一律退回 `Toolkit.DEFAULT_TOOLSET`"，
+  注册侧 `BuiltinTools.java:82` 调的正是同一个函数 ⇒ 槽位全落 builtin；期望若同源，两边一起漂、等式照样成立。
+  期望换成常量之后，注入当场把 `tk.toolsetOf(name)` 打到 builtin，与常量表逐条不相等 ⇒ 红。
+
+双向：还原态这条绿（控制跑，见 §9.9），注入态这条红（判定行 `TS4 … RED-OK 5/5`，红名单含本条）。
 
 ## 9.3 TK3 —— 注点从 accessor 改到快照键
-待填。
+
+**注点改了**（`p20b_mutation.py:136-145`）：
+
+| | 上一棒 | 本棒 |
+| --- | --- | --- |
+| 锚点 | `return registry.generation();`（= `Toolkit.generation()` accessor，`Toolkit.java:221-223`） | `long generation = registry.generation();`（= `snapshot()` 里那行缓存键，`Toolkit.java:310`） |
+| 替换 | `return 0L;` | `long generation = 0L;` |
+| 锚点次数 | 1 | 1（预检当场核） |
+
+**期望集按"有没有出处"重列**：出处 = 该用例必须在**注册表变化之前暖过一次快照**
+（`snapshot()` 的缓存命中路径就是 `current.generation == generation`，键被钉死 0 才会让下一次读到旧快照）。
+
+| 期望用例 | 出处（先暖后读的那两行） |
+| --- | --- |
+| `registerAndDeregisterEachInvalidateTheSchemaSnapshot` | `ToolkitRegistryTest.java:170` 取 `schemaFingerprint()` 暖快照 → `:173` 注册 `b` → `:174-175` 比指纹/重建数 |
+| `exposedNamesTrackTheRegistryAfterNukeAndRepave` | `ToolkitRegistryTest.java:191` `namesOf(tk)`（走 `getAllTools()`→`snapshot().tools`）→ `:192` `deregisterToolset` → `:193` 再读 |
+| `unregisteringIsNotStubOverwrite` | 桥级：注册→读外发清单→`unregisterAll`→再读（`McpBridgeDeregisterTest.java:97` 是断言行） |
+| `reloadDropsTheDeadServersToolNamesFromGetToolNames` | 桥级：注册→reload 换名→读外发清单（`McpBridgeDeregisterTest.java:78` 是断言行） |
+
+**摘掉的一条**：`deregisterActuallyRemovesTheSlotFromEveryView`（`ToolkitRegistryTest.java:42`）。
+依据两句话 + 一个实跑读数：
+1. 它在注册表变化**之前**从没读过任何快照视图 —— `with("a","b")` 只调 `register`，
+   `:50` `namesOf(tk)`、`:51` `getToolsDescription()` 都在 `:45` 的 `deregister` **之后**，
+   第一次 `snapshot()` 就是新状态 ⇒ 缓存键对不对它都看不出来；
+2. 它读的是 `tk.generation()`（`:53`）那个 accessor，而 accessor 已经**不是**本变异体的注点；
+3. 读数：R1 全量跑 `TK3 … 点名=4/5`，红的正是上面那 4 条（`mut_TK3.log`：`Tests run: 527, Failures: 4`）。
+⇒ 这是**量具的账**（期望集写宽了），不是产品的红；判定文本与注点语义一字未改，只把没出处的那条摘掉。
+**摘名发生在 R1 之后、R2（交付跑）之前**，见 §9.9.1 的两轮口径。
 
 ## 9.4 TK5 —— 等价变异的实测确认 + 换成不等价注点 + 用例补活猎物
-待填。
+
+**先把上一棒那句"这是等价变异，不是测试没猎物"拿实跑证实**（不照抄推理）。
+量具：`_doc/acceptance/p20b/p20d_tk5_equiv_probe.py`（同一套 `flock(LOCK_EX|LOCK_NB)` 锁、
+同一套 `git show` 还原取证、跑前 `ps` 等邻居的 maven 真身），三把：
+
+```
+V0 不注入（控制跑）
+V1 上一棒原注点：if (cap == ToolDescriptor.UNBOUNDED_RESULT_CHARS || content.length() <= cap) {
+                    → if (content.length() <= cap) {
+V2 本棒注点：        → if (content.length() <= (cap == ToolDescriptor.UNBOUNDED_RESULT_CHARS ? 0L : cap)) {
+```
+
+读数（〔待填：V0/V1/V2 三把的 rc / ran / 红名单 / landed / restored〕）：
+```
+〔待填〕
+```
+⇒ V1 若 0 红，"等价变异"成立（`int` 长度提升成 `long` 与 `Long.MAX_VALUE` 比恒真，摘掉析取项不改任何行为），
+**任何用例都判不出来**，补测试救不了它 ⇒ 唯一正确的动作是换**不等价**的注点：
+把"哨兵 = 不设限"顶成"哨兵 = 零上限"，这一改只影响声明 UNBOUNDED 的那批结果，别的工具一律不动（窄注入）。
+
+**用例补活猎物（双向，同一条里两把钥匙）**：`ToolkitResultCapTest.unboundedSentinelMeansNoTruncationAtAll`
+（`z-bot-core/src/test/java/com/zifang/z/bot/tool/ToolkitResultCapTest.java:86-115`）——
+- 正向腿：同一个 `Toolkit`、全局上限 `setMaxResultChars(1_000L)`、`previewChars=200`，
+  声明 `UNBOUNDED_RESULT_CHARS` 的 `reader` 吐 50_000 字符正文 ⇒ 必须**一字不改**原样回，
+  且溢出目录**必须 0 个文件**；
+- 反向腿（缺了它就是空跑）：同一份正文换 `ToolDescriptor.NO_MAX_RESULT_CHARS` 的 `reader_bounded` ⇒
+  必须被截、回执第一行必须点名"超单工具上限 1000"、溢出目录必须**恰有 1 个文件**（全文真落过盘）；
+- 两把唯一的差别就是那条声明：`tk.resultCapFor("reader")==UNBOUNDED` / `tk.resultCapFor("reader_bounded")==1000`。
+⇒ 上一棒那条"原样返回"再也不是"正文本来就没超上限"蒙出来的。
+
+判定：`GREEN-BUT-MUTATED 0/1` ⇒ 〔待填〕。
+记账口径要留一句：**这条现在判的是"哨兵被当成零上限"这一种坏法**；
+"摘掉析取项"那一种仍是等价变异、仍不可判（§9.10(1)）。
 
 ## 9.5 TK9 —— `$ZBOT_HOME` 那一级要有真猎物（起带 env 的子 JVM）
-待填。
+
+上一棒记的是结构问题：JUnit 进程改不了自己的 env，唯一相关用例自带 `if (getenv==null) 跳过`。
+本棒不去改本进程 env，而是**起一个真带 `ZBOT_HOME` 的子 JVM**：
+
+- 探针类 `z-bot-core/src/test/java/com/zifang/z/bot/tool/OverflowDirEnvProbe.java`（`main` 打八行
+  `PROBE_*=值`，任何一行缺失即 `assertNotNull` 判红，`PROBE_FATAL` 存在即判红）；
+- 用例 `ToolkitResultCapTest.zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot`
+  fork 两把（`fork()` 用 `ProcessBuilder`，`java.home` 的真身 + CodeSource 拼 classpath，120 s 有界退出）：
+  1. **正向**：`ZBOT_HOME=<tmp>/profile-root` ⇒ `PROBE_ZBOT_HOME_ENV` 必须等于那个根（否则三行断言全是空跑）、
+     `PROBE_OVERFLOW_DIR=<root>/tool-results`、`PROBE_TRUNCATED=yes`、`PROBE_DIR_COUNT=1`、
+     `PROBE_SPILLED_BYTES=4000`（正文 4_000 字符全文真在那个文件里）；
+  2. **反向**：`pb.environment().remove(ZBOT_HOME)` ⇒ `PROBE_ZBOT_HOME_ENV=NULL`、
+     `PROBE_OVERFLOW_DIR=NULL`（三级全落空就不落盘，宁可截断也不凭空造 `~/.zbot`）、
+     回执含"未配置溢出目录"且含"全文未落盘"；
+  3. **杠④ 的笼子**：两把子 JVM 都带 `-Duser.home=<假 home>`（`PROBE_USER_HOME` 必须等于它），
+     所以万一解析被改回写死 `~/.zbot`，那个 `~` 只会指到临时假 home，当场判红；
+     反向腿还钉 `assertFalse(new File(fakeHome, ".zbot").exists())` 与"假 home 目录 0 项"。
+     ⇒ **真的 `~/.zbot` 一个字节都不许多**（三数见 §9.9.5）。
+
+判定：`GREEN-BUT-MUTATED 0/0` ⇒ 〔待填〕。
 
 ## 9.6 MB2 —— 桥级"注册表有、桥没记住"的现场
-待填。
 
-## 9.7 MB3 —— 保留 PARTIAL 的因果
-待填。
+上一棒的因果是：看着最像猎物的 `deregisterToolsetCleansNamesTheBridgeNoLongerKnowsAbout` 是**注册表层**
+用例（裸 `tk.register`/`tk.deregisterToolset`，不经过 `McpBridge`），而桥级用例里 `registered` 与注册表永远一致。
+本棒就把那个分岔真造出来（`McpBridgeDeregisterTest.unregisterAllCleansSlotsTheBridgeNeverRecorded`）：
+
+- **现场一**：同一个 server 名 `twice` 的**第二个桥实例**（reload/重连真会造出来），
+  toolset 与 owner 与第一个桥**逐字相同**（用例里 `assertEquals(remembered.toolset()+"/"+remembered.owner(), …)` 先把这句钉住，
+  不然这根本不是同一个命名空间）；桥 `second` 的 `registered` 只记着 `mcp-twice-two`；
+- **现场二**：上一轮注册留下、这一轮 server 不再发的**僵尸槽** `mcp-twice-legacy`
+  （同一个 `mcp-twice` / `mcp:twice`，桥的记忆里永远没有它）；
+- **笼子**：第三台全程没被动过的 `bystander` server，防"顺手清空整张注册表"这种修法蒙过去。
+
+活的猎物**先点名**（这两组不成立的话后面的反向断言全是空跑）：
+`second.registeredNames()` 恰为 `[mcp-twice-two]`、不含 `one`/`legacy`；
+`tk.namesOfToolset("mcp-twice")` 注销前恰为三个名字。
+结论必须来自注册表：`removed == [mcp-twice-one, mcp-twice-two, mcp-twice-legacy]`、
+`namesOfToolset` 空、`getToolNames()` 与外发清单都不含 `legacy`、`bystander` 完好（`tk.size()==1`）、
+注销后 `second.registeredNames()` 也清空。
+
+判定：`GREEN-BUT-MUTATED 0/0` ⇒ 〔待填〕。
+
+## 9.7 MB3 —— 保留 PARTIAL 的因果（工单明写"不硬凑"）
+
+注点没动：`deregisterAll()` 里的 `toolkit.deregisterToolset(toolset(), owner())` 换回 P20 要杀的旧实现
+（逐个 `deregister(name, owner())` + 留同名 stub 覆盖）。
+
+- 与 `unregisteringIsNotStubOverwrite` 的关系（工单点名的"反向断言在修之前必须先红一次"）：
+  这一把注回去之后，"不许留桩"的正面判据必须红 —— 读数是 R1/R2 的 `MB3 …` 行里点名了
+  `unregisteringIsNotStubOverwrite`、`oldServerToolNamesAreGoneAfterUnregisterInsideTheSameJvm`、
+  `unregisterLeavesNoPlaceholderBehindInAnyListView` 三条〔待填：逐条对 R2 台账核〕。
+  这三条红**恰恰证明现在的产品码真在判这件事**（不是"用例名字像"）。
+- 判定仍是 `PARTIAL`：`named_expected==named_hit` 之外另有"红了但没点名"的差集。
+  本棒**故意不回填 MB3 的期望集** —— 工单对这一行的指令是"保留 PARTIAL、把因果写明、不硬凑"。
+  这与 TK11/TK4/TK7 的机械补集是两种处理，**差别来自工单指令，不是来自读数**；
+  哪些用例额外红了，R2 台账的 note 列原样挂着（`| 多红未点名: …`）。
 
 ## 9.8 TK11 —— 差集机械补进期望集
-待填。
+
+TK11 的期望集从 13 条补到 17 条，**每一条补进来的都来自实跑读数**，逐条注明是哪一跑钉的：
+
+| 补进期望集的用例 | 是哪一跑钉的（读数） |
+| --- | --- |
+| `bridgeRegistersAnAvailabilityProbeBackedByTheConnection` | 上一棒 p20b 交付态全量跑 `84ca7b9`，`LEDGER.tsv` TK11 行 note 的 `多红未点名:` 段（§2.2(6)） |
+| `reloadDropsTheDeadServersToolNamesFromGetToolNames` | 同上 |
+| `repavingWithTheSameToolNameWorksAfterUnregister` | 同上 |
+| `unregisterAllCleansSlotsTheBridgeNeverRecorded` | 本棒诊断跑 10:2x（`logs/mut_TK11.log`，留档 `logs/LEDGER_subset_1022.tsv` TK11 行）——本棒新写的桥级用例，owner 被顶成内建 owner 之后整组注销直接抛"不能注销" |
+
+三条上一棒的差集在 `p20b_mutation.py:218-224` 就地注明了出处（"上一棒 84ca7b9 那一跑的实跑差集"）。
+判定：`PARTIAL 13/13` ⇒ 〔待填〕。
+
 
 ## 9.9 收尾重出（杠② 全量 21 个 / 杠① 串行三跑 / 杠③ 全量三阶段 / 杠④ 三数）
 待填。
