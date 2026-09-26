@@ -399,7 +399,9 @@ def read(path):
 
 
 def table_A(slash_src):
-    """WIRING §1 第 1 行：只有"紧跟 name() 的纯字面量 return \"X\";"才算静态命令。"""
+    """P19 之前的形状：`SlashRegistry` 里每条匿名命令的 `name()` 都是纯字面量。
+    P19 把名字搬进 `CommandCatalog` 后这里恒为空 —— 现在只当**回归探测器**用
+    （非空 ⇒ 有人绕过单源，又把名字硬抄回注册表）。"""
     out = []
     want = False
     for line in slash_src.splitlines():
@@ -413,7 +415,8 @@ def table_A(slash_src):
 
 
 def table_B(reader_src):
-    """WIRING §1 第 2 行：`LOCAL_COMMANDS = Arrays.asList(...)` 里的字面量组。"""
+    """P19 之前的形状：`LOCAL_COMMANDS = Arrays.asList("/x", …)` 自己抄一份。
+    同样只当回归探测器：非空 ⇒ 终端侧又出现了第二份清单。"""
     out = []
     inlist = False
     for line in reader_src.splitlines():
@@ -425,6 +428,29 @@ def table_B(reader_src):
             if re.search(r"\);", line):
                 inlist = False
     return sorted(set(out))
+
+
+def api_commands(port):
+    """真进程读 `GET /api/commands`：P19 之后"命令面在每端各是哪几条"的唯一对外口径。
+    返回 (状态码, rows 或 None)。rows 里每行的 `endpoints` 是它被广告的端点列表。"""
+    raw, hd, st, body, _ = raw_http(port, "GET", "/api/commands", None, hard_seconds=20)
+    toks = st.split(" ")
+    code = toks[1] if len(toks) > 1 else "?"
+    try:
+        rows = json.loads(body.decode("utf-8", "replace"))
+    except ValueError:
+        return code, None
+    return code, rows if isinstance(rows, list) else None
+
+
+def segment(rows, key, without=None):
+    """从 /api/commands 的字节里取某一段的名字集合。"""
+    out = []
+    for r in rows or []:
+        eps = r.get("endpoints") or []
+        if key in eps and (without is None or without not in eps):
+            out.append(r.get("name"))
+    return sorted(set(x for x in out if x))
 
 
 def table_C(html):
@@ -811,12 +837,31 @@ def main():
     html_src = read(os.path.join(REPO, "z-bot-core/src/main/resources/web/index.html"))
     http_src = read(os.path.join(REPO, "z-bot-core/src/main/java/com/zifang/z/bot/channel/HttpChannel.java"))
     wiring_md = read(os.path.join(HERE, "WIRING.md"))
-    A, B, C, D = table_A(slash_src), table_B(reader_src), table_C(html_src), table_D(html_src)
-    print("TABLES|A=%d B=%d C=%d D=%d" % (len(A), len(B), len(C), len(D)), flush=True)
+    # P19 之后：命令名的单源在 CommandCatalog，对外口径是 GET /api/commands 的 endpoints 分段。
+    # 所以 A/B/D 三段从**真进程的响应字节**里取，C 从盘上 HTML 的分支里取 —— 差集比的正是
+    # "服务端广告了这一段的字节" 与 "控制台真有一段分支接住"。旧的静态解析降级成回归探测器。
+    code_cmd, cmd_rows = api_commands(port_s)
+    A = segment(cmd_rows, "http")
+    B = segment(cmd_rows, "tui", without="http")
+    D = segment(cmd_rows, "web")
+    C = table_C(html_src)
+    stale_A, stale_B, stale_D = table_A(slash_src), table_B(reader_src), table_D(html_src)
+    print("TABLES|A=%d B=%d C=%d D=%d api_status=%r rows=%s"
+          % (len(A), len(B), len(C), len(D), code_cmd, "?" if cmd_rows is None else len(cmd_rows)),
+          flush=True)
     print("TABLE_A=%s" % " ".join(A), flush=True)
     print("TABLE_B=%s" % " ".join(B), flush=True)
     print("TABLE_C=%s" % " ".join(C), flush=True)
     print("TABLE_D=%s" % " ".join(D), flush=True)
+    print("HAND_COPIED|registry_name_literals=%s reader_literals=%s web_list_literals=%s"
+          % (stale_A, stale_B, stale_D), flush=True)
+    chk("T8_command_names_come_from_one_source_after_p19",
+        code_cmd == "200" and cmd_rows and A and D and not stale_A and not stale_B and not stale_D,
+        "P19 搬空的三处手抄清单里任何一处又长回来（注册表 name() 字面量 / LOCAL_COMMANDS.asList /"
+        " web 侧 `命令列表：` 硬写），或 /api/commands 不再可达（那 A/B/D 三段全是空集）",
+        "api=%s rows=%d A=%d D=%d | 回归探测器三路应全空：%s/%s/%s"
+        % (code_cmd, 0 if cmd_rows is None else len(cmd_rows), len(A), len(D),
+           stale_A, stale_B, stale_D))
 
     _raw, hs_i, status_i, body_i, _ = raw_http(port_s, "GET", "/console", hard_seconds=20)
     served_html = body_i.decode("utf-8", "replace")
@@ -859,12 +904,21 @@ def main():
         declared, mdline = wiring_number(wiring_md, key)
         if declared != got:
             drift.append("%s: WIRING=%s 重算=%s" % (key, declared, got))
+        # 三向对齐：文档 == 重算 == 本文件里钉的定值。定值不读出来就是死格（p28b 之后
+        # 我把它只当 key 列表用了半轮），钉着的用意是"改命令面必须是一次刻意的改动"：
+        # 只改文档、或只改代码，都会在这里红。
+        if want != got:
+            drift.append("%s: 尺内定值=%s 重算=%s（改命令面要连这一格一起改）" % (key, want, got))
+        members = sorted(diffs[key]) if key in diffs else []
+        # 派生输出：WIRING.md 的 §3 只准照抄这一行（手敲的数没有尺会去读，永远不变红）。
+        print("WIRING_EMIT|%s|%d|%s" % (key, got, " ".join(members)), flush=True)
         print("BUCKET|%-34s wiring=%s recomputed=%s members=%s"
               % (key, declared, got, " ".join(map(str, sorted(set())
                                  if key not in diffs else diffs[key]))[:200]), flush=True)
     chk("T2_wiring_md_numbers_equal_recomputation", not drift,
-        "改了 SlashRegistry/LOCAL_COMMANDS/index.html 而 WIRING.md 的条数没跟着改（文档漂）",
-        "drift=%s" % (drift[:4] if drift else "无（9 格逐格相同）"))
+        "改了命令面（CommandCatalog / index.html / 任何一段 endpoints）而 WIRING.md §3 或本文件"
+        "的定值没跟着重算 —— 文档漂或刻意改动没留下痕迹",
+        "drift=%s" % (drift[:4] if drift else "无（9 格三向相同：文档==重算==定值）"))
 
     mem_drift = []
     for key in ("3.1 只在服务端注册表", "3.2 只在 TUI 私有", "3.4 web 广告了但没有分支接住",
