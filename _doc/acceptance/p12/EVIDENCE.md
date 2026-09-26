@@ -1208,11 +1208,83 @@ git grep -ln "运行时上下文\|VOLATILE_CONTEXT_HEADER"        # 全仓
 
 ## 11.1 任务一取证：三项原始读数（有猎物实验：同一 agent、同一会话、连跑 3 轮）
 
-- 11.1.1 第 3 次 provider 请求里 `user` 消息条数 / 含 `当前时间` 的条数
-- 11.1.2 落盘 transcript（`sessionDir` 会话 json）里 user 行是否含 `[z-bot 运行时上下文]` 整块（贴原文片段）
-- 11.1.3 渲染面：真起 `HttpChannel`，`/api` 回来的 `content` 字段是否含抬头
+取证件 = 新建 `z-bot-core/src/test/java/com/zifang/z/bot/agent/VolatileContextPersistenceTest.java`
+（3 个具名测试，一面一条，一面红不许遮住另一面读数）。实验形态：同一 `BotAgent`、同一 `session_id`、
+连跑 3 轮；**第 1 轮之后**改写 `MEMORY.md`（X1⇒X2）并**新装一个技能**（X3）；**轮间 `Thread.sleep(1100)`**
+⇒ 三块时钟时间戳互不相同（"堆叠"不是同一块被数了三遍，而是模型真读到 3 个不同时刻）。
 
-## 11.2 判词：是缺陷 / 不是（带取证测试名与断言原文）
+```
+rm -rf z-bot-core/target/surefire-reports && mvn -o test -pl z-bot-core \
+    -Dtest=VolatileContextPersistenceTest -DfailIfNoTests=false
+# 修复前（HEAD d36a5be 的产品码）⇒ Tests run: 3, Failures: 3, Errors: 0  （日志 ~/.cache/zbot-p12e/forensic_pre_fix.log）
+```
+
+### 11.1.1 第 3 次 provider 请求：`user` 行数 / 含 `当前时间` 的行数
+
+```
+[p12e-forensic] request#1 totalMsgs=2 userRows=1 clockBearingUserRows=1 headerBearingUserRows=1
+[p12e-forensic] request#2 totalMsgs=4 userRows=2 clockBearingUserRows=2 headerBearingUserRows=2
+[p12e-forensic] request#3 totalMsgs=6 userRows=3 clockBearingUserRows=3 headerBearingUserRows=3
+```
+
+⇒ 主编猜的「1 条 / 3 条」**复算成立**：第 3 次请求 3 条 user 行，**3 条都带时钟块**，三个时间戳互不相同
+（原文逐条，实测 req#3 user#1/#2/#3）：
+
+```
+req#3 user#1 len=124 >>> [z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）
+                         当前时间: 2026-09-26 13:40:47 +08:00 GMT+08:00 / [记忆] 第一轮的记忆-X1 / --- / 第一句原话
+req#3 user#2 len=163 >>>  同上抬头
+                         当前时间: 2026-09-26 13:40:48 +08:00 GMT+08:00 / [记忆] 第二轮才写入的记忆-X2
+                         可用技能指引：[deploy] … 第二轮才装的技能正文-X3 / --- / 第二句原话
+req#3 user#3 len=163 >>>  同上抬头
+                         当前时间: 2026-09-26 13:40:49 +08:00 GMT+08:00 / X2 / X3 / --- / 第三句原话
+```
+
+⇒ 模型在第 3 轮同时读到 **13:40:47 / :48 / :49 三个「当前时间」**，且第 1 条历史行里还挂着
+**已被本轮淘汰的旧记忆 X1**（历史里那条"第一轮的记忆"永远删不掉）。
+
+### 11.1.2 落盘 transcript：整块模板进了盘
+
+```
+[p12e-forensic] transcript=…/sessions/session_1790401245420-7dee2a.json bytes=1759 headerHits=3 clockHits=3
+```
+
+原文片段（`[p12e-forensic] transcript 原文` 全量入日志，这里贴第 1、2 条 user 行的 `content`）：
+
+```json
+[{"role":"user","content":"[z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）\n当前时间: 2026-09-26 13:40:45 +08:00 GMT+08:00\n长期记忆（历史积累，供参考）：\n[记忆]\n第一轮的记忆-X1\n---\n第一句原话","contentType":"text",…},
+ {"role":"assistant","content":"回合一",…},
+ {"role":"user","content":"[z-bot 运行时上下文]（本轮动态注入，不属于 system prompt）\n当前时间: 2026-09-26 13:40:46 +08:00 GMT+08:00\n长期记忆（历史积累，供参考）：\n[记忆]\n第二轮才写入的记忆-X2\n可用技能指引：\n[deploy] 测试技能\n第二轮才装的技能正文-X3\n---\n第二句原话","contentType":"text",…},
+ …]
+```
+
+⇒ **是**：落盘 user 行的 `content` 就是整块模板 + 原话。`SessionManager.loadMessages()` 原样读回
+（`[p12e-forensic] 重新载入的 user 行` 打印出 3 条带抬头的行）⇒ 换会话/重启后这些块**继续**在历史里堆。
+
+### 11.1.3 渲染面：真起 `HttpChannel` 打真请求
+
+```
+[p12e-forensic] GET /api/session/messages?id=session_…  headerHits=3
+[p12e-forensic] GET /api/session/messages (活记忆)      headerHits=3
+```
+
+⇒ 两支渲染路径（`HttpChannel.java:413 map.put("content", m.getContent())`，一支读盘一支读活记忆）
+**都把模板原样吐给 web**，3 次命中。派单里那句"我在主代码 `git grep` 除 `BotAgent.java` 外 0 命中
+⇒ 没有任何显示面剥它"**被实测坐实**（不是"读代码认为没事"，是打了真 HTTP 拿到的 3）。
+
+## 11.2 判词：**是缺陷**（三条判据各自带猎物，非空跑）
+
+| # | 判据 | 实测（命令见 §11.1） | 猎物/阳性对照 |
+|---|---|---|---|
+| 1 | 历史不许堆时钟块 | 第 3 次请求含 `当前时间` 的 user 行 = **3**（应为 1） | `thirdRequestInOneSessionStacksContradictoryClockBlocks` 内先断言第 1 轮请求 `contains("当前时间")` 且 `contains(抬头)` 才继续 ⇒ 计数器不是恒 0 的死尺 |
+| 2 | 落盘只存原话 | transcript 抬头命中 = **3**（应为 0） | 同一测试先断言 `onDisk.contains(三句原话)` ⇒ 0 命中不可能是"没落盘" |
+| 3 | 渲染面干净 | web `content` 抬头命中 = **3**（应为 0） | 同一测试先断言 `byId.contains("第一句原话") && byId.contains("回合一")` |
+
+副作用链复述（这次有读数撑着）：`BotAgent.java:247 memory.add(Msg.user(withVolatileContext(…)))`
+⇒ ①易变内容进 `memory` ⇒ ②`:787 persistSession()` 把它写进盘 ⇒ ③`switchSession()`/重启又原样读回 ⇒
+④每一次 `buildRequest()` 都重放全部历史 ⇒ **同一请求里 N 块互相矛盾的时钟 + 淘汰不掉的旧记忆** ⇒
+⑤所有拿 `Msg.getContent()` 的渲染面（web `content`、终端回显、delegate 摘要、P16 transcript 断言）
+都看见模板。**结论：按派单唯一方向修**——见 §11.3。
 
 ## 11.3 修法与双向断言（若 11.2 判是）
 
