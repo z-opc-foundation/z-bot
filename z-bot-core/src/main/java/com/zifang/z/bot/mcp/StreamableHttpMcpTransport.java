@@ -373,7 +373,11 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
     private HttpReply post(String body, String overrideSession, boolean expectBody) throws IOException {
         HttpURLConnection c = open("POST");
         c.setRequestProperty("Content-Type", "application/json");
-        c.setRequestProperty(ACCEPT_KEY, expectBody ? ACCEPT_BOTH : "application/json");
+        // 2025-06-18 线规：POST 一律 MUST 同时广告 application/json 与 text/event-stream，
+        // 官方 SDK 在 `_validate_accept_header()`（streamable_http.py:424-439）里按这条把
+        // notification 也一起卡 —— 少一个就是 HTTP 406（真进程实测：notifications/initialized 406）。
+        // "要不要响应"是 expectBody 决定的（下面 202/200 的判法），不能拿 Accept 去表达。
+        c.setRequestProperty(ACCEPT_KEY, ACCEPT_BOTH);
         c.setDoOutput(true);
         byte[] payload = body.getBytes(StandardCharsets.UTF_8);
         c.setFixedLengthStreamingMode(payload.length);
@@ -388,8 +392,13 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
         }
         HttpReply reply = read(c);
         String method = methodOf(body);
+        // 线上取证要带"这一发到底有没有挂会话头"：会话是握手响应头给的，
+        // 后续每一发都必须把它带回头里，否则官方 server 直接 404（Invalid or expired session ID）。
+        // 只记前 6 位（与 McpE2eDriver 的 session_id_prefix 同一口径），会话 id 全文不进日志。
+        String sid = overrideSession != null ? overrideSession : sessionId;
         noteWire("POST " + (method == null ? "?" : method) + " -> " + reply.status
-                + " " + reply.contentType);
+                + " " + reply.contentType + " " + SESSION_HEADER + "="
+                + (sid == null || sid.isEmpty() ? "<none>" : sid.substring(0, Math.min(6, sid.length()))));
         return reply;
     }
 

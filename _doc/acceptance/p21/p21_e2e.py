@@ -134,6 +134,63 @@ def facts_of(stdout_text):
     return f
 
 
+# ----------------------------------------------------------------- 布尔 FACT 口径
+# 缺陷 B（工单 §2）：java 侧 `fact(k, Boolean.valueOf(...))` 经 `String.valueOf` 打出来是
+# **小写** `true`/`false`，而本脚本原来在 :262/:263/:296 比的是 Python 的 `str(True)`
+# 口径 `"True"`/`"False"` ⇒ 两条断言假红。这里定一个**唯一**口径，别处不再各写各的。
+TRUE_WORDS = ("true", "1", "yes")
+FALSE_WORDS = ("false", "0", "no")
+
+
+def flag(f, key):
+    """取一条布尔 FACT 并归一化成 Python bool。
+
+    口径纪律（三条都不许松）：
+      * 键缺失 ⇒ MissingFact（"读不到"永远不等于"读到 false"）
+      * 值认不出来（空串、`True`、乱码）⇒ 直接抛，**不**当 False
+      * 只接受 true/1/yes 与 false/0/no（大小写无关）
+    """
+    if key not in f:
+        raise MissingFact(key)
+    s = (f[key] or "").strip().lower()
+    if s in TRUE_WORDS:
+        return True
+    if s in FALSE_WORDS:
+        return False
+    raise ValueError("布尔 FACT %r 的值 %r 无法归一化（口径只认 %s / %s）"
+                     % (key, f[key], TRUE_WORDS, FALSE_WORDS))
+
+
+class Recorder:
+    """同一个断言函数的**可重放**记账口：只收结果不落总账。
+
+    用来做"这条断言到底杀不杀得死某种坏法"的自证 —— 拿真读数当基线，
+    逐个键注入坏值重放，看它是否真的变红。
+    """
+
+    def __init__(self):
+        self.rows = []
+
+    def start(self, section):
+        pass
+
+    def chk(self, name, ok, reading):
+        self.rows.append((name, bool(ok), reading))
+        return bool(ok)
+
+    def failed(self):
+        return [n for n, ok, _ in self.rows if not ok]
+
+    def passed(self):
+        return [n for n, ok, _ in self.rows if ok]
+
+
+def need_fact(f, key):
+    if key not in f:
+        raise MissingFact(key)
+    return f[key]
+
+
 def java_bin():
     home = os.environ.get("JAVA_HOME")
     cand = Path(home) / "bin" / "java" if home else None
@@ -204,17 +261,71 @@ def wait_until(fn, budget, every=0.1):
     return False
 
 
+def fresh_workdir(workroot, label, auto):
+    """缺陷 C 的收口：现场目录**必须**每跑一个新路径。
+
+    原来的 `default=time.strftime("R%%H%%M%%S")` 里那两个 `%%` 让 strftime 原样吐出
+    `%H%M%S` ⇒ label 是个字面常量 ⇒ 所有跑都写进同一个目录，
+    而 `shutil.rmtree` 又把上一跑的现场整个抹掉：
+      * 杠③ 要"≥3 次整跑"，可 3 次只留得下最后一次的现场 ⇒ 读数无从对账；
+      * 同机并发/复跑时上一跑的 `a-server-notes.txt`、`*-driver.out` 会被下一读回当真凭据。
+    所以：自动 label 带上 PID 保证唯一；显式 label 允许覆盖（`--label R1` 是有意复用一个名字，
+    但旧目录不存在时才算"新现场"，存在则先改名留档而不是删掉 —— 留档比删掉更符合证据要求）。
+    """
+    root = Path(workroot)
+    root.mkdir(parents=True, exist_ok=True)
+    wd = root / label
+    if wd.exists():
+        if not auto:
+            stale = root / (label + ".stale-" + time.strftime("%Y%m%d-%H%M%S") + "-p%d" % os.getpid())
+            wd.rename(stale)
+            print("NOTE: 旧现场 %s 已改名为 %s（不删，留作对账）" % (wd, stale.name), flush=True)
+        else:
+            raise SystemExit("FATAL: 自动 label 撞车了（%s 已存在）—— 现场目录唯一性坏了" % wd)
+    wd.mkdir(parents=True)
+    return wd
+
+
+def prove_fresh_workdir(g, workroot, label):
+    """自证：连开两次现场，两次的**路径必须不同**，且第二跑**看不见**第一跑的文件。"""
+    probe_root = Path(workroot) / "_fresh_probe"
+    probe_root.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    seen = []
+    for i in range(2):
+        time.sleep(1.05)          # 跨过一秒，让 %H%M%S 真的变（不然就是在测 PID 那一半）
+        w = fresh_workdir(probe_root, "PROBE-%d-%s-p%d" % (i, time.strftime("%H%M%S"), os.getpid()), True)
+        seen.append(w)
+    first_marker = seen[0] / "run1-only-marker.txt"
+    first_marker.write_text("run1\n", encoding="utf-8")
+    cross = list(seen[1].glob("*"))
+    g.chk("fresh_workdir_two_runs_are_distinct_paths",
+          seen[0] != seen[1] and seen[0].is_dir() and seen[1].is_dir(),
+          "run1=%s run2=%s" % (seen[0].name, seen[1].name))
+    g.chk("fresh_workdir_second_run_cannot_see_first_run_files",
+          not cross and not (seen[1] / "run1-only-marker.txt").exists()
+          and first_marker.is_file(),
+          "第二跑目录里的文件=%s 第一跑的哨兵仍在=%s" % (cross, first_marker.is_file()))
+    g.chk("fresh_workdir_default_label_is_formatted",
+          "%H" not in label and "%M" not in label and "%S" not in label and label.startswith("R"),
+          "本次 label=%s" % label)
+    shutil.rmtree(probe_root, ignore_errors=True)
+
+
 # --------------------------------------------------------------------- 起服务
 
-def start_ref_http(workdir, log_name="ref-http"):
+def start_ref_http(workdir, log_name="ref-http", extra_argv=None):
     """官方 StreamableHTTP server；端口由 uvicorn bind(0)，从 port-file 回读。"""
     port_file = workdir / (log_name + ".port")
     log = workdir / (log_name + ".txt")
     if port_file.exists():
         port_file.unlink()
     env = {"P21_SERVER_LOG": str(log)}
-    p = subprocess.Popen([sys.executable, "-u", str(REF_SERVER), "--transport", "http",
-                          "--port", "0", "--port-file", str(port_file)],
+    argv = [sys.executable, "-u", str(REF_SERVER), "--transport", "http",
+            "--port", "0", "--port-file", str(port_file)]
+    if extra_argv:
+        argv += list(extra_argv)
+    p = subprocess.Popen(argv,
                          env=dict(os.environ, **env),
                          stdout=open(workdir / (log_name + ".out"), "w"),
                          stderr=subprocess.STDOUT)
@@ -231,7 +342,9 @@ def start_ref_http(workdir, log_name="ref-http"):
         time.sleep(0.05)
     if not url:
         p.kill()
-        raise RuntimeError("官方 http server 起不来，exit=%s 现场 %s" % (p.returncode, log))
+        raise RuntimeError("官方 http server 起不来，exit=%s 现场 %s / %s（尾巴: %s）"
+                           % (p.returncode, log, workdir / (log_name + ".out"),
+                              tail_of(workdir / (log_name + ".out"))))
     return p, url, log
 
 
@@ -248,22 +361,84 @@ def temp_config_root(workdir, extra_lines=None):
 
 # --------------------------------------------------------------------- (a) stdio
 
+def a_handshake_and_caps(g, f):
+    """握手三元（协议版本 / 对端是否真广告 listChanged / 通知通道是否可用）。
+
+    拆成独立函数只为缺陷 B 的自证：同一份代码要能在"真读数"与"注入坏值"两种输入上重放。
+    """
+    g.chk("handshake_version_and_peer_caps",
+          need_fact(f, "server_protocol_version") == "2025-06-18"
+          and flag(f, "peer_advertises_list_changed") is True
+          and flag(f, "notification_capable") is True,
+          "server_protocol=%s peer_advertises_list_changed=%s notification_capable=%s server_info=%s"
+          % (f.get("server_protocol_version"), f.get("peer_advertises_list_changed"),
+             f.get("notification_capable"), f.get("server_info")))
+
+
+def a_disconnect_is_final(g, f):
+    """断开必须是真的：transport 关了 **且** 注册表被清空（两条同时成立才算）。"""
+    g.chk("disconnect_is_final",
+          flag(f, "open_after_disconnect") is False
+          and need_fact(f, "toolkit_size_after_unregister") == "0",
+          "open_after_disconnect=%s toolkit_size_after_unregister=%s"
+          % (f.get("open_after_disconnect"), f.get("toolkit_size_after_unregister")))
+
+
+def boolflag_selfproof(g, f):
+    """缺陷 B 的收口证据：上面两条断言在真读数上过，在两种坏法下必须红。
+
+    基线**取本次真跑**的 FACT（不另造常量），再逐键注入坏值重放，
+    所以"改完仍杀得死'真断开后又打开'与'对端根本不推 listChanged'"是可复算的。
+    """
+    r0 = Recorder()
+    a_handshake_and_caps(r0, f)
+    a_disconnect_is_final(r0, f)
+    g.chk("gauge/bool_baseline_passes_on_real_readings",
+          len(r0.rows) == 2 and not r0.failed(),
+          "真读数下两条都过=%s（红=%s）" % (r0.passed(), r0.failed()))
+    mutants = [
+        # (名字, 键, 注入值, 该杀的坏法, 受影响的断言)
+        ("peer_never_advertises_listChanged", "peer_advertises_list_changed", "false",
+         "对端根本不推 listChanged", "handshake_version_and_peer_caps"),
+        ("reopen_after_disconnect", "open_after_disconnect", "true",
+         "真断开后又打开", "disconnect_is_final"),
+        ("toolkit_not_emptied", "toolkit_size_after_unregister", "5",
+         "断开没真 deregister", "disconnect_is_final"),
+        ("unparseable_bool_value", "peer_advertises_list_changed", "TRUEISH",
+         "读不出的布尔值必须抛错，不许悄悄当 false", None),
+        ("missing_fact_key", "notification_capable", None,
+         "读不到不许当满分", None),
+    ]
+    for name, key, value, why, target in mutants:
+        fm = dict(f)
+        if value is None:
+            fm.pop(key, None)
+        else:
+            fm[key] = value
+        r = Recorder()
+        raised = ""
+        try:
+            a_handshake_and_caps(r, fm)
+            a_disconnect_is_final(r, fm)
+        except (MissingFact, ValueError) as e:
+            raised = "%s: %s" % (type(e).__name__, e)
+        killed = bool(r.failed()) or raised != ""
+        g.chk("gauge_kills_" + name, killed,
+              "注入 %s=%r（%s）⇒ 红=%s 异常=%s" % (key, value, why, r.failed(), raised[:120]))
+
+
 def section_a(cp, g, wd):
     srv_log = wd / "a-server-notes.txt"
     env = {"P21_SERVER_LOG": str(srv_log)}
     rc, f, _ = driver(cp, "stdio", wd,
                       [("python", sys.executable), ("server", str(REF_SERVER))],
                       env=env, timeout=120, tag="a-driver")
+    (wd / "a-driver-facts.json").write_text(json.dumps(f, ensure_ascii=False, indent=1,
+                                                       sort_keys=True), encoding="utf-8")
     g.chk("transport_is_zbot_side_not_kernel",
           f.get("transport_class") == "com.zifang.z.bot.mcp.ZBotStdioMcpTransport",
           "transport_class=%s client=%s" % (f.get("transport_class"), f.get("client_class")))
-    g.chk("handshake_version_and_peer_caps",
-          f.get("server_protocol_version") == "2025-06-18"
-          and f.get("peer_advertises_list_changed") == "True"
-          and f.get("notification_capable") == "True",
-          "server_protocol=%s peer_listChanged=%s notif_capable=%s server_info=%s"
-          % (f.get("server_protocol_version"), f.get("peer_advertises_list_changed"),
-             f.get("notification_capable"), f.get("server_info")))
+    a_handshake_and_caps(g, f)
     g.chk("client_self_version_is_not_the_hardcoded_kernel_one",
           f.get("self_reported_client_version") not in ("", "null", "0.2.0")
           or "dev" in f.get("self_reported_client_version", ""),
@@ -292,10 +467,8 @@ def section_a(cp, g, wd):
           or "Error" in f.get("call_p21_echo_wrong_type", ""),
           "wrong_type=%s || unknown_tool=%s" % (f.get("call_p21_echo_wrong_type"),
                                                 f.get("call_unknown_tool")))
-    g.chk("disconnect_is_final",
-          f.get("open_after_disconnect") == "False" and f.get("toolkit_size_after_unregister") == "0",
-          "open_after_disconnect=%s toolkit_after_unregister=%s"
-          % (f.get("open_after_disconnect"), f.get("toolkit_size_after_unregister")))
+    a_disconnect_is_final(g, f)
+    boolflag_selfproof(g, f)
     return f
 
 
@@ -311,16 +484,26 @@ def section_b(cp, g, wd):
               f.get("transport_class") == "com.zifang.z.bot.mcp.StreamableHttpMcpTransport",
               "transport_class=%s url=%s" % (f.get("transport_class"), url))
         g.chk("session_id_from_initialize_response_header",
-              f.get("session_id_present") == "True" and f.get("negotiated_protocol_version") == "2025-06-18",
-              "session_id_present=%s prefix=%s negotiated=%s peer_listChanged=%s"
+              flag(f, "session_id_present") is True and f.get("negotiated_protocol_version") == "2025-06-18",
+              "session_id_present=%s prefix=%s negotiated=%s peer_advertises_list_changed=%s"
               % (f.get("session_id_present"), f.get("session_id_prefix"),
                  f.get("negotiated_protocol_version"), f.get("peer_advertises_list_changed")))
         shapes_ok = int(f.get("json_shape_responses", "-1")) + int(f.get("sse_shape_responses", "-1"))
+        shapes_after = (int(f.get("json_shape_after", "-1")) + int(f.get("sse_shape_after", "-1")))
         g.chk("response_shape_counted_and_nonzero",
-              shapes_ok >= 1 and f.get("wire_log").count("mcp-session-id") >= 1,
-              "json_shape=%s sse_shape=%s wire_has_session_header=%s"
+              shapes_ok >= 1 and shapes_after > shapes_ok,
+              "json=%s sse=%s（registerAll 期间）→ json_after=%s sse_after=%s（三次 call 之后）"
               % (f.get("json_shape_responses"), f.get("sse_shape_responses"),
-                 f.get("wire_log").count("mcp-session-id")))
+                 f.get("json_shape_after"), f.get("sse_shape_after")))
+        # 会话头必须真的每发都挂上：wire 取证逐 POST 行数 + 前缀与 session_id_prefix 对账
+        posts = [x for x in f.get("wire_log", "").split(",") if x.startswith("POST ")]
+        carried = [x for x in posts if "mcp-session-id=" in x and "mcp-session-id=<none>" not in x]
+        g.chk("wire_log_shows_session_header_carried_on_posts",
+              len(posts) >= 5 and len(carried) >= 2
+              and ("mcp-session-id=" + f.get("session_id_prefix", "\x00")) in f.get("wire_log", ""),
+              "POST 取证 %d 行，其中带会话头 %d 行，前缀=%s 首行=%s"
+              % (len(posts), len(carried), f.get("session_id_prefix"),
+                 posts[0][:120] if posts else "无"))
         names = [x for x in f.get("toolset_names", "").split(",") if x]
         g.chk("http_tool_table_matches_stdio",
               names == EXPECTED_STDIO_TOOLS and f.get("registered") == "5",
@@ -337,14 +520,35 @@ def section_b(cp, g, wd):
               and "authorization" in f.get("entry_safe_map", "").lower(),
               "entry_render=%s || safe_map=%s" % (f.get("entry_render"), f.get("entry_safe_map")))
         g.chk("http_close_is_final",
-              f.get("open_after_disconnect") == "False" and f.get("toolkit_size_after_unregister") == "0",
-              "open_after_disconnect=%s toolkit=%s"
+              flag(f, "open_after_disconnect") is False and f.get("toolkit_size_after_unregister") == "0",
+              "open_after_disconnect=%s toolkit_size_after_unregister=%s"
               % (f.get("open_after_disconnect"), f.get("toolkit_size_after_unregister")))
         # 独立观察点：python 自己直接 POST，确认会话头是真从 server 来的而不是我这侧编的
         ext = probe_session_header_outside_jvm(url)
         g.chk("independent_http_probe_sees_same_session_header",
-              ext.get("status") == 200 and ext.get("header") not in (None, ""),
+              ext.get("status") == 200 and ext.get("header") not in (None, "")
+              and ext.get("advertises_list_changed") is True,
               "python_probe=%s" % json.dumps(ext, ensure_ascii=False))
+        # 上条要不再是空断言：会话头必须**承重** —— 假头与不带头都得被真 server 拒
+        good = post_tools_list(url, ext.get("header"), "good")
+        bogus = post_tools_list(url, "deadbeef0123456", "bogus")
+        nope = post_tools_list(url, None, "none")
+        g.chk("real_server_enforces_the_session_header",
+              good.get("status") == 200 and good.get("n_tools") == 5
+              and bogus.get("status") in (400, 404) and nope.get("status") in (400, 404),
+              "真会话=%s(工具 %s) 假会话=%s(%s) 不带头=%s(%s)"
+              % (good.get("status"), good.get("n_tools"), bogus.get("status"),
+                 str(bogus.get("body", ""))[:70], nope.get("status"), str(nope.get("body", ""))[:70]))
+        # 缺陷 A 的对照臂：摘掉 _advertise_list_changed ⇒ 能力位必须翻成 false
+        http_list_changed_negative_control(cp, g, wd, ext.get("advertises_list_changed"))
+        g.chk("accept_header_on_notifications_post_is_both_media_types",
+              all("-> 202" in x or "-> 200" in x for x in
+                  [w for w in f.get("wire_log", "").split(",") if "notifications/" in w])
+              and any("notifications/initialized -> 202" in w
+                      for w in f.get("wire_log", "").split(",")),
+              "notifications 那几发的状态码=%s（406 就是 Accept 少了一个媒体类型）"
+              % [w.split(" -> ")[-1] for w in f.get("wire_log", "").split(",")
+                 if "notifications/" in w])
     finally:
         proc.send_signal(signal.SIGTERM)
         try:
@@ -354,8 +558,16 @@ def section_b(cp, g, wd):
     return f
 
 
-def probe_session_header_outside_jvm(url):
-    import urllib.request
+def tail_of(path, n=600):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")[-n:].replace("\n", " ⏎ ")
+    except Exception as e:
+        return "读不到 %s: %s" % (path, e)
+
+
+def initialize_probe(url):
+    """python 侧**独立**走一遍 initialize：不借 z-bot 的解析器，也不借它的口。"""
+    import urllib.request  # noqa: F401
     body = json.dumps({"jsonrpc": "2.0", "id": 777, "method": "initialize",
                        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                                   "clientInfo": {"name": "p21-python-probe", "version": "0"}}}).encode()
@@ -363,10 +575,102 @@ def probe_session_header_outside_jvm(url):
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream"})
     with urllib.request.urlopen(req, timeout=15) as r:
-        raw = r.read(4096).decode("utf-8", "replace")
-        return {"status": r.status, "header": r.headers.get("mcp-session-id"),
-                "content_type": r.headers.get("content-type"),
-                "body_head": raw[:120].replace("\n", "\\n")}
+        raw = r.read(8192).decode("utf-8", "replace")
+    payload = raw
+    if "data:" in raw:                       # SSE 形状：取第一个 data: 帧
+        payload = [x[5:].strip() for x in raw.splitlines() if x.startswith("data:")][0]
+    doc = json.loads(payload)
+    result = doc.get("result") or {}
+    tools_cap = (result.get("capabilities") or {}).get("tools") or {}
+    out = {"status": r.status, "header": r.headers.get("mcp-session-id"),
+           "content_type": r.headers.get("content-type"),
+           "protocolVersion": result.get("protocolVersion"),
+           "advertises_list_changed": tools_cap.get("listChanged"),
+           "tools_cap_raw": tools_cap,
+           "body_head": raw[:120].replace("\n", "\\n")}
+    # 规范的握手还差一步 notifications/initialized —— 不发的话后面每一发都不算
+    # "一个真客户端的会话"，拿它去试会话头是否承重会误判（实测：无这一步时好会话那发拿不到响应）
+    _post_raw(url, {"jsonrpc": "2.0", "method": "notifications/initialized"}, out["header"], want_body=False)
+    return out
+
+
+def _post_raw(url, doc, sid, want_body=True):
+    import urllib.request
+    headers = {"Content-Type": "application/json",
+               "Accept": "application/json, text/event-stream",
+               "mcp-protocol-version": "2025-06-18"}
+    if sid is not None:
+        headers["mcp-session-id"] = sid
+    req = urllib.request.Request(url, data=json.dumps(doc).encode(), method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return {"status": r.status, "sid": r.headers.get("mcp-session-id"),
+                    "body": r.read(65536).decode("utf-8", "replace") if want_body else ""}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "sid": None,
+                "body": e.read(400).decode("utf-8", "replace")}
+    except Exception as e:
+        return {"status": "EXC:" + type(e).__name__, "sid": None, "body": str(e)[:200]}
+
+
+def probe_session_header_outside_jvm(url):
+    d = initialize_probe(url)
+    return {"status": d["status"], "header": d["header"], "content_type": d["content_type"],
+            "advertises_list_changed": d["advertises_list_changed"],
+            "body_head": d["body_head"]}
+
+
+def post_tools_list(url, session_id, tag):
+    """带/不带/带假会话头各打一发 tools/list：看**真 server** 认不认这个头。"""
+    r = _post_raw(url, {"jsonrpc": "2.0", "id": 778, "method": "tools/list", "params": {}}, session_id)
+    out = {"tag": tag, "status": r["status"], "body": r["body"][:200]}
+    if r["status"] == 200:
+        try:
+            out["n_tools"] = len((json.loads(_first_frame(r["body"])).get("result") or {}).get("tools", []))
+        except Exception as e:
+            out["n_tools"] = "解析失败 %s" % e
+    return out
+
+
+def _first_frame(raw):
+    for line in raw.splitlines():
+        if line.startswith("data:"):
+            return line[5:].strip()
+    return raw
+
+
+def http_list_changed_negative_control(cp, g, wd, patched_reading=None):
+    """缺陷 A 的对照臂：同一个 server 文件，只差 `--no-list-changed`。
+
+    三个观察点必须一起成立，否则这条能力位是空断言：
+      1. 真 server 自己（python 裸 initialize）报的 listChanged 翻了；
+      2. **z-bot 的解析器**（走生产 transport）读到的也翻了；
+      3. 这台"摘了广告"的 server 仍是活的（工具表照样 5 条）——
+         否则"读到 false"只是因为 server 根本没起来。
+    """
+    proc, url, _ = start_ref_http(wd, log_name="b-negref", extra_argv=["--no-list-changed"])
+    try:
+        py = initialize_probe(url)
+        rc, f, _ = driver(cp, "http", wd, [("url", url)], timeout=120, tag="b-neg-driver")
+        names = [x for x in f.get("toolset_names", "").split(",") if x]
+        g.chk("negative_control_server_still_serves_five_tools",
+              py["status"] == 200 and names == EXPECTED_STDIO_TOOLS and f.get("registered") == "5",
+              "摘掉广告后 server 仍活着：registered=%s names=%s" % (f.get("registered"), names))
+        g.chk("advertise_patch_flips_python_observed_cap",
+              py["advertises_list_changed"] is False and patched_reading is True,
+              "python 裸 initialize 看到 tools.cap=%s（打了补丁的那台 listChanged=%s）"
+              % (json.dumps(py["tools_cap_raw"], ensure_ascii=False), patched_reading))
+        g.chk("advertise_patch_flips_zbot_observed_cap",
+              flag(f, "peer_advertises_list_changed") is False
+              and flag(f, "notification_capable") is True,
+              "z-bot 读到的 peer_advertises_list_changed=%s（notification_capable=%s 是我方通道状态，不随对端广告变）"
+              % (f.get("peer_advertises_list_changed"), f.get("notification_capable")))
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 # --------------------------------------------------------------------- (c) 换血
@@ -403,15 +707,21 @@ def check_swap(g, f, tag, relay_log=None):
         lines = relay_log.read_text(encoding="utf-8").splitlines() if relay_log.is_file() else []
         s2c = [x for x in lines if x.startswith("S2C")]
         c2s = [x for x in lines if x.startswith("C2S")]
-        pushed = [x for x in s2c if "list_changed" in x]
+        # 只认"通知那条 method"，不能认裸的 list_changed 子串：
+        # 工具描述里就写着"推 list_changed"，tools/list 的**响应体**照样命中这个子串（实测被它骗过一次）
+        compact = [x.replace(" ", "") for x in s2c]
+        pushed = [x for x, c in zip(s2c, compact)
+                  if '"method":"notifications/tools/list_changed"' in c]
         g.chk(tag + "_relay_as_external_observer_saw_both_directions",
               len(c2s) >= 6 and len(s2c) >= 6 and len(pushed) >= 1 and len(lines) > 0,
               "relay_lines=%d C2S=%d S2C=%d list_changed_lines=%d"
               % (len(lines), len(c2s), len(s2c), len(pushed)))
-        if pushed:
-            g.chk(tag + "_relay_pushed_line_is_the_notification_itself",
-                  '"method":"notifications/tools/list_changed"' in pushed[0].replace(" ", ""),
-                  "first_pushed_relay_line=%s" % pushed[0][:220])
+        g.chk(tag + "_relay_pushed_line_is_a_notification_not_a_response",
+              len(pushed) >= 2 and '"method":"notifications/tools/list_changed"'
+              in pushed[0].replace(" ", "")
+              and '"result"' not in pushed[0] and '"id":' not in pushed[0],
+              "命中 %d 条；第一条=%s（同一条里钉死：它没有 result/id ⇒ 是 server 主动推的 notification，"
+              "不是我们发出去那发的响应体）" % (len(pushed), pushed[0][:180] if pushed else "无"))
         g.chk(tag + "_relay_has_no_empty_body",
               all(x.strip() for x in (c2s[-1], s2c[-1])),
               "last_C2S_len=%d last_S2C_len=%d" % (len(c2s[-1]), len(s2c[-1])))
@@ -463,7 +773,7 @@ def section_c_http(cp, g, wd):
               "after2_size=%s after2=%s" % (f.get("snapshot_after2_size"), two))
         g.chk("http_swap_was_driven_by_the_get_stream",
               f.get("bridge_refresh_count") == "2" and f.get("transport_notification_count") == "2"
-              and f.get("notification_capable") == "True",
+              and flag(f, "notification_capable") is True,
               "refresh=%s transport_notif=%s capable=%s sse_shape=%s json_shape=%s"
               % (f.get("bridge_refresh_count"), f.get("transport_notification_count"),
                  f.get("notification_capable"), f.get("sse_shape_responses"),
@@ -744,14 +1054,15 @@ def watchdog_once(cp, g, wd, tag, watchdog_flag, mode):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--label", default=time.strftime("R%%H%%M%%S"))
+    ap.add_argument("--label", default=None,
+                    help="现场目录名；不给就自动生成 R<时分秒>-p<pid>（每跑必新，见缺陷 C）")
     ap.add_argument("--only", default=",".join(SECTIONS))
     ap.add_argument("--workroot", default=str(CACHE / "e2e"))
     args = ap.parse_args()
-    wd = Path(args.workroot) / args.label
-    if wd.exists():
-        shutil.rmtree(wd)
-    wd.mkdir(parents=True)
+    auto_label = args.label is None
+    label = args.label if not auto_label else \
+        "R" + time.strftime("%H%M%S") + "-p%d" % os.getpid()
+    wd = fresh_workdir(args.workroot, label, auto_label)
     only = [x.strip() for x in args.only.split(",") if x.strip()]
     bad = [x for x in only if x not in SECTIONS]
     if bad:
@@ -774,6 +1085,9 @@ def main():
     g = Gauge(log)
     t0 = time.time()
     try:
+        # 现场目录自证挂在 requested 清单的第一节里 ⇒ 任何 `--only` 组合法都必做（缺陷 C）
+        g.start(only[0])
+        prove_fresh_workdir(g, args.workroot, label)
         if "a" in only:
             g.start("a")
             section_a(cp, g, wd)
@@ -798,7 +1112,7 @@ def main():
 
     counts = g.section_counts
     total = sum(counts.values())
-    print("\n== P21 杠③ 读数汇总 label=%s 用时=%.1fs ==" % (args.label, time.time() - t0))
+    print("\n== P21 杠③ 读数汇总 label=%s 用时=%.1fs ==" % (label, time.time() - t0))
     for s in SECTIONS:
         print("  (%s) 断言 %d 条" % (s, counts.get(s, 0)))
     print("  合计 %d 条，失败 %d 条: %s" % (total, len(g.failed), g.failed))
