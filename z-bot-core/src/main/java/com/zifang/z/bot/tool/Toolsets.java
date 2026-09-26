@@ -13,7 +13,7 @@ import java.util.Set;
  *
  * <p>对齐 hermes 的分层：内核 {@code ToolDescriptor} 只存"这个槽位属于哪个 toolset"这一
  * 字符串事实，"我们到底有哪些 toolset、每个装什么工具"是应用侧的能力清单（她的等价物是
- * {@code tools/toolsets.py} + {@code registry.register_toolset_alias}）。</p>
+ * {@code toolsets.py}（她的仓根，不是 {@code tools/} 下）+ {@code registry.register_toolset_alias}）。</p>
  *
  * <p>两条硬规矩（roadmap 红线 2）：
  * <ol>

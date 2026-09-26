@@ -190,6 +190,77 @@ public class McpBridgeDeregisterTest {
         assertEquals(Collections.emptyList(), tk.namesOfToolset("mcp-deep_kb"));
     }
 
+    /**
+     * 杠② <b>MB2</b> 的活猎物（上一棒记"单测层没有活的猎物"：看着最像猎物的
+     * {@code deregisterToolsetCleansNamesTheBridgeNoLongerKnowsAbout} 是<b>注册表层</b>的用例，
+     * 不经过 {@link McpBridge}）。本条把那个分岔真造出来：<b>注销这一刻，注册表里有的是
+     * "桥没记住的名字"</b>，而结论必须来自注册表。
+     *
+     * <p>两个现场都是真路径：</p>
+     * <ol>
+     *   <li>同名 server 的<b>第二个桥实例</b>（reload/重连会造出来）—— toolset 与 owner 与第一个
+     *       桥逐字相同，可两个桥的 {@code registered} 各只记着自己那批名字；</li>
+     *   <li>上一轮注册留下、这一轮 server 不再发的<b>僵尸槽</b>（她 {@code registry.py:459}
+     *       注释里 nuke-and-repave 就是为这个）—— 同一个 toolset/owner，桥的记忆里永远没有它。</li>
+     * </ol>
+     *
+     * <p>反向钉住活的猎物：注销<b>之前</b>先用 {@code registeredNames()} 与 {@code getToolNames()}
+     * 两个读数各点一次名 —— 没有这两行，下面的"必须全没了"就是空跑。旁边留一台没被动过的
+     * 第三 server，防止"顺手清空整张注册表"这种修法蒙过去。</p>
+     */
+    @Test
+    public void unregisterAllCleansSlotsTheBridgeNeverRecorded() {
+        Toolkit tk = new Toolkit();
+        InMemoryMcpTransport first = new InMemoryMcpTransport("twice").tool("one", "上一轮的名字");
+        McpBridge remembered = new McpBridge(client("twice", first), tk);
+        assertEquals(1, remembered.registerAll());
+
+        // 现场一：同名 server 的第二个桥实例（toolset/owner 与第一个完全一样）
+        InMemoryMcpTransport again = new InMemoryMcpTransport("twice").tool("two", "这一轮的名字");
+        McpBridge second = new McpBridge(client("twice", again), tk);
+        assertEquals(1, second.registerAll());
+        assertEquals("两个桥拼出来的 toolset/owner 必须逐字相同，否则这根本不是一个命名空间",
+                remembered.toolset() + "/" + remembered.owner(), second.toolset() + "/" + second.owner());
+
+        // 现场二：上一轮留下、server 这一轮不再发的僵尸槽（同一个 toolset + 同一个 owner）
+        tk.register(Toolkit.of("mcp-twice-legacy", "上一轮的老名字", null,
+                args -> ToolResult.text("ghost")), "mcp-twice", "mcp:twice", false);
+
+        // 第三台：全程没被动过 ⇒ "整组注销"不许扩大成"清空注册表"
+        InMemoryMcpTransport bystander = new InMemoryMcpTransport("bystander").tool("keep", "旁观");
+        McpBridge third = new McpBridge(client("bystander", bystander), tk);
+        assertEquals(1, third.registerAll());
+
+        // ===== 活的猎物先点名（这两行不成立的话，下面的反向断言全是空跑）=====
+        assertEquals("这个桥自己记住的只有 mcp-twice-two: " + second.registeredNames(),
+                Collections.singletonList("mcp-twice-two"), second.registeredNames());
+        assertFalse("注册表里有、桥没记住（现场一）",
+                second.registeredNames().contains("mcp-twice-one"));
+        assertFalse("注册表里有、桥没记住（现场二）",
+                second.registeredNames().contains("mcp-twice-legacy"));
+        assertEquals("注销前注册表里这三个名字都真挂着",
+                Arrays.asList("mcp-twice-one", "mcp-twice-two", "mcp-twice-legacy"),
+                new ArrayList<String>(tk.namesOfToolset("mcp-twice")));
+
+        List<String> removed = second.unregisterAllReturningNames();
+
+        assertEquals("结论必须来自注册表（toolset+owner 整组），不是来自桥的记忆: " + removed,
+                Arrays.asList("mcp-twice-one", "mcp-twice-two", "mcp-twice-legacy"), removed);
+        assertEquals("注销后这个 toolset 必须真空", Collections.emptyList(), tk.namesOfToolset("mcp-twice"));
+        assertFalse("僵尸槽不许占着 schema 名额: " + tk.getToolNames(),
+                tk.getToolNames().contains("mcp-twice-legacy"));
+        assertFalse(tk.contains("mcp-twice-one"));
+        assertFalse("外发清单里也不许留着桥没记住的名字: " + exposedNames(tk),
+                exposedNames(tk).contains("mcp-twice-legacy"));
+        assertEquals("第三台 server 一个字节都不许被顺带清掉: " + tk.getToolNames(),
+                Arrays.asList("mcp-bystander-keep"), tk.getToolNames());
+        assertEquals(1, tk.size());
+        assertEquals("注销完桥的记忆也要跟着清空（否则下一次注册拿的是旧账）",
+                Collections.emptyList(), second.registeredNames());
+        third.unregisterAll();
+        assertEquals(0, tk.size());
+    }
+
     // ===== check_fn 接的是真连接状态 =====
 
     @Test

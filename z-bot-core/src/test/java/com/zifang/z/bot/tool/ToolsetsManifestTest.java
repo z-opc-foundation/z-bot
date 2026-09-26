@@ -9,7 +9,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
@@ -123,9 +125,15 @@ public class ToolsetsManifestTest {
             assertFalse(rw + " 有副作用，必须声明不可并行", tk.isParallelSafe(rw));
         }
         // 声明之外不许有第二真源：注册表里没有批次/线程 API（ToolkitRegistryTest 判），
-        // 每个工具的回读值必须与清单声明一致
+        // 每个工具的回读值必须与清单一致 —— 但期望值**不许**再调 Toolsets.toolsetForTool(name)：
+        // 那正是被测函数本身，注册侧 BuiltinTools#declare 用的也是它，两边一起漂就判不出来
+        // （杠② TS4 的账：把 toolsetForTool 摘成恒回兜底槽，expected 与 actual 同时变成 builtin）。
+        // 期望改成本地字面量常量表 EXPECTED_TOOLSET_BY_TOOL，与产品码没有任何调用关系。
+        assertEquals("常量表必须正好覆盖注册表里的工具，否则下面这个循环是空跑",
+                new java.util.TreeSet<String>(tk.getToolNames()),
+                new java.util.TreeSet<String>(EXPECTED_TOOLSET_BY_TOOL.keySet()));
         for (String name : tk.getToolNames()) {
-            assertEquals(name, Toolsets.toolsetForTool(name), tk.toolsetOf(name));
+            assertEquals(name, EXPECTED_TOOLSET_BY_TOOL.get(name), tk.toolsetOf(name));
         }
     }
 
@@ -203,6 +211,29 @@ public class ToolsetsManifestTest {
             assertTrue(expected.getMessage(), expected.getMessage().contains("不能注销"));
         }
         assertEquals(3, tk.namesOfToolset(Toolsets.FILE).size());
+    }
+
+    /**
+     * 清单的第二真源（**故意写成字面量**）：测试侧对"每个内建工具该落哪个 toolset"的独立记账。
+     * 期望值一旦调 {@code Toolsets.toolsetForTool} 就与被测函数同源，注入两侧一起漂 ⇒ 判不出来。
+     * 这张表与 {@link Toolsets} 的声明表若漂了，{@code readOnlyToolsDeclareParallelSafetyAndWriteToolsDoNot}
+     * 与 {@code eachBuiltinToolLandsInItsDeclaredCapability} 会同时点名。
+     */
+    private static final Map<String, String> EXPECTED_TOOLSET_BY_TOOL = expectedToolsetByTool();
+
+    private static Map<String, String> expectedToolsetByTool() {
+        Map<String, String> m = new LinkedHashMap<String, String>();
+        for (String t : new String[] {"echo", "time", "counter", "health", "sysinfo"}) {
+            m.put(t, "core");
+        }
+        for (String t : new String[] {"read_file", "write_file", "search"}) {
+            m.put(t, "file");
+        }
+        for (String t : new String[] {"exec", "mvn_build"}) {
+            m.put(t, "exec");
+        }
+        m.put("curl_test", "net");
+        return Collections.unmodifiableMap(m);
     }
 
     private static List<String> sorted(List<String> in) {
