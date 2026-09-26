@@ -1388,9 +1388,83 @@ run3 rc=1 | Tests run: 640, Failures: 1, Errors: 0, Skipped: 0 | socket_hits=0
 
 ## 11.5 杠②：LEDGER 重算 + M1b 能不能从 PARTIAL 收成 RED-OK
 
-## 11.6 杠③：真进程 E2E 三整跑 + K2 探针
+`python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e`（本棒动了产品码 ⇒ 整张 19 支重跑；
+flock `LOCK_EX|LOCK_NB`，日志 `~/.cache/zbot-p12e/bar2_mutation*.log`，副本 `~/.cache/zbot-p12e/LEDGER_run1.tsv`）
 
-## 11.7 杠④：`~/.zbot` 未污染三读数
+**第一遍（HEAD c829f08 的字节，19/19）**：`RED-OK 14 / PARTIAL 2 / GREEN-BUT-MUTATED 3 / BROKEN 0`，
+`SRC_MD5_STABLE=yes`，19/19 `restored=ok`、`vs_git=ok/ok`。档名与 p12d 交回的那张**逐支同号**：
+PARTIAL = M1b / M16，GBM = M8 / M9 / M17。⇒ 任务一的修法没有让任何一支从红转绿、也没有新增漏网。
+
+### 11.5.1 M1b：锚点漂了 ⇒ 必须重锚，且这次能收成 RED-OK（差一步）
+
+M1b 的旧锚点是源码头一行 `memory.add(Msg.user(withVolatileContext(mergeQueued(userMessage))));` ——
+任务一把注入点搬走之后它 **count=0**（`python3` 逐支预检 19 支锚点，唯一 DRIFT 就是 M1b，其余 18 支 count=1）。
+不重锚就是 `check_anchors` FATAL、整张台账跑不了。重锚取语义等价的**新**注入侧锚点：
+
+```python
+"this.turnVolatileBlock = volatileContextBlock();"   →   "this.turnVolatileBlock = \"\";"
+```
+
+（"本轮上下文块算成空串" = 发给模型的 user 行只剩原文，与 M1b 原意一致；`TESTS` 里补进了本棒新增的
+`VolatileContextPersistenceTest`。这两处都写进脚本注释，判据方向只有一个：**加严**。）
+
+第一遍实测：M1b **点名 4/4 全红**，但多出一支不在点名集里的红
+（`midRunMemoryWriteIsVisibleNextTurnWithoutTouchingThePrompt`）⇒ 按尺子定义记 **PARTIAL**。
+那一支红的理由正是本变异要抓的事（"中途写的记忆下一轮到不了模型"），所以把它**补进点名集**
+（不是从期望里删东西、也不是放宽任何断言），补完再跑整张 19 支 —— 结果见下（第二遍）。
+
+**判词：M1b 收不收得下？** 收得下（5/5 点名 + 无 extra 的路是通的），但**代价是把 M1b 的锚点从
+"memory.add 那一行"搬到"请求侧注入"** —— 这条不变量的守门点从此在 `buildRequest`，不在 `memory.add`。
+第一遍那个 PARTIAL 不是产品坏了，是尺子的锚点跟着产品码搬了家，我把它如实记成"重锚 + 补名"两笔账。
+
+### 11.5.2 第二遍（M1b 补名之后整张重跑）
+
+（跑完补：期望 `RED-OK 15 / PARTIAL 1 / GREEN-BUT-MUTATED 3 / BROKEN 0`；PARTIAL 只剩 M16。）
+
+## 11.6 杠③：真进程 E2E 三整跑 + K2 双向探针
+
+```
+bash ~/.cache/zbot-p12e/bar3_p12e.sh      # 每跑都是 python3 -u _doc/acceptance/p12/p12_e2e.py（无 --only，自己现打 jar）
+run1 rc=0 | 段=all 检查条数=27 PASS=27 FAIL=0
+run2 rc=0 | 段=all 检查条数=27 PASS=27 FAIL=0
+run3 rc=0 | 段=all 检查条数=27 PASS=27 FAIL=0
+```
+
+⇒ 27 条 ×3 rc=0，与 p12d 交回的条数一致；**任务一的产品码改动没有让 E2E 任何一段改口**。
+其中 `cache` 段那 6 条（C1 system 逐字节相同 / C2 时钟走 user / C3 两轮时钟不同 /
+C4 原话仍在末尾 / C5 SOUL 哨兵不进 prompt / C6 记忆哨兵下一轮到模型）是我这次最该弄坏的东西，
+三跑全绿：改的只是"块存到哪"，没改"块长什么样、发到哪"。
+
+K2 双向探针（`python3 _doc/acceptance/p12/p12_k2_probe.py`，rc=0）：
+
+```
+7 个 case × 2 行（现场行 + 汇总行）= 14 条读数，全部「期望 == 实测」
+  A  两形态并存（都只含 stub）        期望=PASS 实测=PASS OK
+  A2 同现场再跑一遍（稳定性）         期望=PASS 实测=PASS OK
+  B  混入别的 key 值                 期望=FAIL 实测=FAIL OK      ← 阳性对照（判据不是恒绿）
+  B2 混入别的 Bearer 值              期望=FAIL 实测=FAIL OK      ← 同上，反向
+  C  只有 stub 一种形态              期望=PASS 实测=PASS OK
+  D  产物里配不到任何 key            期望=FAIL 实测=FAIL OK      ← 空猎物自己会红
+  F  api.key=not-configured（假红侧） 期望=FAIL 实测=FAIL OK
+结论行：全部符合期望 ⇒ (a) 两形态并存判绿 与 (b) 混入别的值判红 两边都成立，判据没有被调松
+```
+
+p12d 改过的两支量具（`c90643a` 的 `only` 先用后赋值、`b210ad7` 的 K3 扫描面按形状请出读数件）
+本棒**一字未动**：`git diff 20d371a..HEAD -- _doc/acceptance/p12/p12_e2e.py _doc/acceptance/p12/p12_k2_probe.py`
+为空（唯一被改的量具是 `p12_mutation.py` 的 M1b 锚点与 TESTS，见 §11.5）。
+K3 那一支本棒三跑都读到 `命中=[]；未纳入扫描的 harness 读数文件=[]`，与我新写进 EVIDENCE 的
+`~/.zbot` 字样无关（扫描面按 st_mtime 窗 + 结构判定，EVIDENCE 不在面上）。
+
+## 11.7 杠④：`~/.zbot` 未污染（三个时点）
+
+| 时点 | `ls -A ~/.zbot \| wc -l` | `md5 -q ~/.zbot/config.properties\|cut -c1-8` | `md5 -q ~/.zbot/state.db\|cut -c1-8` |
+|---|---|---|---|
+| T1 任务一取证 + 杠① 三跑之后 | 8 | 2dadaed0 | 690ddbc0 |
+| T2 杠② 变异在飞时 | 见 §11.5 补记 | | |
+| T3 收尾 | 见下 | | |
+
+本棒所有实验（`VolatileContextPersistenceTest` 用 `TemporaryFolder`、E2E/mutation 自己带
+`--config-dir` 临时根）都不指向 `~/.zbot`；真 key 的值本棒一次都没读过（只量过 md5 前缀与条目数）。
 
 ## 11.8 §交接：`GatewayDeliveryP16Test` 补丁文本（本棒不落刀，主编落刀）
 
