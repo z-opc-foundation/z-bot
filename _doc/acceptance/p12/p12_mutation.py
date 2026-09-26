@@ -47,6 +47,8 @@ REPORTS = os.path.join(CORE, "target", "surefire-reports")
 LOGS = os.path.join(HERE, "logs")
 LEDGER = os.path.join(HERE, "LEDGER.tsv")
 E2E = os.path.join(HERE, "p12_e2e.py")
+# 双向锁探针允许"等邻居松手"的上限（秒）：探针对象是这把锁互斥不互斥，不是这一刻有没有人用
+HOLDER_WAIT = float(os.environ.get("P12_HOLDER_WAIT", "300"))
 
 AGENT = "z-bot-core/src/main/java/com/zifang/z/bot/agent/"
 SRC = {
@@ -306,6 +308,24 @@ def lock_path():
     return os.path.join(d, "zbot-mutlock")
 
 
+def acquire_quiet(label):
+    """同 acquire()，但不打印 —— 只给 --hold-lock 的等待循环用（邻居在飞时别刷屏）。"""
+    path = lock_path()
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    try:
+        os.truncate(fd, 0)
+        os.write(fd, ("pid=%s tag=%s t=%s\n" % (os.getpid(), label, time.strftime("%F %T")))
+                 .encode("utf-8"))
+    except OSError:
+        pass
+    return fd
+
+
 def acquire(label):
     """flock(LOCK_EX|LOCK_NB)。拿不到就返回 None，且一个源文件都不碰。"""
     path = lock_path()
@@ -405,9 +425,20 @@ def main():
 
     if "--hold-lock" in argv:
         secs = float(argv[argv.index("--hold-lock") + 1])
-        fd = acquire("holder")
+        # 邻居（别的 worktree 的注入脚本）在飞时等一会儿再攥 —— 探针对象是"这把锁互斥吗"，
+        # 不是"这一刻有没有人用"；等不到就如实报 LOCK-NOT-OBTAINED，绝不去碰源文件。
+        wait = float(argv[argv.index("--hold-lock-wait") + 1]) if "--hold-lock-wait" in argv else 0.0
+        t0 = time.time()
+        fd = acquire_quiet("holder")
+        while fd is None and time.time() - t0 < wait:
+            time.sleep(0.5)
+            fd = acquire_quiet("holder")
         if fd is None:
+            print("LOCK-NOT-OBTAINED holder：%.0fs 内没等到锁（%s 一直被别人攥着）⇒ 探针不开始，一个源文件都没碰"
+                  % (wait, lock_path()), flush=True)
             return 4
+        if time.time() - t0 > 1:
+            print("HOLDER-WAIT %.1fs 之后才攥到锁（邻居松手了）" % (time.time() - t0), flush=True)
         print("LOCK-HELD %.1fs" % secs, flush=True)
         time.sleep(secs)
         fcntl.flock(fd, fcntl.LOCK_UN)
@@ -549,14 +580,24 @@ def lock_probe():
     print("源码全量 md5 基线: %d 个 .java 文件" % len(before), flush=True)
 
     holder = subprocess.Popen([sys.executable, "-u", os.path.abspath(__file__),
-                               "--hold-lock", "25"], cwd=ZBOT,
+                               "--hold-lock", "25", "--hold-lock-wait", str(HOLDER_WAIT),
+                               ], cwd=ZBOT,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    first = holder.stdout.readline().decode("utf-8", "replace").strip()
-    print("  邻居进程: %s (pid=%s)" % (first, holder.pid), flush=True)
-    if not first.startswith("LOCK-HELD"):
-        print("FATAL 邻居没攥住锁", flush=True)
-        holder.kill()
-        return 2
+    first = ""
+    while True:                       # 等锁期间会有 HOLDER-WAIT 这类信息行，跳过它们
+        line = holder.stdout.readline()
+        if not line:
+            print("FATAL 邻居进程自己退出了（没等到锁？），一个源文件都没碰", flush=True)
+            holder.wait(timeout=10)
+            return 3
+        first = line.decode("utf-8", "replace").strip()
+        print("  邻居进程: %s (pid=%s)" % (first, holder.pid), flush=True)
+        if first.startswith("LOCK-HELD"):
+            break
+        if first.startswith("LOCK-NOT-OBTAINED"):
+            print("FATAL %.0fs 内没等到锁 ⇒ 双向探针无法开始（不伪造读数）" % HOLDER_WAIT, flush=True)
+            holder.wait(timeout=10)
+            return 3
 
     refused = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "M2"],
                              cwd=ZBOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

@@ -270,14 +270,42 @@ M12 那对 sha256 同时就是 §9 的阳性对照（冻结在位时两轮都是
 
   这一跑**恰好是"拒跑方向"的又一次实测**（被真邻居拒，且 `git status --porcelain` 之后仍只剩
   `logs/`、`out/` ⇒ 一个源文件都没碰），但它不是探针设计的那次双向读数。
-- **双向实测**（`--lock-probe`：攥住 flock ⇒ 本脚本必须拒跑且全量源码 md5 不变；松开 ⇒ 照常拿得到）：
-  UNKNOWN —— 本棒三次重试（11:25 / 11:31 / 11:41）全被 `zbot-wt-p20b` 那支 `p20b_mutation.py`（PID 73653，
-  11:24:01 起）攥着锁，`--lock-probe` 在它自己那一步就 `LOCK-BUSY` 退出（上面原文），**没有伪造读数**。
-  两向的**间接**证据各自都有（① 拒跑：本节两条真邻居读数 + `logs/p12c_mut_retry_index.txt` 里那串
-  `attempt1..13 rc=5` 与 `attempt14 rc=0`；② 放行：同一把锁在邻居松手后本棒 `11:17:46` 的 `--with-e2e`
-  全量、`10:53` 的 `--with-e2e M6 M12` 都正常 `LOCK-ACQUIRED`），但这不等于探针那一跑在同一次执行里
-  先攥后放、两向各一条的读数值。
-  命令已备：`python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe`（见 §7.1）。
+- **双向实测（本棒跑成了，两跑都 PASS）**：`--lock-probe` 先用一个自己的子进程 `flock(LOCK_EX|LOCK_NB)`
+  攥住 25 s，期间跑一遍本脚本的注入路径 ⇒ 必须拒跑且全量源码 md5 不变；子进程松手后再跑
+  `--try-lock-then-exit` ⇒ 必须照常拿到锁。
+
+  ```
+  $ python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe     # rc=0（第二跑 logs/p12c_lock_probe2.log 同读数）
+  探针对象: /Users/zifang/…/z-bot/.git/zbot-mutlock（git 公共目录，跨 worktree 有效）
+  源码全量 md5 基线: 120 个 .java 文件
+    邻居进程: LOCK-HELD 25.0s (pid=9101)
+    ① 攥住时跑注入: rc=5
+       | LOCK-BUSY mutator：另一支注入脚本攥着 /Users/zifang/…/.git/zbot-mutlock（[Errno 35] Resource temporarily unavailable）⇒ 本次不跑，一个源文件都没碰
+    ① 拒跑后全量源码 md5 未变: yes
+    ② 松开后跑同一条命令: rc=0
+       | LOCK-ACQUIRED probe flock=LOCK_EX|LOCK_NB path=/Users/zifang/…/.git/zbot-mutlock
+  == flock 双向实测: 拒跑=True 放行=True ⇒ PASS
+  ```
+
+  脚本自己落的机读记录（`logs/lock_probe.txt`）：
+  `java_files=120 / refuse_ok=True / acquire_ok=True`。
+  **注意这条不是"放宽断言凑绿"**：本棒给 `--hold-lock` 加了一个**有界等待**（`--hold-lock-wait`，缺省 300 s，
+  见 §6 G11），因为原来那一版在邻居攥锁时子进程直接放弃 ⇒ 探针自己 `FATAL` 退出、双向读数拿不到
+  （11:25 / 11:31 / 11:41 三次就是这么失败的）。等待只发生在**探针的"邻居"子进程**上，
+  `MUTANTS` 期望集、锚点预检、四类判定规则、真注入路径的 fail-fast 行为**一行都没动**。复算两条：
+
+  ```
+  # ① 本棒这一次改动落在哪些函数上（只有常量 / acquire 对儿 / --hold-lock 分支 / lock_probe）
+  $ git diff -- _doc/acceptance/p12/p12_mutation.py | grep -E "^@@"
+  @@ -47,6 +47,8 @@ REPORTS = …            ← HOLDER_WAIT 常量
+  @@ -306,6 +308,24 @@ def lock_path():  ← 新增 acquire_quiet()
+  @@ -405,9 +425,20 @@ def main():      ← --hold-lock 的等待循环
+  @@ -549,14 +580,24 @@ def lock_probe(): ← 跳过信息行、LOCK-NOT-OBTAINED 分支
+  # ② 改动行里有没有碰过判定/期望集/锚点（应为 0）
+  $ git diff -- _doc/acceptance/p12/p12_mutation.py | grep -E "^[+-]" | grep -vE "^(\+\+|---)" \
+      | grep -cE "MUTANTS|RED-OK|PARTIAL|GREEN-BUT-MUTATED|BROKEN|锚点|expected|want"
+  0
+  ```
 
 ### 2.5 还原独立取证
 
@@ -601,15 +629,19 @@ $ md5 -q ~/.zbot/state.db | cut -c1-8
 | G8 | 杠③ cache 段 C1 | 只连打两次 chat、**两次之间不写盘** ⇒ "每步按盘重建"与"冻结快照"算出同一份字节 | `--with-e2e M12` 第一跑 `e2e_rc=0`（`logs/p12c_mut_withe2e_M6_M12.log`）：把冻结整个摘掉，真进程层照样全绿 ⇒ C1 在进程层是等价变异盲点 | 本棒补 C5（中途写 `SOUL.md` 那一行不许进 prompt，且先证盘上真有那一行）+ C6（中途写的记忆下一轮在 **user** 消息里，反 C5 的空跑），并把 M12 的 kind 改成 `mvn+e2e` 走 cache 段 ⇒ 阳性对照见 §9 |
 | G9 | 杠③ K2/K3 扫描面 | 排除规则用 basename 含 `_run` 来挡 harness 自己的读数文件 | 万一**真**运行期产物名字里带 `_run`，它会被排除在凭证扫描之外（哨兵看不见它） | 本棒没放宽、也没重写这条启发式；排除清单在读数里逐条报出（`K3 … 未纳入扫描的 harness 读数文件=[…]`），残余风险只记在这里 |
 | G10 | 杠② LEDGER 写出方式 | `LEDGER.tsv` 每次运行**整体重写**，且只写本次跑到的那些支 ⇒ 跑子集（`--with-e2e M12` 这种单支复打）会静默把 19 行台账压成 1 行 | 本棒接手时盘上就是这样：`git status` 显示 `M LEDGER.tsv`，diff 里 18 行被删、只剩表头 + M12 一行。要不是它有未提交的 `M` 标记，这份"1 支的台账"就会被当成"全量台账"入库 ⇒ **子集跑不是不能跑，是不能拿它的产物当交付物** | 本棒没有改脚本的写出方式（改了台账格式就没法跟上一棒比），而是**重跑一遍 19 支全量**（`--with-e2e`）让 `LEDGER.tsv` 重新成为全量脚本产物（§2.1b），并把上一棒那 18 行的读数用 `git show e69709a:…LEDGER.tsv` 留住做逐支对拍 |
+| G11 | 杠② `--lock-probe` 的"邻居"子进程 | `--hold-lock` 一次 `LOCK_NB` 拿不到就直接 `return 4` ⇒ 只要邻居（别的 worktree 的注入脚本）在飞，探针自己的攥锁步骤就失败，`lock_probe()` 打一句 `FATAL 邻居没攥住锁` rc=2/3 退出，**双向读数永远拿不到**（上一棒与本作前面的 4 次失败全是这个形状，不是锁坏） | 现象长得像"锁不可用/脚本坏了"，很容易被记成"锁这条杠没法自证" | 本棒给 `--hold-lock` 加 `--hold-lock-wait`（缺省 300 s，每 0.5 s 重试一次，等不到就报 `LOCK-NOT-OBTAINED` 且不碰任何源文件），探针读输出时跳过 `HOLDER-WAIT` 这类信息行 ⇒ 同一天 12:0x / 12:1x 两跑都是 `拒跑=True 放行=True ⇒ PASS`（§2.4）。**只动了探针的等待，没动判定规则与期望集**（复算见 §2.4 末） |
 
 ## 7. 本期没做的（别当成做了）
 
-1. **杠② 的 `--lock-probe` 双向实测仍然没跑到**（同机邻居连着攥锁）。本棒（含续跑）共重试 4 次
-   11:25 / 11:31 / 11:41 都被 `zbot-wt-p20b` 的 `p20b_mutation.py`（PID 73653，11:24:01 起）挡在门外，
-   探针在它自己那一步就 `LOCK-BUSY` ⇒ `FATAL 邻居没攥住锁` rc=2（原文与 lsof 取证见 §2.4）。
-   两向各自都有**间接**读数（拒跑：两条真邻居 + `attempt1..13 rc=5`；放行：`attempt14 rc=0`、
-   `11:17:46` 全量 `LOCK-ACQUIRED`），但"同一次执行里先攥后放、两向各一条"这条**没有**。补跑命令：
-   `python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe`。
+1. **杠② 的 `--lock-probe` 双向实测本棒跑成了**（两跑 `rc=0`、`拒跑=True 放行=True ⇒ PASS`，原文 §2.4），
+   上一棒记的这条 UNKNOWN 已经落地。仍然**没做**的是两件相邻的事：
+   (a) 探针的"邻居"是**本棒自己 spawn 的持锁子进程**，不是与真兄弟棒（`zbot-wt-p20b` 的
+   `p20b_mutation.py`）**同一时刻**对拍 —— 真邻居那一面只有"我们互相拒跑"的散点读数
+   （`attempt1..13 rc=5` / 11:24:02 的 `lsof` 交接，§2.4），没有编队层的"两支同时开跑、必有一支等到"的实验；
+   (b) 没测**阻塞式**等待（本脚本一律 `LOCK_NB`，这是刻意的：拿不到就退出记账，但"排队拿锁"这条路径不存在）。
+   另外 G11 那个 `--hold-lock-wait` 是本棒为了跑成 (a) 里"能开始"而加的，
+   它改的是探针的等待，不是判定 ⇒ 但**这一改之后 `--lock-probe` 与上一棒的 4 次失败不再是同一把尺**，
+   用旧脚本复算的人要先把这个差异知道。
 2. **M8 / M9 / M17 三支 GREEN-BUT-MUTATED 只给了因果，没补判据**。改法本棒已经想清楚但没落地：
    M8 ⇒ 让命令先 `touch <token>.marker`，"起没起过进程"才留得下痕迹；M9 ⇒ 读一个 **0 行**文件
    （循环体一次都不进，只有入口检查点会断）；M17 ⇒ 两次绑定必须**时间重叠**
@@ -651,7 +683,7 @@ python3 -u _doc/acceptance/p12/p12_mutation.py                 # → logs/p12c_m
 python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e      # → logs/p12c_mut_full_run2.log（入库的 LEDGER.tsv 出自这一遍）
 column -t -s $'\t' _doc/acceptance/p12/LEDGER.tsv              # 只读台账，不许手改
 python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M6 M12   # 单独复打真进程层两支（stop / cache）
-python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe    # flock 双向实测（状态见 §2.4 / §7.1）
+python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe    # flock 双向实测：本棒两跑 rc=0 ⇒ PASS（§2.4）
 # 两遍全量逐支对拍（本棒读数 19/19 全同，唯一差异是 e2e_rc 列）
 python3 - <<'PY'
 import csv, io, subprocess
