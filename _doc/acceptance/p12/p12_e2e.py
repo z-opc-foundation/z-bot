@@ -617,8 +617,10 @@ def section_cache(base_url):
     b_sys2 = (sys2 or "").encode("utf-8")
     check("C1 两次 chat 实际发出的 system prompt 逐字节相同（比 stub 落盘的请求原文）",
           sys1 is not None and sys2 is not None and b_sys1 == b_sys2,
-          "len1=%d len2=%d md5_1=%s md5_2=%s" % (len(b_sys1), len(b_sys2),
-                                                 md5_of_bytes(b_sys1)[:8], md5_of_bytes(b_sys2)[:8]),
+          "len1=%d len2=%d md5_1=%s md5_2=%s sha256_1=%s sha256_2=%s"
+          % (len(b_sys1), len(b_sys2),
+             md5_of_bytes(b_sys1)[:8], md5_of_bytes(b_sys2)[:8],
+             sha256_of_bytes(b_sys1), sha256_of_bytes(b_sys2)),
           "cache")
     clock1 = clock_line_of(u1)
     clock2 = clock_line_of(u2)
@@ -636,6 +638,11 @@ def section_cache(base_url):
 
 def md5_of_bytes(bs):
     return hashlib.md5(bs).hexdigest()
+
+
+def sha256_of_bytes(bs):
+    """P24 交接件要的字节级指纹：同一会话两轮的 system prompt sha256（冻结不变量的直接读数）。"""
+    return hashlib.sha256(bs).hexdigest()
 
 
 def clock_line_of(user_text):

@@ -177,6 +177,64 @@ MUTANTS = [
      1,
      ["delegateRefusesToSpawnAChildAfterStopWasRequested"],
      "delegate 子循环入口：父已被叫停就不该再把子代理拉起来烧预算"),
+
+    # ===== p12c 补的四支：派单点名要覆盖、上一棒没注入的两条判据 =====
+
+    ("M12 system prompt 快照解冻（每步按盘重建）", "mvn", "bot",
+     "            listener.onEvent(new StreamEvent.StepStart(step));\n            context.interrupt().checkpoint();",
+     "            listener.onEvent(new StreamEvent.StepStart(step));\n"
+     "            // MUTANT: 冻结摘掉——每一步都按盘上的当前内容重建骨架（SOUL 是 buildSystemPrompt 读的盘）\n"
+     "            memory.setSystemPrompt(buildSystemPrompt(null, toolkit, memoryStore));\n"
+     "            context.interrupt().checkpoint();",
+     1,
+     ["twoChatsInOneSessionSendByteIdenticalSystemPrompt",
+      "everyStepOfAMultiStepTurnReplaysTheSameSystemBytes"],
+     "P24 的地基就这一条：中途写盘（SOUL/记忆）不许进 system prompt。"
+     "这一支同时是杠④/P24 交接件里「摘掉冻结⇒两轮 prompt 哈希必须变」的阳性对照"),
+
+    ("M16 中断检查点退化成空操作", "mvn", "scope",
+     "    public static void checkpoint() {\n        InterruptFlag f = CURRENT.get();\n"
+     "        if (f != null) {\n            f.checkpoint();\n        }\n    }",
+     "    public static void checkpoint() {\n        // MUTANT: 机制本体不再抛，置位了也照样往下跑\n    }",
+     1,
+     ["checkpointIsNoOpWithoutFlagAndThrowsAfterRequest",
+      "readFileAbortsInsteadOfReadingTheWholeFile",
+      "writeFileAbortsBeforeTouchingTheSandbox",
+      "execWithFlagAlreadySetStartsNoChildProcessAtAll",
+      "delegateRefusesToSpawnAChildAfterStopWasRequested",
+      "interruptInsideParallelToolBatchAbortsRunNotFeedsModelError"],
+     "所有工具侧检查点共用的那只眼睛；摘掉之后「工具正飞着时能断」这件事只剩看门狗一条腿"),
+
+    ("M17 中断旗子从线程作用域退化成全局", "mvn", "scope",
+     "    private static final ThreadLocal<InterruptFlag> CURRENT = new ThreadLocal<InterruptFlag>();",
+     "    private static final ThreadLocal<InterruptFlag> CURRENT = new ThreadLocal<InterruptFlag>() {\n"
+     "        // MUTANT: 全局一面旗 —— A 会话按停止会把 B 会话正在跑的工具一起打断（串台）\n"
+     "        private volatile InterruptFlag shared;\n"
+     "        @Override public InterruptFlag get() { return shared; }\n"
+     "        @Override public void set(InterruptFlag f) { shared = f; }\n"
+     "        @Override public void remove() { shared = null; }\n"
+     "    };",
+     1,
+     ["flagsArePerThreadSoConcurrentSessionsDoNotCrossFire"],
+     "派单原文「按执行线程定向，防并发会话串台」的正面对照：写成全局就必然串台"),
+
+    ("M18 steer 排了不空（drain 之后塞回队列）", "mvn", "bot",
+     "        List<String> pending = context.steer().drain();",
+     "        List<String> pending = context.steer().drain();\n"
+     "        for (String back : pending) {\n"
+     "            context.steer().add(back); // MUTANT: 排空退化成读一眼，同一条插话每步再注入一遍\n"
+     "        }",
+     1,
+     ["steerDuringRunIsInjectedAtToolGap", "steerIsDrainedExactlyOnce"],
+     "drain 的「排空」侧上一棒没人钉：注入跑第一遍时如果全绿，就说明守卫是空的（如实记，不回填）"),
+
+    ("M19 中断收口把这一轮的调用账吞掉", "mvn", "bot",
+     "listener.onEvent(new StreamEvent.Done(aborted, context.budget().apiCalls(), null, null));",
+     "listener.onEvent(new StreamEvent.Done(aborted, 0, null, null)); // MUTANT: 中断那轮上报 0 次调用",
+     1,
+     ["abortedTurnReportsTheCallsActuallyMade"],
+     "工具侧打断不吞账：按了停止之后 /usage 与 Done 事件里的 apiCalls 必须是真打出去的那几次，"
+     "不是 0（0 的话用户这一轮的开销凭空消失）"),
 ]
 
 # 只用于「未覆盖」记账：这几支是冗余层，任何时长判据都分不出它与看门狗
@@ -189,6 +247,22 @@ UNCOVERED_NOTE = (
 def md5(path):
     with open(path, "rb") as fh:
         return hashlib.md5(fh.read()).hexdigest()
+
+
+BASELINE = os.environ.get("P12_MUT_BASE", "HEAD")
+
+
+def git_md5(key):
+    """还原独立取证的第二把尺：`git show <基线>:<path> | md5`。
+
+    只跟「本次运行开始时的内存快照」对账是不够的——上一棒如果留下未提交的脏改动，
+    内存快照本身就是脏的。基线可用 P12_MUT_BASE 指定（默认 HEAD）。
+    """
+    pr = subprocess.run(["git", "show", "%s:%s" % (BASELINE, SRC[key])],
+                        cwd=ZBOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if pr.returncode != 0:
+        return None
+    return hashlib.md5(pr.stdout).hexdigest()
 
 
 def all_sources():
@@ -380,6 +454,8 @@ def run_mutants(selected, with_e2e):
     for mid, kind, key, old, new, want, expected, note in selected:
         tag = mid.split()[0]
         original = read(key)
+        gbase = git_md5(key)
+        disk_eq_git_before = (gbase is not None and md5(src_path(key)) == gbase)
         write(key, original.replace(old, new, 1))
         verdict, hit, extra, rc, ran = "EXCEPTION", [], [], -1, 0
         e2e_rc, e2e_detail = "", ""
@@ -422,10 +498,14 @@ def run_mutants(selected, with_e2e):
         finally:
             write(key, original)
         restored = md5(src_path(key)) == before[SRC[key]]
+        # 独立取证第二把尺：还原后的磁盘字节 vs `git show <基线>:<path>`，注入前后各取一次
+        disk_eq_git_after = (gbase is not None and md5(src_path(key)) == gbase)
         tally[verdict] = tally.get(verdict, 0) + 1
         who = ",".join(sorted(failing)) if failing else "全绿（跑了 %d 条）" % ran
-        print("%-46s %-18s 点名=%d/%d rc=%s e2e_rc=%s 还原=%s"
-              % (mid, verdict, len(hit), len(expected), rc, e2e_rc, restored), flush=True)
+        print("%-46s %-18s 点名=%d/%d rc=%s e2e_rc=%s 还原=%s vs_git=%s/%s"
+              % (mid, verdict, len(hit), len(expected), rc, e2e_rc, restored,
+                 "ok" if disk_eq_git_before else "DIRTY",
+                 "ok" if disk_eq_git_after else "FAIL"), flush=True)
         print("     红在: %s" % who, flush=True)
         if e2e_detail:
             print("     真进程层: %s" % e2e_detail[:400], flush=True)
@@ -433,7 +513,10 @@ def run_mutants(selected, with_e2e):
             print("     %s" % note, flush=True)
         rows.append([mid, verdict, str(len(expected)), str(len(hit)), who, str(rc),
                      str(e2e_rc), e2e_detail[:200].replace("\t", " "), note,
-                     "ok" if restored else "RESTORE-FAILED"])
+                     "ok" if restored else "RESTORE-FAILED",
+                     "base=%s before=%s after=%s" % (BASELINE,
+                                                     "ok" if disk_eq_git_before else "DIRTY",
+                                                     "ok" if disk_eq_git_after else "FAIL")])
 
     after = snapshot()
     diff = [p for p in after if after[p] != before[p]]
@@ -445,7 +528,7 @@ def run_mutants(selected, with_e2e):
     with open(LEDGER, "w", encoding="utf-8") as fh:
         fh.write("\t".join(["id", "verdict", "named_expected", "named_hit",
                             "tests_that_went_red", "mvn_rc", "e2e_rc", "e2e_detail",
-                            "note", "restored"]) + "\n")
+                            "note", "restored", "restore_forensics_vs_git"]) + "\n")
         for r in rows:
             fh.write("\t".join(c.replace("\t", " ") for c in r) + "\n")
     print("  台账已机械写出: %s" % os.path.relpath(LEDGER, ZBOT), flush=True)
