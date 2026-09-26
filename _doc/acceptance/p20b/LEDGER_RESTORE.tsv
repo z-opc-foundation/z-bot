@@ -1,0 +1,22 @@
+id	file	git_show_md5_baseline	disk_md5_during_injection	injection_landed	disk_md5_after_restore	restored
+TS1 emptyCapabilityToolsets 写死空表	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f1d8195f0219f8330cf8c87aeef963d4	ae4487571784f288a8eb53e7964eceee	yes(disk!=git show)	f1d8195f0219f8330cf8c87aeef963d4	ok
+TS2 undeclaredToolsets 过滤反了	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f1d8195f0219f8330cf8c87aeef963d4	2fb677f72685e45834a528722be82ba3	yes(disk!=git show)	f1d8195f0219f8330cf8c87aeef963d4	ok
+TS3 manifestToolsNeverRegistered 过滤反了	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f1d8195f0219f8330cf8c87aeef963d4	d04fc99b6b9ec2499d09e0bfbad2beee	yes(disk!=git show)	f1d8195f0219f8330cf8c87aeef963d4	ok
+TS4 toolsetForTool 一律退回兜底槽	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f1d8195f0219f8330cf8c87aeef963d4	7bb5051f80bb734b933744210ca7d5d6	yes(disk!=git show)	f1d8195f0219f8330cf8c87aeef963d4	ok
+TS5 mcpToken 放过中划线	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f1d8195f0219f8330cf8c87aeef963d4	134dce41ad2ea9a212102929d289d2d9	yes(disk!=git show)	f1d8195f0219f8330cf8c87aeef963d4	ok
+TS6 capabilityNames 把兜底槽/动态族也算能力	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f1d8195f0219f8330cf8c87aeef963d4	1a58d78048eb481ccffbac5572b5bf5d	yes(disk!=git show)	f1d8195f0219f8330cf8c87aeef963d4	ok
+TK1 快照键丢掉不可用名单	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	74e22d6e97dddb3e30345930b9646b3d	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK2 unavailableToolNames 恒空	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	8f4975918386673fcc11237801e124ef	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK3 schema 快照键里的代际被钉死 0	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	58edc0aea27891750272349244ada0c6	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK4 上限不走注册表	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	144fb5e346cfc37354ce5365985b62da	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK5 UNBOUNDED 哨兵失效（当成零上限截）	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	aaf853dbff45c9221ce2aa1029d3228e	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK6 预览不受上限约束	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	d757e81e58b99472985f28c21d22aa21	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK7 溢出落盘被摘掉	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	5215e40a1277c5a36aa4069f5e5df413	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK8 上限边界从 <= 改成 <	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	4143651fc06aa2ea1cc34965d5811b66	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK9 溢出目录解析不看 $ZBOT_HOME	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	379275e7f368110083b2dda625e7e48c	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK10 溢出文件名净化失效	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	ea0b12ba8ee5ea6d6b799389ab9dc888	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK11 toolset 整组注销的 owner 参数被顶成内建 owner	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	a5cda9e537d1749d34a8ef1b635f641c	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+MB1 桥不接可用性探测	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	a6329fa2484cb2198d1d2488f5ef9f58	yes(disk!=git show)	2938f85b32213e0bd7d7041e478d35b2	ok
+MB2 桥按'记住的名字'逐个注销	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	536164341d60d5986515cb690d988623	yes(disk!=git show)	2938f85b32213e0bd7d7041e478d35b2	ok
+MB3 退回同名 stub 覆盖（P20 要杀的旧实现）	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	d32f6c6153640340e2996f2c9a297bc8	yes(disk!=git show)	2938f85b32213e0bd7d7041e478d35b2	ok
+E1 stopAll 只断连不注销	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpManager.java	37a141454ca06331bfdb3341e0af3c83	bf3ee454ddb2a2f3cbdfe3389bbc41ce	yes(disk!=git show)	37a141454ca06331bfdb3341e0af3c83	ok
