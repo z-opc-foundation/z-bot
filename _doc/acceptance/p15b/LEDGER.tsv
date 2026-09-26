@@ -1,0 +1,9 @@
+id	verdict	named_expected	named_hit	tests_that_went_red	note	restored
+M1 删一行(占位 chat_id)	PARTIAL	1	1	alignmentTableHoldsExactlyHermesFortySixSessionsColumns,rejectedAndDeferredHermesColumnsAreAllAbsentFromOurSchema	行数与判定分布都从这一行上掉：少一列必红	ok
+M2 要→不要(billing_provider)	PARTIAL	1	1	alignmentTableHoldsExactlyHermesFortySixSessionsColumns,headDeclaresNoSessionsColumnThatTheTableDoesNotAccountFor,rejectedAndDeferredHermesColumnsAreAllAbsentFromOurSchema	把已经收下的列改判成不收 ⇒ 它的名字会同时出现在 head 与 32 行差额里	ok
+M3 删一行(要 archived)	RED-OK	2	2	alignmentTableHoldsExactlyHermesFortySixSessionsColumns,headDeclaresNoSessionsColumnThatTheTableDoesNotAccountFor	head 里的 archived 从此无人认领 ⇒ 红线 2 守门人必红；行数同时掉	ok
+M4 消费者类名漂	RED-OK	2	1	everyWantedRowConsumerClassIsGreppableInMainSource	表里写一个不存在的 Java 类 ⇒ 消费者可 grep 那层必红	ok
+M5 占位去掉期号	RED-OK	1	1	everyPlaceholderRowNamesThePhaseThatUnlocksIt	占位不许写"以后再说"这类无期号措辞	ok
+M6 不要行删掉实测串	RED-OK	1	1	everyRejectedRowCarriesAnEmpiricalMarker	判"不要"必须留实测证据；抹掉证据就该红	ok
+M7 偷渡一列 0 消费者的 hermes 列	PARTIAL	2	2	headDeclaresNoSessionsColumnThatTheTableDoesNotAccountFor,preP15DatabaseUpgradesWithoutLosingRowsAndItsColumnsMatchHead,rejectedAndDeferredHermesColumnsAreAllAbsentFromOurSchema,reopeningAnUpgradedDatabaseAddsNothingFurther	正证/反空跑：真往 sessions 加一个表里判"占位"的 session_key（既进 SESSIONS_ADDED 又进 head 声明），守卫必须当场抓住 ⇒ 守卫不是空转	ok
+M8 表承诺 head 里没有的列	RED-OK	2	2	everyWantedColumnActuallyExistsInHeadDeclaration,headDeclaresNoSessionsColumnThatTheTableDoesNotAccountFor	表不许承诺一个 schema 里没有的列；同时我们的 id 变成无人认领的孤儿列 ⇒ 两条守卫都该红	ok

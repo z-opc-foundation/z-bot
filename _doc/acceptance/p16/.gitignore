@@ -1,0 +1,9 @@
+# 本目录的运行捕获：不入版本库（*.log 本来就被根 .gitignore:5 挡着，这里是整只目录）。
+#   logs/  每一次跑的原样 stdout（杠①三跑 / 杠②两轮 / 杠③两次全段 / FULLSUITE 探针）
+#   out/   E2E 的临时 profile、state.db 副本、真 JVM 日志、env 快照（含 db 二进制，2.7MB+）
+#   __pycache__/  python 字节码
+# 结论依赖的读数**全部粘进 EVIDENCE.md 原文**，所以这些目录丢了也能照着 EVIDENCE 里的命令复算；
+# 留盘只是为了方便下一棒直接对拍。/tmp 会被同机会话扫空 ⇒ 别把这里当唯一副本。
+/logs/
+/out/
+__pycache__/

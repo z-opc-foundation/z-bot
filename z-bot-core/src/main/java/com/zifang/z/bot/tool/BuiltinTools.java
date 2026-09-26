@@ -60,24 +60,35 @@ public final class BuiltinTools {
     /**
      * 同上，再接上审批服务：exec 的待批请求会进 {@link ApprovalService} 的每会话 FIFO，
      * session/always 档的精确免确认名单也由它提供。传 null 时退化为"只回抛一条、不入队"。
+     *
+     * <p>toolset 归属由 {@link Toolsets} 清单决定（z-bot 侧声明层，不进内核）：诊断类
+     * {@value Toolsets#CORE} / 文件类 {@value Toolsets#FILE} / 执行类 {@value Toolsets#EXEC}
+     * / 出网类 {@value Toolsets#NET}。并行安全的<b>声明</b>也在这里落进注册表，
+     * 分批判定在派发侧（{@code agent/BotAgent#executeBatch}）。</p>
      */
     public static Toolkit registerAll(Toolkit toolkit, Sandbox sandbox, String execConfirmMode,
                                       List<String> execWhitelist, ApprovalService approvals) {
         final AtomicInteger counter = new AtomicInteger(0);
 
-        toolkit.register(echo(), true);
-        toolkit.register(time(), true);
-        toolkit.register(counter(counter));
-        toolkit.register(health(), true);
-        toolkit.register(readFile(sandbox), true);
-        toolkit.register(writeFile(sandbox));
-        toolkit.register(exec(sandbox, execConfirmMode, execWhitelist, approvals));
-        toolkit.register(search(), true);
-        toolkit.register(sysinfo(), true);
-        toolkit.register(mvnBuild(sandbox));
-        toolkit.register(curlTest());
+        declare(toolkit, echo(), true);
+        declare(toolkit, time(), true);
+        declare(toolkit, counter(counter), false);
+        declare(toolkit, health(), true);
+        declare(toolkit, readFile(sandbox), true);
+        declare(toolkit, writeFile(sandbox), false);
+        declare(toolkit, exec(sandbox, execConfirmMode, execWhitelist, approvals), false);
+        declare(toolkit, search(), true);
+        declare(toolkit, sysinfo(), true);
+        declare(toolkit, mvnBuild(sandbox), false);
+        declare(toolkit, curlTest(), false);
         return toolkit;
     }
+
+    /** 按 {@link Toolsets} 清单落 toolset 后注册（未登记的工具退回兜底槽，不会塞进别人的能力面）。 */
+    private static void declare(Toolkit toolkit, Tool tool, boolean parallelSafe) {
+        toolkit.register(tool, Toolsets.toolsetForTool(tool.getName()), Toolkit.DEFAULT_OWNER, parallelSafe);
+    }
+
 
     // ===== 基础 =====
 

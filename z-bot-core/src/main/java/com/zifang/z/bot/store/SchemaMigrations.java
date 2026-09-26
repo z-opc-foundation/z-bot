@@ -39,11 +39,19 @@ import java.util.Map;
  * 两个进程同时首开同一个新库就会有一个带着半套 schema 退出。</p>
  *
  * <h3>sessions 列对齐 hermes 的逐列结论</h3>
- * <p>她 46 列（{@code hermes_state.py:872-919}）。<b>本期只加有消费者的 4 列</b>：
- * {@code parent_session_id}（P14 血统，硬交付）、{@code archived}（软归档）、
- * {@code ended_at} + {@code end_reason}（prune 的"已结束/在飞"闸门）。其余 30+ 列按
- * "计费 / 缓存 token 分档 / 平台对端标识 / handoff / telegram 主题" 逐列判"不要"或"占位后移"，
- * 理由表见本期 notes——无理由堆列等于把红线 2 的"0 消费者抽象"搬进 schema。</p>
+ * <p>她 46 列（{@code hermes_state.py:872-919}）。逐列的"要 / 不要 / 占位"理由表在
+ * <b>{@code _doc/acceptance/p15b/sessions_column_alignment.md}</b>（P15 当时欠着这笔账，
+ * 类注释里那句"理由表见本期 notes"当时指向一个不存在的东西，P15b 把表补上并改指向真文件）。
+ * 结论摘要：实测判定分布 <b>要 14 / 不要 14 / 占位 18</b>（合计 46）。"要"的 14 列全部落在我们已有的
+ * 15 列之内，其中 4 列是 P15 新加的（{@link #SESSIONS_ADDED}：{@code parent_session_id} 血统、
+ * {@code archived} 软归档、{@code ended_at} + {@code end_reason} 的"已结束/在飞"闸门）。
+ * 其余 32 列里 14 列判"不要"（内核没有数据源 / 是进程级而非会话级事实 / 功能根本不存在）、
+ * 18 列判"占位"并各自点名了解锁期号（P12 token 与成本分档 7 列、P14 血统与压缩 4 列、
+ * P16 通道身份与路由 7 列）。
+ * 注意"占位"不是"以后再说"：无理由堆列等于把红线 2 的"0 消费者抽象"搬进 schema，
+ * 所以这张表必须能被 {@code _doc/acceptance/p15b/p15b_check.py} 机械复算，
+ * 而 {@code SessionsColumnAlignmentTest} 把"head 声明的每一列都得被表里的判定=要认领"
+ * 钉在单测里 —— 以后谁往 sessions 加列而不进这张表，单测当场红。</p>
  */
 public final class SchemaMigrations {
 

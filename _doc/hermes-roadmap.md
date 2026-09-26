@@ -366,6 +366,15 @@ _(W1 起逐期追加)_
   | 订正我自己写进 `3ed5bf4` 提交说明的两个数（已推送，不 amend，账记在这儿）: ①"10 个模块"实为 **11** 个（`ls ~/.cache/zbot-kernel/api/0.2.1` 数得）②"阳性对照 =39 行"用可复算的命令重量是 **43** 行 —— 原数那次的 javap 文本没留档，无法复查，以 43 为准。
   | 已知不一致（本期没做）: 内核 `StdioMcpTransport` 在握手响应里自报 `"version":"0.2.0"` 是写死的字符串，抬版没带走它 ⇒ MCP 对端读到的版本线是假的，归内核下一期收口（应读实现属性或 `Implementation-Version`）。
 
+- 2026-09-26 **P15b + P16 + P20b 三笔并入 main（集成收口在合并树重做四杠）** ✅ `b789d04`←`w1-p15b`@`e27186f`、`99fc389`←`w2-p16ev`@`1263fd2`、`7a5f125`←`w2-p20b`@`7be0811`（merge-tree 预演四支两两 0 冲突，逐笔合并后复测仍 0 冲突）。
+  | 复算（全部我本人跑，不引用代理自述）: ①串行三跑 `rm -rf z-bot-core/target/surefire-reports && mvn -o test` ②`python3 -u _doc/acceptance/p20b/p20b_e2e.py` ③`python3 -u _doc/acceptance/p16/p16_e2e.py` ④`python3 -u _doc/acceptance/p15b/p15b_check.py` ⑤`python3 -c` 用 `csv.DictReader` 只取 verdict ∈ 四类的那些行 ⑥`git grep -c '@Test' HEAD -- 'z-bot-core/src/test'` 求和 ⑦`ls -A ~/.zbot | wc -l` + `md5 -q ~/.zbot/{config.properties,state.db}`
+  | 实测: ① 三跑 `12:46:15→12:46:35`、`→12:47:07`、`→12:47:27` 各自 **`Tests run: 619, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS` rc=0**（619 = 基线 465 + P15b 10 + P16 82 + P20b 62，与 ⑥ 的 `@Test` 求和逐笔对得上）② **38/38 PASS FAIL=0 rc=0**（三阶段 `P0 toolsets/cap/mcp 驱动退出码 0` 全绿；M4 `anchor=2`、M5 `每轮增量=[2]` 与 §3.4 的裁决一致，未因合并漂移）③ **33/33 通过 rc=0**（段 A 11/11、B 8/8、C 6/6、D 2/2、X 6/6；另在 `w2-p16ev` 未合并态也独立跑过一次 33/33 ⇒ 两个字节集各验一遍）④ rc=0：`参照 cbc1054e2 ⇒ 46 列 / 文档 46 行 / 要=14 不要=14 占位=18 / PASSED: yes` ⑤ p20b 台账 **21 行 = RED-OK 20 / PARTIAL 1**（唯一 PARTIAL 是 `MB3`，工单明写不硬凑、期望集一字未补）、p16 台账 **24 行 = RED-OK 22 / PARTIAL 1(`M09`) / GREEN-BUT-MUTATED 1(`M07` 具名期望红 0/0 ⇒ 该行为全仓 481 条测不出，已由 `--all-tests` 探针量出来而非断言)** ⑦ `8 / 2dadaed0 / 690ddbc0` 全程未变。
+  | 合并前的预测在此兑现（先前记在 `~/.cache/zbot-p17/pending_predictions.md`）: `main+w1-p15b` = **475** ✅ 实测 475、`main+w2-p16ev` = **547** ✅（465+82）、两笔叠完 557、三笔叠完 619。⇒ 排产时"后合的那支要重新 merge-tree"这条也照做（每次合并后重跑，未拿旧预测当结论）。
+  | P20b 这支的真实增量不只在代码: 杠② 从接手时 **14 RED-OK / 4 PARTIAL / 3 GREEN-BUT-MUTATED** 收到 **20 / 1 / 0**，其中 `TS4` 那条暴露的是**断言写读同源**（`ToolsetsManifestTest` 的期望位调的就是被测函数 ⇒ 摘掉真源两边一起漂，等式照样成立）；`TK5` 原注点经 V0/V1/V2 三把实测判为**等价变异**（换成"哨兵=零上限"才有猎物），换掉之后"摘析取项"那一种坏法在单测层结构上仍检不出，账记在 EVIDENCE §9.10。
+  | 本期新发现、**未修**的产品级缺陷（内核侧，抬版要单独点头）: `StdioMcpTransport.request` 用 `contains("\"id\":" + id)` 认回执，而真 server 只要不做紧凑序列化（`json.dumps` 默认写 `"id": 1`，带空格）回执就永不匹配 ⇒ main 线程卡在 `readLine` **永久挂死**（我先量到 600 s 超时，`jcmd <pid> Thread.print` 取证栈；上一棒用 `STUB_PRETTY=1` 只改这一个变量复现，50 s 是它的实测下界）。次生: 那个 30 s deadline 只在 `readLine()` 返回之间检查，`readLine` 自身不超时 ⇒ 对端不回时超时永不生效。取证与复现开关在 `_doc/acceptance/p20b/EVIDENCE.md` §5.1/§5.2。
+  | 未并入、仍在飞的: `w2-p12`（P12 预算台账/中断收口/steer/快照冻结）—— 该棒已到 `e74f49c`（含我三次封存：`b64d294` 写手截断、`809b927` p12b 截断、`f541af5`+`e74f49c` p12c 停机时的工作树字节），杠②/杠③ 读数**尚未由我复算**，其 E2E 的 K2 那条间歇红（同一形态量具连跑 3 次里 2 次红）我还没裁决 ⇒ **P12 不算完成**，`@Test` 483 也还没进主干（对**新** main 重跑 merge-tree: 0 冲突，合并树 `@Test` 预测 **637** = 619 + 18）。
+  | 我自己这一轮的两笔账（不 amend，已提交就记在这儿）: ①`809b927` 提交说明写"+16 条守卫"，重量 `git grep -c '@Test'` 是 **475→481 = +6**，原数错；②`git commit -- <路径> -m "…"` 会被 git 当 pathspec 拒掉（今晚连错两次），正确写法 `-m` 必须在 `--` 之前。
+
 ---
 
 # 附录 A · v1 原文（P0–P10d 计划与实测记录，原样保留）

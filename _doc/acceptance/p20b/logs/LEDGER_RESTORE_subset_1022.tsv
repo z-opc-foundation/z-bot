@@ -1,0 +1,9 @@
+id	file	git_show_md5_baseline	disk_md5_during_injection	injection_landed	disk_md5_after_restore	restored
+TS4 toolsetForTool 一律退回兜底槽	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java	f1d8195f0219f8330cf8c87aeef963d4	7bb5051f80bb734b933744210ca7d5d6	yes(disk!=git show)	f1d8195f0219f8330cf8c87aeef963d4	ok
+TK3 schema 快照键里的代际被钉死 0	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	58edc0aea27891750272349244ada0c6	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK4 上限不走注册表	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	144fb5e346cfc37354ce5365985b62da	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK5 UNBOUNDED 哨兵失效（当成零上限截）	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	aaf853dbff45c9221ce2aa1029d3228e	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK7 溢出落盘被摘掉	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	5215e40a1277c5a36aa4069f5e5df413	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK9 溢出目录解析不看 $ZBOT_HOME	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	379275e7f368110083b2dda625e7e48c	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+TK11 toolset 整组注销的 owner 参数被顶成内建 owner	z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolkit.java	4ae1a491cd73b0f1c1ac869db59723ad	a5cda9e537d1749d34a8ef1b635f641c	yes(disk!=git show)	4ae1a491cd73b0f1c1ac869db59723ad	ok
+MB2 桥按'记住的名字'逐个注销	z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpBridge.java	2938f85b32213e0bd7d7041e478d35b2	536164341d60d5986515cb690d988623	yes(disk!=git show)	2938f85b32213e0bd7d7041e478d35b2	ok
