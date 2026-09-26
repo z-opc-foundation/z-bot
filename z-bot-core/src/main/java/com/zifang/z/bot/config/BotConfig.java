@@ -32,6 +32,16 @@ public final class BotConfig {
     }
 
     /**
+     * 主源码里唯一读 {@code user.home} 的地方。需要"宿主家目录"（而非 profile 目录，
+     * 例如 docker socket 的 {@code ~/.docker/run/docker.sock}）的调用方一律走这里 ——
+     * 各模块自己抄一遍 {@code System.getProperty("user.home")}，就没法用
+     * {@code --config-dir} 把整个进程关进临时 profile。
+     */
+    public static String userHome() {
+        return System.getProperty("user.home");
+    }
+
+    /**
      * 红线 1 的单一解析点：{@code -Dzbot.home} &gt; {@code ZBOT_HOME} &gt; {@code ~/.zbot}。
      *
      * <p>{@code ZBOT_HOME} 这个名字在 {@code PairCommand} 的报错文案里已经写了很久，但此前
@@ -43,8 +53,7 @@ public final class BotConfig {
         if (home.isEmpty()) {
             home = trim(System.getenv("ZBOT_HOME"));
         }
-        return new File(home.isEmpty()
-                ? System.getProperty("user.home") + "/.zbot" : home);
+        return new File(home.isEmpty() ? userHome() + "/.zbot" : home);
     }
 
     /**
@@ -701,6 +710,33 @@ public final class BotConfig {
         return loaded;
     }
 
+    // ─── P23 技能体系（只增键，不重排既有代码） ───────────────────────────────
+
+    /** {@code skills.bundled.dir} —— {@code /skills sync} 的源目录（自带技能包）。 */
+    public String getSkillsBundledDir() {
+        return trim(rawProps.getProperty("skills.bundled.dir"));
+    }
+
+    /** {@code skills.guard.source} —— 安装期扫描的信任级：bundled(默认) | community。 */
+    public String getSkillsGuardSource() {
+        String v = trim(rawProps.getProperty("skills.guard.source"));
+        return v.isEmpty() ? "bundled" : v;
+    }
+
+    /** {@code skills.commands.enabled} —— 技能是否注册成斜杠命令（缺省开）。 */
+    public boolean isSkillCommandsEnabled() {
+        String v = trim(rawProps.getProperty("skills.commands.enabled"));
+        return v.isEmpty() || Boolean.parseBoolean(v);
+    }
+
+    /**
+     * {@code skills.platform.override} —— 覆盖 OS 探测（给测试/验收用；留空 = 自动探测）。
+     * 同时写回系统属性 {@code zbot.skills.platform}，让静态的 {@code SkillLoader} 判定看到它。
+     */
+    public String getSkillsPlatformOverride() {
+        return trim(rawProps.getProperty("skills.platform.override"));
+    }
+
     private static String orDefault(String v, String d) {
         return v.isEmpty() ? d : v;
     }
@@ -751,6 +787,87 @@ public final class BotConfig {
             return Double.parseDouble(v);
         } catch (NumberFormatException e) {
             return d;
+        }
+    }
+
+    // ===== 上下文压缩（P14）：只增键，不重排上面任何一行 =====
+
+    /** {@code agent.context.compress}：总开关，false = 完全不压（默认开）。 */
+    public boolean isContextCompressEnabled() {
+        return boolOf("agent.context.compress", true);
+    }
+
+    /**
+     * {@code agent.context.window}：模型上下文窗口。未配置时退回 {@code agent.token.budget}
+     * （旧行为：把预算当窗口），配了就以配的是准。
+     */
+    public long getContextWindow() {
+        return longOf("agent.context.window", getTokenBudget());
+    }
+
+    /** {@code agent.context.max.output.tokens}：从窗口里扣掉、留给回答的输出额度。默认 {@code agent.max.tokens}。 */
+    public int getContextMaxOutputTokens() {
+        return intOf("agent.context.max.output.tokens", getMaxTokens());
+    }
+
+    /**
+     * {@code agent.context.compress.pct}：触发比例 —— 观测上下文 ≥
+     * {@code (窗口 − 输出额度) × pct} 才压。默认 0.50（hermes 量级；旧实现是写死的 0.85「占满才压」）。
+     */
+    public double getContextCompressPct() {
+        double pct = doubleOf("agent.context.compress.pct", 0.50D);
+        return pct <= 0D || pct > 1D ? 0.50D : pct;
+    }
+
+    /** {@code agent.context.compress.keep.recent}：压缩时原样保留的最近消息条数。 */
+    public int getContextCompressKeepRecent() {
+        return intOf("agent.context.compress.keep.recent", 8);
+    }
+
+    /** {@code agent.context.compress.cooldown.ms}：压缩失败后的冷却时长（入库，跨进程重启仍生效）。 */
+    public long getContextCompressCooldownMillis() {
+        return longOf("agent.context.compress.cooldown.ms", 120_000L);
+    }
+
+    /** {@code agent.context.compress.max.ineffective}：连续无效压缩几次之后停手（防抖）。 */
+    public int getContextCompressMaxIneffective() {
+        return intOf("agent.context.compress.max.ineffective", 2);
+    }
+
+    /** {@code agent.context.compress.lock.ttl.ms}：{@code compression_locks} 里这把锁的 TTL。 */
+    public long getContextCompressLockTtlMillis() {
+        return longOf("agent.context.compress.lock.ttl.ms", 90_000L);
+    }
+
+    /**
+     * 本棒新增的压缩键清单（名字 + 当前生效值）。
+     *
+     * <p>产品里目前没有 {@code /config} 斜杠命令（{@code slash/SlashRegistry} 未注册），
+     * 所以这张表就是「配置位能被列出来」这一验收的落点：{@code /compress preview} 直接打它。</p>
+     */
+    public java.util.List<String> contextCompressConfigLines() {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        out.add("agent.context.compress=" + isContextCompressEnabled());
+        out.add("agent.context.window=" + getContextWindow());
+        out.add("agent.context.max.output.tokens=" + getContextMaxOutputTokens());
+        out.add("agent.context.compress.pct=" + getContextCompressPct());
+        out.add("agent.context.compress.keep.recent=" + getContextCompressKeepRecent());
+        out.add("agent.context.compress.cooldown.ms=" + getContextCompressCooldownMillis());
+        out.add("agent.context.compress.max.ineffective=" + getContextCompressMaxIneffective());
+        out.add("agent.context.compress.lock.ttl.ms=" + getContextCompressLockTtlMillis());
+        return out;
+    }
+
+    private double doubleOf(String key, double current) {
+        String raw = trim(rawProps.getProperty(key));
+        if (raw.isEmpty()) {
+            return current;
+        }
+        try {
+            return Double.parseDouble(raw);
+        } catch (NumberFormatException e) {
+            System.err.println("[BotConfig] " + key + "=" + raw + " 不是小数，沿用 " + current);
+            return current;
         }
     }
 

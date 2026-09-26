@@ -402,6 +402,9 @@ public class StateStore {
     private final File dbFile;
     private final Options options;
     private final SqliteTx.Counters counters = new SqliteTx.Counters();
+    /** P26：{@code session_model_usage} 是否已带 cache 两列（只探测一次）。 */
+    private boolean cacheColumnsProbed;
+    private boolean cacheColumnsPresent;
     private boolean ftsEnabled;
     private SchemaMigrations.Report lastMigration;
     private PruneReport lastAutoPrune;
@@ -1531,15 +1534,48 @@ public class StateStore {
 
     public synchronized void recordUsage(String sessionId, String model,
                                          Integer promptTokens, Integer completionTokens, int apiCalls) {
+        recordUsage(sessionId, model, promptTokens, completionTokens, apiCalls, null, null);
+    }
+
+    /**
+     * P26：带 cache 读/写命中的记账。
+     *
+     * <p>口径：{@code prompt_tokens} 是上游报的输入总量（含 cache 读命中），
+     * {@code cache_read_tokens} 是其中命中缓存的部分；两者分开记才能算出折后价
+     * （{@code ModelUsage.Record#getBillablePromptTokens()}）。</p>
+     *
+     * <p>本仓不允许改 {@link SchemaMigrations}，所以 cache 列在**没迁移**的库上会自动退化为
+     * 旧 5 列写入（不抛、不吞账）；列在位（迁移落地后）自动写全 7 列。列存在性只探测一次并缓存。</p>
+     */
+    public synchronized void recordUsage(String sessionId, String model,
+                                         Integer promptTokens, Integer completionTokens, int apiCalls,
+                                         final Long cacheReadTokens, final Long cacheWriteTokens) {
         final String sid = sessionId;
         final String m = model;
         final Integer pt = promptTokens;
         final Integer ct = completionTokens;
         final int calls = apiCalls;
+        final boolean withCache = hasCacheColumns();
         final String now = LocalDateTime.now().format(SchemaMigrations.TS);
         write(new SqliteTx.Body<Object>() {
             @Override
             public Object run(Connection c) throws SQLException {
+                if (withCache) {
+                    try (PreparedStatement ps = c.prepareStatement(
+                            "INSERT INTO session_model_usage(session_id,model,prompt_tokens,completion_tokens,"
+                                    + "api_calls,ts,cache_read_tokens,cache_write_tokens) VALUES(?,?,?,?,?,?,?,?)")) {
+                        ps.setString(1, sid);
+                        ps.setString(2, m);
+                        ps.setObject(3, pt);
+                        ps.setObject(4, ct);
+                        ps.setInt(5, calls);
+                        ps.setString(6, now);
+                        ps.setObject(7, cacheReadTokens);
+                        ps.setObject(8, cacheWriteTokens);
+                        ps.executeUpdate();
+                    }
+                    return null;
+                }
                 try (PreparedStatement ps = c.prepareStatement(
                         "INSERT INTO session_model_usage(session_id,model,prompt_tokens,completion_tokens,"
                                 + "api_calls,ts) VALUES(?,?,?,?,?,?)")) {
@@ -1554,6 +1590,76 @@ public class StateStore {
                 return null;
             }
         });
+    }
+
+    /** {@code session_model_usage} 是否已经有 cache 两列（迁移没落地 ⇒ false，走旧写入）。 */
+    public synchronized boolean hasCacheColumns() {
+        if (cacheColumnsProbed) {
+            return cacheColumnsPresent;
+        }
+        Boolean present = read(new SqliteTx.Body<Boolean>() {
+            @Override
+            public Boolean run(Connection c) throws SQLException {
+                int read = 0;
+                int write = 0;
+                try (PreparedStatement ps = c.prepareStatement("PRAGMA table_info(session_model_usage)");
+                     ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        String name = rs.getString(2);
+                        if ("cache_read_tokens".equals(name)) {
+                            read++;
+                        } else if ("cache_write_tokens".equals(name)) {
+                            write++;
+                        }
+                    }
+                }
+                return Boolean.valueOf(read == 1 && write == 1);
+            }
+        });
+        cacheColumnsPresent = present != null && present.booleanValue();
+        cacheColumnsProbed = true;
+        return cacheColumnsPresent;
+    }
+
+    /** 探测结果作废（测试里对同一个实例 ALTER 过表之后必须重新探测）。 */
+    public synchronized void invalidateCacheColumnProbe() {
+        cacheColumnsProbed = false;
+    }
+
+    /**
+     * 读一个 session 的用量合计：{@code [prompt, completion, apiCalls, cacheRead, cacheWrite]}。
+     * cache 列不在位时后两项是 0（不是"没记"，是"记不下"——迁移方案见 EVIDENCE §11）。
+     */
+    public synchronized long[] usageTotals(final String sessionId) {
+        final boolean withCache = hasCacheColumns();
+        long[] got = read(new SqliteTx.Body<long[]>() {
+            @Override
+            public long[] run(Connection c) throws SQLException {
+                long[] out = new long[] {0L, 0L, 0L, 0L, 0L};
+                String sql = withCache
+                        ? "SELECT COALESCE(SUM(prompt_tokens),0),COALESCE(SUM(completion_tokens),0),"
+                          + "COALESCE(SUM(api_calls),0),COALESCE(SUM(cache_read_tokens),0),"
+                          + "COALESCE(SUM(cache_write_tokens),0) FROM session_model_usage WHERE session_id=?"
+                        : "SELECT COALESCE(SUM(prompt_tokens),0),COALESCE(SUM(completion_tokens),0),"
+                          + "COALESCE(SUM(api_calls),0) FROM session_model_usage WHERE session_id=?";
+                try (PreparedStatement ps = c.prepareStatement(sql)) {
+                    ps.setString(1, sessionId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            out[0] = rs.getLong(1);
+                            out[1] = rs.getLong(2);
+                            out[2] = rs.getLong(3);
+                            if (withCache) {
+                                out[3] = rs.getLong(4);
+                                out[4] = rs.getLong(5);
+                            }
+                        }
+                    }
+                }
+                return out;
+            }
+        });
+        return got == null ? new long[] {0L, 0L, 0L, 0L, 0L} : got;
     }
 
     /** 异步委托台账落库：状态/回复覆盖更新，完成时补 finished_at。 */

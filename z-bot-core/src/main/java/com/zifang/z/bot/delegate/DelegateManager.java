@@ -39,6 +39,23 @@ public final class DelegateManager {
     /** 子代理预算比例（Hermes: 子 agent 预算 ≤ 父的 1/4）。 */
     public static final double CHILD_BUDGET_FRACTION = 0.25;
 
+    /**
+     * 委托现场台账（P27，对齐 hermes {@code delegation_live_log.py}）：
+     * 每条委托<b>建账即落盘</b>，所以委托方进程被打死之后现场仍读得回来。
+     * 根目录由 {@link #ledgerRootFor(BotConfig, File)} 推导，{@code null} 时台账自动降级为 no-op。
+     */
+    private final DelegationLedger liveLedger;
+
+    /** 投递账（P27，对齐 {@code async_delegation.py:84} 的 {@code _MAX_DELIVERY_ATTEMPTS = 8}）。 */
+    private final DelegationDelivery delivery;
+
+    /** 在飞子代理 → 现场 id 反查，让 {@code /stop} 能把"停在半路"落到台账上。 */
+    private final java.util.Map<BotAgent, String> liveIdByChild =
+            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<BotAgent, String>());
+
+    /** 现场 id 计数（同步委托没有 async 台账那条 id，另起一把）。 */
+    private final AtomicInteger liveSeq = new AtomicInteger();
+
     private final BotConfig config;
     private final LlmProvider provider;
     private final Sandbox sandbox;
@@ -65,6 +82,77 @@ public final class DelegateManager {
         this.childSessionDir = childSessionDir;
         this.depth = depth;
         this.maxDepth = maxDepth;
+        this.liveLedger = new DelegationLedger(ledgerRootFor(config, childSessionDir));
+        this.delivery = new DelegationDelivery(liveLedger);
+    }
+
+    /**
+     * 现场台账根目录：<b>不需要改 {@code BotAgent} 也不需要新配置项</b>就能定址 ——
+     * 装配点上 {@code childSessionDir} 本身就是 {@code <configDir>/delegate/children}
+     * （{@code BotAgent.java:1852-1854}），取它的父目录再进 {@code live/} 就是
+     * {@code <configDir>/delegate/live}（形状抄她的 {@code cache/delegation/live}）。
+     *
+     * <p>{@code config}/{@code childSessionDir} 都推不出目录时返回 {@code null}，
+     * 台账整体降级成 no-op（{@link DelegationLedger#enabled()} 为 false），
+     * 委托照跑 —— 台账是旁路，不许变成委托的前置条件。</p>
+     */
+    public static File ledgerRootFor(BotConfig config, File childSessionDir) {
+        if (config != null && config.getConfigDir() != null) {
+            return new File(config.getConfigDir(), "delegate/live");
+        }
+        if (childSessionDir != null && childSessionDir.getParentFile() != null) {
+            return new File(childSessionDir.getParentFile(), "live");
+        }
+        return null;
+    }
+
+    /** 现场台账（测试/E2E 直接读盘用；不会返回 null，可能 {@code enabled()==false}）。 */
+    public DelegationLedger liveLedger() {
+        return liveLedger;
+    }
+
+    /** 投递账（上限 {@value DelegationDelivery#MAX_DELIVERY_ATTEMPTS} 的那一本）。 */
+    public DelegationDelivery delivery() {
+        return delivery;
+    }
+
+    /** 某条委托的投递判词，例 {@code PENDING(0/8)}；现场不在 ⇒ {@code MISSING(-/1)}。 */
+    public String describeDelivery(String id) {
+        return delivery.describe(id);
+    }
+
+    /** {@code /agents} 追加行：四态计数 + 用掉的最大尝试数。 */
+    public String describeDeliveries() {
+        return delivery.summary();
+    }
+
+    /**
+     * 收尾扫描：先把死了的现场判成 {@link DelegateState#UNKNOWN}，再回收超期的<b>终态</b>现场。
+     *
+     * @return 人话判词 {@code adopted=N pruned=M}
+     */
+    public String sweepLiveLedger() {
+        long now = System.currentTimeMillis();
+        int adopted = liveLedger.adoptOrphans(DelegationLedger.ORPHAN_STALE_MILLIS, now);
+        int pruned = liveLedger.pruneStale(DelegationLedger.LIVE_RETENTION_MILLIS, now);
+        return "adopted=" + adopted + " pruned=" + pruned;
+    }
+
+    /**
+     * 启动时扫一次的入口（写盘旁路，绝不抛）。台账定不出根目录时返回空串且一行都不打 ——
+     * 测试桩里 {@code config == null} 就是这个形状，不许往 stdout/stderr 喷噪声。
+     *
+     * <p>接线点见 {@code _doc/acceptance/p27/WIRING.md} 第 1 条（在 {@code BotAgent} 构造器
+     * {@code delegation.attach(this)} 之后；那支文件本棒没权改）。</p>
+     */
+    public String sweepAtStartup() {
+        if (!liveLedger.enabled()) {
+            return "";
+        }
+        String verdict = sweepLiveLedger();
+        LOG.info("[delegate] 启动扫现场: {} (root={}, 保留期={} 天)",
+                verdict, liveLedger.root(), DelegationLedger.LIVE_RETENTION_DAYS);
+        return verdict;
     }
 
     /** BotAgent 构造完成后回填父引用（由 Builder.build 调用）。 */
@@ -93,36 +181,49 @@ public final class DelegateManager {
                 });
     }
 
-    /** 同步执行一次委托：构建子 agent → 跑完 → 返回其最终回复与用量。 */
+    /** 同步执行一次委托：建现场 → 构建子 agent → 跑完 → 返回其最终回复与用量。 */
     private ToolResult runChild(String task, String label) {
         // 委托子循环的两个检查点：入口（父已按 stop 就不该再把子代理拉起来）
         // 与收工（子跑完这段时间里用户按了 stop，就别再回灌结果给模型继续下一轮）。
         com.zifang.z.bot.agent.InterruptScope.checkpoint();
+        DelegationLedger.Entry live = liveLedger.create(newLiveId("dlg"), task, depth, label, null);
         BotAgent child;
         try {
-            child = buildChild(label);
+            child = buildChild(label, live);
         } catch (Exception e) {
             LOG.warn("[delegate] 子代理构建失败: {}", e.getMessage());
+            advanceQuiet(live, DelegateEvent.TASK_FAILED, "build 失败: " + e.getMessage());
             return ToolResult.error("子代理构建失败: " + e.getMessage());
         }
         lastChild = child;
+        // 先登记反查再入在飞集合：反过来的话 `stopChildren()` 有一个窗口看得见子代理
+        // 却查不到它的现场 id ⇒ 停止判决一条都没落，随后子代理自己收工把盘上写成 DONE
+        // （P27 实测 flake：60 连跑 2 次 "expected:<STOPPED> but was:<DONE>"）。
+        liveIdByChild.put(child, live.id);
         inFlight.add(child);
+        advanceQuiet(live, DelegateEvent.TASK_SPAWNED, "同步委托起跑");
         try {
             String reply = child.chat(task, StreamListener.NOOP);
             IterationBudget used = child.context().budget();
             String head = "（子代理" + (label.isEmpty() ? "" : "[" + label + "] ")
                     + "完成 steps=" + used.apiCalls() + " tokens=" + used.tokensUsed() + "）";
+            live.reply = reply;
+            advanceQuiet(live, DelegateEvent.TASK_COMPLETED,
+                    "steps=" + used.apiCalls() + " tokens=" + used.tokensUsed());
             com.zifang.z.bot.agent.InterruptScope.checkpoint();
             return ToolResult.text(head + "\n" + reply);
         } catch (com.zifang.z.agent.kernel.agent.InterruptFlag.AgentInterruptedException e) {
             // 用户按了停止，不是子代理出了错：揉成 ToolResult.error 回灌给模型，
             // 等于告诉它「换个办法再试」，父 agent 就停不下来了。原样上抛交给 chat()。
+            advanceQuiet(live, DelegateEvent.TASK_STOPPED, "父侧 /stop 上抛");
             throw e;
         } catch (RuntimeException e) {
             LOG.warn("[delegate] 子代理执行失败: {}", e.getMessage());
+            advanceQuiet(live, DelegateEvent.TASK_FAILED, e.getMessage());
             return ToolResult.error("子代理执行失败: " + e.getMessage());
         } finally {
             inFlight.remove(child);
+            liveIdByChild.remove(child);
             child.shutdown();
         }
     }
@@ -130,11 +231,18 @@ public final class DelegateManager {
     /**
      * 叫停所有在飞的子代理（父 {@code /stop} 时由 {@link BotAgent#stop()} 调）。
      *
+     * <p>P27：除了叫停，还要把"停在半路"这件事落到现场台账上 —— 否则盘上留一条
+     * 永远 {@code RUNNING} 的假现场，重启后没人说得清它是死了还是被停了。</p>
+     *
      * @return 被叫停的子代理条数（0 = 没有在飞的）
      */
     public int stopChildren() {
         int n = 0;
         for (BotAgent child : inFlight) {
+            String liveId = liveIdByChild.get(child);
+            if (liveId != null) {
+                advanceQuiet(liveLedger.load(liveId), DelegateEvent.TASK_STOPPED, "父 /stop");
+            }
             child.stop();
             n++;
         }
@@ -151,8 +259,21 @@ public final class DelegateManager {
      * 委托深度 + 1，且不接入 center（避免子代理重复注册生命周期）。
      */
     private BotAgent buildChild(String label) {
+        return buildChild(label, null);
+    }
+
+    /**
+     * @param live 现场记录（可 null）：装配点上顺手把子会话目录写进台账，
+     *             并且把"父引用没回填 ⇒ 子代理拿的是 builder 默认预算而不是父的 1/4"
+     *             这件事留在盘上（§0 实测：{@code :164} 的裁切包在 {@code if (p != null)} 里，
+     *             是一条没有取证也没测试的旁路）。
+     */
+    private BotAgent buildChild(String label, DelegationLedger.Entry live) {
         File sessionDir = new File(childSessionDir,
                 "d" + depth + "-" + seq.incrementAndGet() + (label.isEmpty() ? "" : "-" + slug(label)));
+        if (live != null) {
+            live.childSession = sessionDir.getAbsolutePath();
+        }
         BotAgent.Builder b = BotAgent.builder(config)
                 .provider(provider)
                 .sandbox(sandbox)
@@ -162,8 +283,37 @@ public final class DelegateManager {
         BotAgent p = parent.get();
         if (p != null) {
             b.budget(p.context().budget().childBudget(CHILD_BUDGET_FRACTION));
+        } else {
+            LOG.warn("[delegate] 父引用未回填（attach 还没跑），子代理预算未裁成 {}", CHILD_BUDGET_FRACTION);
+            advanceQuiet(live, DelegateEvent.BUDGET_UNCLAMPED,
+                    "parent==null ⇒ 未裁预算，fraction=" + CHILD_BUDGET_FRACTION);
         }
         return b.build();
+    }
+
+    /** 新现场 id：形状跟她 {@code new_live_delegation_id()} 一样是"前缀 + 短随机"，但要可排序。 */
+    private String newLiveId(String prefix) {
+        return prefix + System.currentTimeMillis() + "-" + liveSeq.incrementAndGet();
+    }
+
+    /**
+     * 落一条生命周期事件，<b>只 swallow 一种</b>异常：已经终态之后的第二次判决
+     * （例如用户 {@code /stop} 与子代理自己抛异常同时发生）。
+     *
+     * <p>谁先落终态谁说了算 —— 台账不许被后到的事件改写；但状态机的"非法迁移大声失败"
+     * 这条规矩在 {@link DelegateTransitions} 那一层原样保留，这里只是不拿它去炸线程池线程。
+     * 其它异常（写盘失败）由 {@link DelegationLedger} 自己降级，不会冒到这里。</p>
+     */
+    private void advanceQuiet(DelegationLedger.Entry live, DelegateEvent event, String detail) {
+        if (live == null) {
+            return;
+        }
+        try {
+            liveLedger.advance(live, event, detail);
+        } catch (DelegateTransitions.IllegalTransitionException already) {
+            LOG.debug("[delegate] 现场 {} 已是 {}，拒绝被 {} 改写: {}",
+                    live.id, live.state, event.wireName(), already.getMessage());
+        }
     }
 
     /** 异步任务台账（/background 与 /agents 共用）。 */
@@ -180,9 +330,13 @@ public final class DelegateManager {
         BotAgent p = parent.get();
         int width = config == null ? 3 : config.getDelegateMaxChildren();
         synchronized (this) {
-            long running = async.values().stream().filter(d -> "RUNNING".equals(d.status)).count();
-            if (running >= width) {
-                return "异步委托并发已满（" + running + "/" + width + "），稍后再试或先 /agents 查看";
+            // P27：闸门前身只数 RUNNING —— 连发的时候条目还都停在 QUEUED，
+            // width=3 的口子实际能塞进任意多条（§9 产品缺陷 P27-D2，附复算用例）。
+            long flying = async.values().stream()
+                    .filter(d -> !"DONE".equals(d.status) && !"FAILED".equals(d.status))
+                    .count();
+            if (flying >= width) {
+                return "异步委托并发已满（" + flying + "/" + width + "），稍后再试或先 /agents 查看";
             }
         }
         String id = "bg" + System.currentTimeMillis() + "-" + seq.incrementAndGet();
@@ -190,6 +344,10 @@ public final class DelegateManager {
         synchronized (this) {
             async.put(id, d);
         }
+        // P27：建账先于执行 —— 现场目录 + 首条 state.json 现在就落盘（抄她
+        // "pre-created with a header at dispatch time"）。委托方进程之后被打死，
+        // 盘上也还留着一条 QUEUED 现场可判词。
+        final DelegationLedger.Entry live = liveLedger.create(id, task, depth, "bg", null);
         StateStore store = store();
         if (store != null) {
             store.upsertDelegation(id, task, "QUEUED", "");
@@ -198,24 +356,35 @@ public final class DelegateManager {
             @Override
             public void run() {
                 d.status = "RUNNING";
+                advanceQuiet(live, DelegateEvent.TASK_SPAWNED, "异步委托起跑");
                 StateStore s = store();
                 if (s != null) {
                     s.upsertDelegation(id, task, "RUNNING", "");
                 }
+                BotAgent child = null;
                 try {
-                    BotAgent child = buildChild("bg");
+                    child = buildChild("bg", live);
                     lastChild = child;
+                    liveIdByChild.put(child, id);   // 同上：反查必须先于在飞登记
                     inFlight.add(child);
-                    try {
-                        String reply = child.chat(task, StreamListener.NOOP);
-                        d.reply = reply;
-                        d.status = "DONE";
-                    } finally {
-                        inFlight.remove(child);
-                    }
+                    String reply = child.chat(task, StreamListener.NOOP);
+                    d.reply = reply;
+                    d.status = "DONE";
+                    live.reply = reply;
+                    // ★ 只推进生命周期轴：DONE 说的是"子代理自己收工了"，
+                    //   投递轴这一格必须留在 PENDING —— 有人 claim + ack 才算送达。
+                    //   修之前这里等于替消费者把 "ok" 一起写了（P16 同型洞）。
+                    advanceQuiet(live, DelegateEvent.TASK_COMPLETED, "异步收工");
                 } catch (Exception e) {
                     d.reply = "执行失败: " + e.getMessage();
                     d.status = "FAILED";
+                    live.error = String.valueOf(e.getMessage());
+                    advanceQuiet(live, DelegateEvent.TASK_FAILED, e.getClass().getSimpleName());
+                } finally {
+                    if (child != null) {
+                        inFlight.remove(child);
+                        liveIdByChild.remove(child);
+                    }
                 }
                 if (s != null) {
                     s.upsertDelegation(id, task, d.status, d.reply);
@@ -233,22 +402,37 @@ public final class DelegateManager {
         StringBuilder sb = new StringBuilder("异步委托 (" + async.size() + ")\n");
         for (AsyncDelegation d : async.values()) {
             sb.append("  ").append(d.id).append("  ").append(d.status)
+                    .append("  投递=").append(delivery.describe(d.id))
                     .append("  ").append(d.task.length() > 40 ? d.task.substring(0, 40) + "…" : d.task)
                     .append('\n');
         }
         return sb.toString().trim();
     }
 
-    /** {@code /background result <id>} — 取回已完成委托的回复。 */
+    /** {@code /background result <id>} — 取回已完成委托的回复（这一次拉取本身就是一次投递）。 */
     public synchronized String asyncResult(String id) {
-        AsyncDelegation d = async.get(id == null ? "" : id.trim());
+        String key = id == null ? "" : id.trim();
+        AsyncDelegation d = async.get(key);
         if (d == null) {
             return "未知委托 id: " + id;
         }
         if (!"DONE".equals(d.status) && !"FAILED".equals(d.status)) {
+            // 还没收工就谈不上投递：看进度不该烧尝试数。
             return d.id + " 还在 " + d.status + "，稍后再取";
         }
-        return "[" + d.status + "] " + d.task + "\n" + d.reply;
+        String token = delivery.claim(key, "pull-console");
+        String tail;
+        if (token == null) {
+            DeliveryState st = delivery.stateOf(key);
+            tail = st == DeliveryState.DELIVERED
+                    ? "\n（投递：此前已确认接住 " + delivery.describe(key) + "）"
+                    : "\n（投递：" + delivery.describe(key) + " ⇒ 账上不记成功）";
+        } else if (delivery.complete(key, token)) {
+            tail = "\n（投递：DELIVERED " + delivery.describe(key) + "）";
+        } else {
+            tail = "\n（投递：ack 未生效 " + delivery.describe(key) + "）";
+        }
+        return "[" + d.status + "] " + d.task + "\n" + d.reply + tail;
     }
 
     // ===== 内部 =====
