@@ -255,7 +255,8 @@ public final class FeishuChannel implements Channel {
         lastHttpStatus = r.status;
         lastPlatformCode = r.platformCode;
         if (r.status < 200 || r.status >= 300 || r.platformCode != 0) {
-            throw new IOException(describeFailure(r.status, r.platformCode, r.platformMsg));
+            // 平台 msg 里万一回显了什么（包括 token），一律洗过再往外冒
+            throw new IOException(scrub(describeFailure(r.status, r.platformCode, r.platformMsg)));
         }
         Map<String, Object> payload = new HashMap<String, Object>();
         payload.put("receiveId", message.replyTo);

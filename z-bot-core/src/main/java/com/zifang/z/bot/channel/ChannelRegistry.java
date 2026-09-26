@@ -333,7 +333,11 @@ public final class ChannelRegistry {
     /** 逐字段合并：后一个来源同名实例的同名字段覆盖前一个（{@code declaredBy} 留下审计痕迹）。 */
     void merge(Properties p, String source) {
         sources.add(source);
-        for (String raw : p.stringPropertyNames()) {
+        // Properties 的 stringPropertyNames() 是 Hashtable 序（不稳定）。装配顺序影响通道注册顺序、
+        // 进而影响 status/cron 目标列表的可预期性 ⇒ 同一层内按键名排序，让声明式装配是确定的。
+        List<String> keys = new ArrayList<String>(p.stringPropertyNames());
+        Collections.sort(keys);
+        for (String raw : keys) {
             if (!raw.startsWith(PREFIX)) {
                 continue;
             }
@@ -378,7 +382,7 @@ public final class ChannelRegistry {
         } else if ("requires".equals(tail)) {
             s.requires = splitList(value);
         } else {
-            throw new IllegalArgumentException("不认识 manifest 键 " + PREFIX + tail
+            throw new IllegalArgumentException("不认识 manifest 键 " + rawKey
                     + "（可用：kind / enabled / outbound / default-port / requires / config.<key>）");
         }
     }
