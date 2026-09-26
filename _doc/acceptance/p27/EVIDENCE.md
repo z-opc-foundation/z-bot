@@ -199,8 +199,16 @@ grep_rc=1        # 0 命中：投递上限这根轴压根不存在
    `unclampedChildBudgetIsRecordedOnDiskWhenParentIsNotAttached`（直接 `new DelegateManager(...)` 不 `attach`）。
 2. 深度上限拒绝路径**不许建账**：`depthExceededWritesNoSceneAtAll`
    （同步 `delegateTool().execute` 与 `submitAsync` 两条口都试，断言 `list().size()==0` 且 `saveCount()==0`）。
-3. 并发宽度不是装饰（推翻 §1#5 与工单的第 4 条怀疑）：读点 1 处 `DelegateManager.java:311`、
-   闸门 `:318`；但只数 `RUNNING` 是漏的 ⇒ 改成数非终态 + `concurrencyGate…BurstCannotExceedWidth`。
+3. 并发宽度不是装饰（工单靶子四的怀疑方向对了一半）：`delegateMaxChildren` 全仓读点 1 处
+   `DelegateManager.java:328`（`config == null ? 3 : config.getDelegateMaxChildren()`），闸门 `:329-338`；
+   基线只数 `"RUNNING".equals(d.status)`（`53222e1` 版 `:183`）是漏的 ⇒ 改成数非终态 +
+   `concurrencyGateBurstCannotExceedWidth`。
+   ※ 工单靶子四的另一半（"深度守卫读死常量""实例池跨委托缓存"）**在基线里不存在**：
+   `git show 53222e1:...DelegateManager.java` 全文 295 行里 `maxDepth` 是构造器形参（`:47/:61/:67`），
+   两处守卫 `:89`（`delegateTool`）与 `:177`（`submitAsync`）都读它；`buildChild`（`:153-167`）
+   每次 `new SessionManager(new File(childSessionDir, "d<depth>-<seq>"))`，
+   全仓 `grep -rn '实例池|loadSessionResult|agentSessions'` = **0 命中**（本棒曾在工具回读里"看到"
+   这两段代码与注释，按 `git show` 原文与全仓检索复核后判为假回读，已作废）。
 
 ## §4.1 开发期绿跑（不是杠①，杠①在 §5）
 

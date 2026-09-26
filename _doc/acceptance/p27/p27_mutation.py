@@ -14,6 +14,7 @@
 动笔前先做无界 await()/waitFor() 体检：委托这一路天生等子进程，无界等待会把全编队的锁占死。
 """
 
+import errno
 import hashlib
 import os
 import re
@@ -246,12 +247,64 @@ def die(msg, code=1):
     sys.exit(code)
 
 
+def pid_alive(pid):
+    """只问"这个 pid 还在不在"，绝不发信号（0 号信号是探活不是杀）。"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as e:
+        return e.errno == errno.EPERM      # 活着，只是不是我放的
+    except Exception:
+        return False
+
+
 def acquire_lock():
+    """锁文件语义：owner 进程死了留下的锁是**死锁**，接管（先备份原读数）。
+
+    为什么要接管而不是 rc=4 走人：p14 那一棒 16:29 崩在半路，锁文件留在原地，
+    此后全编队每一棒都会 rc=4 —— 死锁过期不等于可以白跑一整轮四杠。
+    红线仍然守住：不 sleep 死等、不 kill 别人、别人的锁若**主人还活着**一律不碰。
+    """
     lp = lock_path()
-    fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    os.write(fd, ("%d p27a-mutation %s\n" % (os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S"))).encode())
-    os.close(fd)
-    return lp
+    for _ in range(3):
+        stale = None
+        try:
+            fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                raise
+            try:
+                with open(lp) as f:
+                    stale = f.read().strip()
+            except OSError:
+                stale = "<读不到>"
+            hp = None
+            try:
+                hp = int(stale.split()[0])
+            except (ValueError, IndexError):
+                hp = None
+            if hp is not None and pid_alive(hp):
+                print("rc=4 LOCK_BUSY 锁被别人占着（主人还活着）：" + stale)
+                print("P27 杠② NO-RUN（不 sleep 死等、不 kill 别人），回头整批重跑。")
+                sys.exit(4)
+            bak = os.path.join(OUT, "stale-lock-owner.txt")
+            try:
+                with open(bak, "w") as f:
+                    f.write(stale + "\n")
+            except OSError:
+                pass
+            print("== 锁是死锁（owner 已不在）：原读数 %s ⇒ 备份到 %s 后接管 ==" % (stale, bak))
+            try:
+                os.unlink(lp)
+            except OSError:
+                pass
+            time.sleep(1)
+            continue
+        os.write(fd, ("%d p27a-mutation %s\n" % (os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S"))).encode())
+        os.close(fd)
+        return lp
+    die("锁始终取不到（连续 3 次）", 4)
+    return None
 
 
 def md5(path):
@@ -305,7 +358,9 @@ def run_suite(tag):
     reports = os.path.join(REPO, "z-bot-core/target/surefire-reports")
     if os.path.isdir(reports):
         shutil.rmtree(reports)
-    rc, out = sh(["mvn", "-o", "test", "-Dtest=" + SCOPE, "-DfailIfNoTests=false"], timeout=MVN_TIMEOUT)
+    rc, out = sh(["mvn", "-o", "test", "-pl", "z-bot-core",
+                  "-Dtest=" + SCOPE, "-DfailIfNoTests=false",
+                  "-Dsurefire.failIfNoSpecifiedTests=false"], timeout=MVN_TIMEOUT)
     with open(log, "w") as f:
         f.write(out)
     failed = failed_tests_from_surefire()
@@ -400,11 +455,16 @@ def run_all():
                 elapsed = time.time() - t0
                 restored = "OK"
                 if rc_i == 124:
-                    outcome = "RESTORE_FAILED"
+                    outcome = "ERROR"
                     detail = "mvn 超时（永挂嫌疑），日志 " + log_i
                 elif rc_i == 0:
                     outcome = "SURVIVED"
                     detail = "全绿：没有任何用例咬住这支变异"
+                elif not failed_i and not classes_i:
+                    # 编译不过 / 压根没跑到用例：这类"红"不携带任何判据信息，
+                    # 记成 NONINFORMATIVE 而不是 KILLED，免得拿假绿冒充杀变异。
+                    outcome = "NONINFORMATIVE"
+                    detail = "rc=%d 但既无具名红也无类级红（编译断或没跑到用例），日志 %s" % (rc_i, log_i)
                 else:
                     outcome = "KILLED"
                     detail = ",".join(sorted(failed_i)) or ("类级红:" + ",".join(classes_i))
@@ -434,6 +494,9 @@ def run_all():
         rows.append([m["id"], m["file"], outcome, str(rc_i), detail, ";".join(m["expect"]),
                      unexpected, "%.1f" % elapsed, restored])
         print("%-34s %-22s rc=%-4s %s" % (m["id"], outcome, rc_i, unexpected or detail[:90]))
+        sys.stdout.flush()
+        # 每支都落一次台账：整批 22 跑要一个多小时，中途掉线也留得下已判定的部分
+        write_ledger(rows, header, counts, hits, baseline_green, survivors)
 
     write_ledger(rows, header, counts, hits, baseline_green, survivors)
 

@@ -239,7 +239,9 @@ public class DelegateManagerLedgerTest {
     @Test
     public void concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth() throws Exception {
         Gate gate = new Gate();
-        Scripted llm = new Scripted(gate);
+        // 每次 chat 都卡在闸门上：连发期间一条都不许收口 —— 否则槽位被合法释放，
+        // 第 4 条被收下就不是缺陷而是时序（这一支在 784 全量第三跑上以 3/4 的差距显形过）。
+        Scripted llm = new Scripted().blocking(gate);
         BotAgent agent = agent(llm);   // config==null ⇒ width 3
         List<String> accepted = new ArrayList<String>();
         String rejected = null;
@@ -469,6 +471,8 @@ public class DelegateManagerLedgerTest {
     private static final class Scripted implements LlmProvider {
         private final List<ChatCompletionsResponse> scripted = new ArrayList<ChatCompletionsResponse>();
         private final List<Gate> gates = new ArrayList<Gate>();
+        /** 非空 ⇒ **每一次** chat 都卡在它上面（连发用例要的是"一条都不许提前收口"）。 */
+        private Gate sticky;
 
         Scripted(Object... items) {
             for (Object o : items) {
@@ -478,6 +482,11 @@ public class DelegateManagerLedgerTest {
                     gates.add((Gate) o);
                 }
             }
+        }
+
+        Scripted blocking(Gate g) {
+            this.sticky = g;
+            return this;
         }
 
         @Override
@@ -497,6 +506,10 @@ public class DelegateManagerLedgerTest {
 
         @Override
         public ChatCompletionsResponse chat(ChatCompletionsRequest request) {
+            if (sticky != null) {
+                sticky.await();
+                return textReply("still-flying");
+            }
             if (!gates.isEmpty()) {
                 Gate g = gates.remove(0);
                 g.await();

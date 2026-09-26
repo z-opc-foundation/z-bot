@@ -196,8 +196,11 @@ public final class DelegateManager {
             return ToolResult.error("子代理构建失败: " + e.getMessage());
         }
         lastChild = child;
-        inFlight.add(child);
+        // 先登记反查再入在飞集合：反过来的话 `stopChildren()` 有一个窗口看得见子代理
+        // 却查不到它的现场 id ⇒ 停止判决一条都没落，随后子代理自己收工把盘上写成 DONE
+        // （P27 实测 flake：60 连跑 2 次 "expected:<STOPPED> but was:<DONE>"）。
         liveIdByChild.put(child, live.id);
+        inFlight.add(child);
         advanceQuiet(live, DelegateEvent.TASK_SPAWNED, "同步委托起跑");
         try {
             String reply = child.chat(task, StreamListener.NOOP);
@@ -362,8 +365,8 @@ public final class DelegateManager {
                 try {
                     child = buildChild("bg", live);
                     lastChild = child;
+                    liveIdByChild.put(child, id);   // 同上：反查必须先于在飞登记
                     inFlight.add(child);
-                    liveIdByChild.put(child, id);
                     String reply = child.chat(task, StreamListener.NOOP);
                     d.reply = reply;
                     d.status = "DONE";
