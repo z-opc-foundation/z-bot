@@ -113,6 +113,12 @@ public final class RawTerminalReader implements AutoCloseable {
         Process p = null;
         try {
             p = new ProcessBuilder(argv)
+                    // stdin 必须继承本进程的 fd 0：`stty` 是拿 **stdin 这个 fd** 当被操作
+                    // 对象的，ProcessBuilder 缺省给的是管道 ⇒ 真终端上 stty 也永远报
+                    // "not a tty"，raw 模式在改动前后其实从没切成功过（p28b 杠③ 用真 PTY
+                    // 才看见：判词恒为 NONZERO_EXIT，且父端同时收到 tty 回显 + 应用回显的
+                    // 双份字节）。这一步继承之后，真 PTY 上判词才成其为 DONE。
+                    .redirectInput(ProcessBuilder.Redirect.INHERIT)
                     .redirectOutput(ProcessBuilder.Redirect.to(new File("/dev/null")))
                     .redirectError(ProcessBuilder.Redirect.to(new File("/dev/null")))
                     .start();
