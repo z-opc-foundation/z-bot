@@ -357,6 +357,10 @@ public class DockerExecEnvironmentTest {
                 assertTrue("资源限额三项都得在：" + brief(body), body.contains("\"Memory\":268435456")
                         && body.contains("\"NanoCpus\":500000000") && body.contains("\"PidsLimit\":64"));
                 assertTrue("缺省断网：" + brief(body), body.contains("\"NetworkMode\":\"none\""));
+                assertTrue("安全基线（hermes docker.py 承诺的 cap-drop ALL / no-new-privileges）"
+                        + brief(body),
+                        body.contains("\"CapDrop\":[\"ALL\"]")
+                                && body.contains("\"SecurityOpt\":[\"no-new-privileges:true\"]"));
                 assertTrue("必须贴 label（孤儿回收只认这个）：" + brief(body),
                         body.contains(DockerExecEnvironment.LABEL_MANAGED)
                                 && body.contains(DockerExecEnvironment.LABEL_OWNER_PID)

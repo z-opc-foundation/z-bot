@@ -251,6 +251,11 @@ public final class DockerExecEnvironment implements ExecEnvironment {
             hc.put("PidsLimit", pids);
         }
         hc.put("NetworkMode", networkMode());
+        // 对标 hermes tools/environments/docker.py 开头承诺的安全基线（cap-drop ALL +
+        // no-new-privileges）。AutoRemove=false：容器一律留在地上，靠账本兜底回收，
+        // 这样"摘掉 delete"才会在变异里现形。
+        hc.put("CapDrop", java.util.Collections.singletonList("ALL"));
+        hc.put("SecurityOpt", java.util.Collections.singletonList("no-new-privileges:true"));
         hc.put("AutoRemove", false);
         return hc;
     }
