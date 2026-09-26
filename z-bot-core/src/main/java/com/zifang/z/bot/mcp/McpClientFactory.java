@@ -25,12 +25,90 @@ public final class McpClientFactory {
 
     /**
      * 创建一个 stdio MCP client（不会立即 connect，调用方按需触发）。
+     *
+     * <p><b>走的是内核 {@code StdioMcpTransport}</b>，保留它是为了当对照组：
+     * P21 §2 要用它实测"内核 stdio 收不到 server 主动推的 notification"这条推论。
+     * 生产路径已换到 {@link #createStdioZBot}。</p>
      */
     public static McpClient createStdio(BotConfig.McpServerEntry entry) {
         return new StdIoMcpClient(entry.getName(), new StdioMcpTransport(new ArrayList<String>(entry.getCommand())));
     }
 
-    /** 基于自定义 transport 的 client（测试用）。 */
+    /**
+     * z-bot 侧 stdio transport：实现同一个公开接口 {@link McpTransport}，
+     * 但修掉内核三个已知未修缺陷（字符串包含配对端 / 不生效的 deadline / 写死的自报版本），
+     * 并补上常驻读线程 ⇒ 能收 {@code notifications/tools/list_changed}。
+     */
+    public static McpClient createStdioZBot(BotConfig.McpServerEntry entry) {
+        ZBotStdioMcpTransport.Options o = new ZBotStdioMcpTransport.Options()
+                .serverName(entry.getName())
+                .command(entry.getCommand())
+                .clientVersion(clientVersion());
+        if (entry.getTimeoutMillis() > 0) {
+            o.timeoutMillis(entry.getTimeoutMillis());
+        }
+        return new StdIoMcpClient(entry.getName(), new ZBotStdioMcpTransport(o));
+    }
+
+    /** StreamableHTTP transport（POST JSON-RPC + mcp-session-id + 双形态响应）。 */
+    public static McpClient createHttp(BotConfig.McpServerEntry entry) {
+        StreamableHttpMcpTransport.Options o = new StreamableHttpMcpTransport.Options()
+                .serverName(entry.getName())
+                .url(entry.getUrl())
+                .headers(entry.getHeaders())
+                .clientVersion(clientVersion());
+        if (entry.getTimeoutMillis() > 0) {
+            o.timeoutMillis(entry.getTimeoutMillis());
+        }
+        return new StdIoMcpClient(entry.getName(), new StreamableHttpMcpTransport(o));
+    }
+
+    /**
+     * 按配置里的 transport 判别位派发。生产路径唯一入口。
+     *
+     * @throws IllegalArgumentException 未知 transport，或 http 条目缺 url（不静默降级成 stdio：
+     *                                  那会把一个连不上的 server 报成"起来了但 0 工具"）
+     */
+    public static McpClient create(BotConfig.McpServerEntry entry) {
+        String t = entry.getTransport();
+        if (BotConfig.McpServerEntry.TRANSPORT_HTTP.equals(t)) {
+            if (entry.getUrl().isEmpty()) {
+                throw new IllegalArgumentException("mcp server '" + entry.getName()
+                        + "' transport=http 但没有 url（mcp.server." + entry.getName() + ".url=…）");
+            }
+            return createHttp(entry);
+        }
+        if (BotConfig.McpServerEntry.TRANSPORT_STDIO.equals(t)) {
+            if (entry.getCommand().isEmpty()) {
+                throw new IllegalArgumentException("mcp server '" + entry.getName()
+                        + "' transport=stdio 但没有命令行");
+            }
+            return createStdioZBot(entry);
+        }
+        throw new IllegalArgumentException("mcp server '" + entry.getName()
+                + "' 的 transport 不认识: " + t + "（可用值: stdio / http）");
+    }
+
+    /** 自报版本：跟 jar 走，不再像内核那样把 "0.2.0" 焊死在源码里。 */
+    static String clientVersion() {
+        String v = McpClientFactory.class.getPackage().getImplementationVersion();
+        return v == null || v.isEmpty() ? "0.2.0-dev" : v;
+    }
+
+    /**
+     * 取一个 client 底下的 transport；不是本工厂实现的返回 null。
+     *
+     * <p>{@link McpBridge} 用它判"这条通道能不能收 server 主动通知"，
+     * 收不到就不广告 {@code listChanged}（广告出去的字段就是承诺）。</p>
+     */
+    public static McpTransport transportOf(McpClient client) {
+        if (client instanceof StdIoMcpClient) {
+            return ((StdIoMcpClient) client).transportHandle();
+        }
+        return null;
+    }
+
+    /** 基于自定义 transport 的 client（测试用，也是 P21 新 transport 的注入缝）。 */
     public static McpClient wrap(String name, McpTransport transport) {
         return new StdIoMcpClient(name, transport);
     }
@@ -46,6 +124,11 @@ public final class McpClientFactory {
         StdIoMcpClient(String name, McpTransport transport) {
             this.name = name;
             this.transport = transport;
+        }
+
+        /** 给 {@link McpBridge} 看的底层通道（判 {@link McpNotificationSource} 用）。 */
+        McpTransport transportHandle() {
+            return transport;
         }
 
         @Override

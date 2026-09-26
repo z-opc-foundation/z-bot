@@ -229,6 +229,12 @@ public final class BotConfig {
 
         // mcp.servers = "fs=node /usr/local/bin/mcp-fs.js,git=uvx mcp-git"
         // 逗号分隔每个 server, "=" 前面是 server name, 后面是完整命令行 (空格分隔)
+        //
+        // P21 起多两种形态，但**老写法的一个字节都不改**：
+        //   ① 命令行值直接写 URL（http:// 或 https:// 前缀）⇒ 判成 http；
+        //   ② 逐 server 覆盖键 mcp.server.<name>.{transport,url,headers,timeout}
+        //      headers 用分号分隔（逗号是 server 分隔符，不能再用）：
+        //      mcp.server.corp.headers = "Authorization=Bearer xxx;X-API-Key=yyy"
         String mcpRaw = trim(props.getProperty("mcp.servers"));
         if (!mcpRaw.isEmpty()) {
             this.mcpServers = new ArrayList<McpServerEntry>();
@@ -243,16 +249,13 @@ public final class BotConfig {
                 }
                 String name = e.substring(0, eq).trim();
                 String cmdline = e.substring(eq + 1).trim();
-                List<String> cmd = new ArrayList<String>();
-                for (String token : cmdline.split("\\s+")) {
-                    if (!token.isEmpty()) {
-                        cmd.add(token);
-                    }
-                }
-                if (name.isEmpty() || cmd.isEmpty()) {
+                if (name.isEmpty()) {
                     continue;
                 }
-                this.mcpServers.add(new McpServerEntry(name, cmd));
+                McpServerEntry built = buildMcpEntry(props, name, cmdline);
+                if (built != null) {
+                    this.mcpServers.add(built);
+                }
             }
         }
 
@@ -825,14 +828,132 @@ public final class BotConfig {
      * 一个 MCP server 配置 — 仅支持 stdio transport（命令行拉起子进程），
      * name 作为工具前缀（{@code mcp-<name>-<tool>})。
      */
+    /**
+     * 把一个 {@code mcp.servers} 的 value 折成 {@link McpServerEntry}，再套上
+     * {@code mcp.server.<name>.*} 的逐 server 覆盖。
+     *
+     * @return null 表示这条应该被跳过（沿用老行为：命令行 token 数为 0 就丢弃）
+     */
+    private static McpServerEntry buildMcpEntry(Properties props, String name, String cmdline) {
+        String prefix = "mcp.server." + name + ".";
+        String url = trim(props.getProperty(prefix + "url"));
+        String transport = trim(props.getProperty(prefix + "transport"));
+        String timeoutRaw = trim(props.getProperty(prefix + "timeout"));
+        Map<String, String> headers =
+                parseMcpHeaders(trim(props.getProperty(prefix + "headers")));
+
+        boolean looksLikeUrl = cmdline.regionMatches(true, 0, "http://", 0, 7)
+                || cmdline.regionMatches(true, 0, "https://", 0, 8);
+        List<String> cmd = new ArrayList<String>();
+        if (!looksLikeUrl) {
+            for (String token : cmdline.split("\\s+")) {
+                if (!token.isEmpty()) {
+                    cmd.add(token);
+                }
+            }
+            if (cmd.isEmpty() && url.isEmpty() && transport.isEmpty()) {
+                return null; // 老行为：没有命令行的 stdio 条目不成立
+            }
+        } else if (url.isEmpty()) {
+            url = cmdline;
+        }
+
+        if (transport.isEmpty()) {
+            transport = url.isEmpty() ? McpServerEntry.TRANSPORT_STDIO : McpServerEntry.TRANSPORT_HTTP;
+        }
+        long timeout = 0L;
+        if (!timeoutRaw.isEmpty()) {
+            timeout = parseInt(timeoutRaw, 0);
+        }
+        return new McpServerEntry(name, cmd, transport, url, headers, timeout);
+    }
+
+    /**
+     * {@code headers} 值：{@code "K=V;K2=V2"}。分号分隔是因为逗号已被
+     * {@code mcp.servers} 当 server 分隔符占用。value 里可以再含 {@code =}
+     * （{@code "X-Blob=a=b=c"} ⇒ value 取第一个 {@code =} 之后的全部）。
+     */
+    private static Map<String, String> parseMcpHeaders(String raw) {
+        Map<String, String> out = new java.util.LinkedHashMap<String, String>();
+        if (raw == null || raw.isEmpty()) {
+            return out;
+        }
+        for (String pair : raw.split(";")) {
+            String p = pair.trim();
+            if (p.isEmpty()) {
+                continue;
+            }
+            int eq = p.indexOf('=');
+            if (eq <= 0) {
+                continue;
+            }
+            out.put(p.substring(0, eq).trim(), p.substring(eq + 1).trim());
+        }
+        return out;
+    }
+
+    /**
+     * 一个 MCP server 的配置。
+     *
+     * <p>P21 前只有 {@code name + command}（stdio 一种形态）。现在多一个
+     * {@link #TRANSPORT_STDIO}/{@link #TRANSPORT_HTTP} 判别位与 http 侧的
+     * {@code url + headers}，但<b>老写法的解析结果一位都没动</b>：
+     * {@code mcp.servers = "fs=node /usr/local/bin/mcp-fs.js,git=uvx mcp-git"}
+     * 仍然解成两条 stdio 条目（{@link BotConfig} 的 mcp 解析块 + 回归测试
+     * {@code McpServerEntryCompatTest}）。</p>
+     *
+     * <p>{@code headers} 可能带真凭证（{@code Authorization: Bearer ...}），所以：
+     * {@link #getHeaders()} 是给建 transport 用的<b>原文</b>，
+     * {@link #maskedHeaders()}/{@link #toSafeMap()}/{@link #toString()} 是<b>给日志与
+     * /status 类产物看的</b>脱敏口径 —— value 一律打码，只暴露 key 名。</p>
+     */
     public static final class McpServerEntry {
+
+        /** 子进程 + newline-delimited JSON-RPC（老写法就是这个）。 */
+        public static final String TRANSPORT_STDIO = "stdio";
+        /** StreamableHTTP（POST JSON-RPC + mcp-session-id + 可选 text/event-stream）。 */
+        public static final String TRANSPORT_HTTP = "http";
+
         private final String name;
         private final List<String> command;
+        private final String transport;
+        private final String url;
+        private final Map<String, String> headers;
+        private final long timeoutMillis;
 
+        /** 老的两个字段构造器：保留 ⇒ 任何既有调用点/测试不必改。 */
         public McpServerEntry(String name, List<String> command) {
+            this(name, command, TRANSPORT_STDIO, "", null, 0L);
+        }
+
+        public McpServerEntry(String name, List<String> command, String transport, String url,
+                              Map<String, String> headers, long timeoutMillis) {
             this.name = name;
             this.command = command == null
                     ? Collections.<String>emptyList() : Collections.unmodifiableList(command);
+            this.transport = normalizeTransport(transport);
+            this.url = url == null ? "" : url.trim();
+            this.headers = headers == null || headers.isEmpty()
+                    ? Collections.<String, String>emptyMap()
+                    : Collections.unmodifiableMap(new java.util.LinkedHashMap<String, String>(headers));
+            this.timeoutMillis = timeoutMillis;
+        }
+
+        private static String normalizeTransport(String v) {
+            if (v == null) {
+                return TRANSPORT_STDIO;
+            }
+            String t = v.trim().toLowerCase(java.util.Locale.ROOT);
+            if (t.isEmpty() || TRANSPORT_STDIO.equals(t) || "stdio+".equals(t)) {
+                return TRANSPORT_STDIO;
+            }
+            // 规范里这层绑定的名字叫 streamable http；http / https / streamable-http 都收
+            if (TRANSPORT_HTTP.equals(t) || "https".equals(t) || "http+sse".equals(t)
+                    || "streamablehttp".equals(t) || "streamable-http".equals(t)
+                    || "streamable_http".equals(t) || "sse".equals(t)) {
+                return TRANSPORT_HTTP;
+            }
+            return t;
         }
 
         public String getName() {
@@ -843,8 +964,55 @@ public final class BotConfig {
             return command;
         }
 
+        /** {@link #TRANSPORT_STDIO} 或 {@link #TRANSPORT_HTTP}；未知值原样回（建 transport 时报错）。 */
+        public String getTransport() {
+            return transport;
+        }
+
+        public String getUrl() {
+            return url;
+        }
+
+        public Map<String, String> getHeaders() {
+            return headers;
+        }
+
+        /** 打码后的 headers：唯一允许进日志/产物的口径。 */
+        public Map<String, String> maskedHeaders() {
+            return com.zifang.z.bot.mcp.SecretRedaction.maskAll(headers);
+        }
+
+        /** {@code <= 0} 表示"用 transport 实现的默认值"，不在配置层编一个第二默认值。 */
+        public long getTimeoutMillis() {
+            return timeoutMillis;
+        }
+
+        public boolean isHttp() {
+            return TRANSPORT_HTTP.equals(transport);
+        }
+
+        /** 给状态/前端看的脱敏视图 —— 里面没有任何 header 原文，也没有 url 的 query。 */
+        public Map<String, Object> toSafeMap() {
+            Map<String, Object> m = new java.util.LinkedHashMap<String, Object>();
+            m.put("name", name);
+            m.put("transport", transport);
+            if (TRANSPORT_HTTP.equals(transport)) {
+                m.put("url", com.zifang.z.bot.mcp.SecretRedaction.maskUrl(url));
+                m.put("headerNames", new ArrayList<String>(headers.keySet()));
+            } else {
+                m.put("command", command);
+            }
+            m.put("timeoutMillis", Long.valueOf(timeoutMillis));
+            return m;
+        }
+
         @Override
         public String toString() {
+            if (TRANSPORT_HTTP.equals(transport)) {
+                return "McpServer{name='" + name + "', transport=http, url="
+                        + com.zifang.z.bot.mcp.SecretRedaction.maskUrl(url)
+                        + ", headers=" + maskedHeaders() + "}";
+            }
             return "McpServer{name='" + name + "', command=" + command + "}";
         }
     }
