@@ -766,6 +766,41 @@ for (String name : tk.getToolNames()) {
   期望换成常量之后，注入当场把 `tk.toolsetOf(name)` 打到 builtin，与常量表逐条不相等 ⇒ 红。
 
 双向：还原态这条绿（控制跑，见 §9.9），注入态这条红（判定行 `TS4 … RED-OK 5/5`，红名单含本条）。
+R1 实跑原文（`logs/LEDGER_R1.tsv` TS4 行 + `r1_mut_TS4.log`）：`TS4 … RED-OK 5/5`，
+`tests_that_went_red` 里含 `readOnlyToolsDeclareParallelSafetyAndWriteToolsDoNot` ⇒ 换常量表之后这一刀真判得红。
+
+### 9.2.1 "写读共用同一归一化"的自查（工单要求：凡是这种形状都按 TS4 这一条过一遍）
+
+机械扫描（不靠印象），把**断言行里同一个生产侧/注册表函数出现两次以上**的都捞出来：
+
+```
+cd z-bot-core/src/test/java && python3 - <<'PY'   # 断言行内 PROD/METH 调用去重计数，>1 即嫌疑
+PROD = r'\b(Toolsets|Toolkit|McpBridge|McpManager|ToolDescriptor|BuiltinTools|Config)\.([A-Za-z_]+)\s*\('
+METH = r'\b(tk|toolkit|bridge|manager|second|reg|d|decl)\.([A-Za-z_]+)\s*\('
+PY
+```
+读数：`TOTAL_SUSPECT_LINES=6`，逐条看完**全是假嫌疑**（函数第二次出现只是失败消息串，不是期望值）：
+
+| 嫌疑行 | 为什么不是同源 |
+| --- | --- |
+| `mcp/McpBridgeDeregisterTest.java:57` | `assertTrue(tk.getToolNames().toString(), …contains("mcp-legacy-alpha"))` —— 第一个参数是消息串，期望是字面量 |
+| `mcp/McpBridgeReloadReverseAssertionTest.java:47` | 同上，字面量 `"mcp-dying-alpha"` |
+| `tool/ExecGuardHardlineTest.java:26` | 消息串 + `startsWith(ExecGuard.HARDLINE_PREFIX)`，前缀是常量不是函数 |
+| `tool/ToolkitRegistryTest.java:141` / `:194` / `:210` | 消息串，contains 的参数是字面量 `"mcp-srv-old"` / `"mcp-x-1"` / `"ghost"` |
+
+另外两处"期望取自函数"的形状，本棒逐条对过，**结论不同**：
+- `ToolsetsManifestTest.java:163/:174/:181-187`：期望是**字面量**（`"mcp-fs"`、`"mcp-a_b_c"`、`Toolkit.DEFAULT_TOOLSET`），
+  实测才是 `Toolsets.toolsetForTool/mcpToolset/mcpOwner` ⇒ 不同源（TS5 判红的正是这一族）。
+- `ToolsetsManifestTest.java:150-151`：`emptyCapabilityToolsets` 的期望取自 `Toolsets.capabilityNames()`。
+  这**不是** TS4 那种同源漂移 —— 这两个函数读同一张 `MANIFEST` 声明表，声明表就是真源，测试要判的是
+  "审计有没有把清单里的空能力报出来"而不是"清单写得对不对"（后者由 `everyCapabilityToolsetDeclaresConsumerAndMembers`
+  与字面量表那条判）。诚实记账：这条腿对 **TS6**（`capabilityNames` 自己漂）确实是**一起漂**的 ⇒
+  TS6 不靠它判红，靠的是另外三条（台账 `TS6 … RED-OK 3/3`，红名单三条都在）⇒ 网还在，只是不挂在这一条上。
+- 字面量表 `EXPECTED_TOOLSET_BY_TOOL`（`ToolsetsManifestTest.java:222-236`）本棒**重新手工对过**
+  `Toolsets.java:106-114` 的 `declare(...)` 表：core 5（echo/time/counter/health/sysinfo）、
+  file 3（read_file/write_file/search）、exec 2（exec/mvn_build）、net 1（curl_test）= 11 个，逐字相同；
+  且 `:132-134` 那条"键集 == 注册表工具名集"的笼子保证这张表不会漏工具而空跑。
+
 
 ## 9.3 TK3 —— 注点从 accessor 改到快照键
 
@@ -793,7 +828,21 @@ for (String name : tk.getToolNames()) {
    `:50` `namesOf(tk)`、`:51` `getToolsDescription()` 都在 `:45` 的 `deregister` **之后**，
    第一次 `snapshot()` 就是新状态 ⇒ 缓存键对不对它都看不出来；
 2. 它读的是 `tk.generation()`（`:53`）那个 accessor，而 accessor 已经**不是**本变异体的注点；
-3. 读数：R1 全量跑 `TK3 … 点名=4/5`，红的正是上面那 4 条（`mut_TK3.log`：`Tests run: 527, Failures: 4`）。
+3. 读数：R1 全量跑 `TK3 … 点名=4/5`，红的正是上面那 4 条
+   （`~/.cache/zbot-p17/p20d/r1_mut/r1_mut_TK3.log` 原文，逐字粘在下面这 7 行）：
+
+   ```
+   [ERROR] Tests run: 11, Failures: 2, … -- in com.zifang.z.bot.mcp.McpBridgeDeregisterTest
+   [ERROR] com.zifang.z.bot.mcp.McpBridgeDeregisterTest.reloadDropsTheDeadServersToolNamesFromGetToolNames … <<< FAILURE!
+   [ERROR] com.zifang.z.bot.mcp.McpBridgeDeregisterTest.unregisteringIsNotStubOverwrite … <<< FAILURE!
+   [ERROR] Tests run: 16, Failures: 2, … -- in com.zifang.z.bot.tool.ToolkitRegistryTest
+   [ERROR] com.zifang.z.bot.tool.ToolkitRegistryTest.registerAndDeregisterEachInvalidateTheSchemaSnapshot … <<< FAILURE!
+   [ERROR] com.zifang.z.bot.tool.ToolkitRegistryTest.exposedNamesTrackTheRegistryAfterNukeAndRepave … <<< FAILURE!
+   [ERROR] Tests run: 527, Failures: 4, Errors: 0, Skipped: 0
+   ```
+
+   ⇒ `deregisterActuallyRemovesTheSlotFromEveryView` **一条都没红**（它不在上面任何一行里），
+   而 `Tests run: 527, Failures: 4` 的 4 条正好等于本表那 4 条有出处的期望。
 ⇒ 这是**量具的账**（期望集写宽了），不是产品的红；判定文本与注点语义一字未改，只把没出处的那条摘掉。
 **摘名发生在 R1 之后、R2（交付跑）之前**，见 §9.9.1 的两轮口径。
 
@@ -845,7 +894,9 @@ V2 本棒注点：        → if (content.length() <= (cap == ToolDescriptor.UNB
 - 两把唯一的差别就是那条声明：`tk.resultCapFor("reader")==UNBOUNDED` / `tk.resultCapFor("reader_bounded")==1000`。
 ⇒ 上一棒那条"原样返回"再也不是"正文本来就没超上限"蒙出来的。
 
-判定：`GREEN-BUT-MUTATED 0/1` ⇒ 〔待填〕。
+判定：`GREEN-BUT-MUTATED 0/1` ⇒ **R1 取证跑 `RED-OK 1/1`**（`logs/LEDGER_R1.tsv` TK5 行：
+`named_expected=1 / named_hit=1 / tests_that_went_red=unboundedSentinelMeansNoTruncationAtAll / restored=ok`；
+mvn 原文 `r1_mut_TK5.log`：`Tests run: 527, Failures: 1`，红的就是这一条），R2 交付数见 §9.9.6。
 记账口径要留一句：**这条现在判的是"哨兵被当成零上限"这一种坏法**；
 "摘掉析取项"那一种仍是等价变异、仍不可判（§9.10(1)）。
 
@@ -869,7 +920,11 @@ V2 本棒注点：        → if (content.length() <= (cap == ToolDescriptor.UNB
      反向腿还钉 `assertFalse(new File(fakeHome, ".zbot").exists())` 与"假 home 目录 0 项"。
      ⇒ **真的 `~/.zbot` 一个字节都不许多**（三数见 §9.9.5）。
 
-判定：`GREEN-BUT-MUTATED 0/0` ⇒ 〔待填〕。
+判定：`GREEN-BUT-MUTATED 0/0` ⇒ **R1 取证跑 `RED-OK 1/1`**（`logs/LEDGER_R1.tsv` TK9 行；
+mvn 原文 `r1_mut_TK9.log`：`Tests run: 527, Failures: 1`，红的正是
+`ToolkitResultCapTest.zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot`）。
+R1 之后 `~/.zbot` 三数当场复量 = `8` / `2dadaed0` / `690ddbc0`（§9.0.2 那行 + §9.9.5 注入前那一格）⇒
+子 JVM 那把假 home 笼子真的把溢出关在了临时根里。R2 交付数见 §9.9.6。
 
 ## 9.6 MB2 —— 桥级"注册表有、桥没记住"的现场
 
@@ -891,7 +946,10 @@ V2 本棒注点：        → if (content.length() <= (cap == ToolDescriptor.UNB
 `namesOfToolset` 空、`getToolNames()` 与外发清单都不含 `legacy`、`bystander` 完好（`tk.size()==1`）、
 注销后 `second.registeredNames()` 也清空。
 
-判定：`GREEN-BUT-MUTATED 0/0` ⇒ 〔待填〕。
+判定：`GREEN-BUT-MUTATED 0/0` ⇒ **R1 取证跑 `RED-OK 1/1`**（`logs/LEDGER_R1.tsv` MB2 行；
+mvn 原文 `r1_mut_MB2.log`：`Tests run: 527, Failures: 1`，红的正是
+`McpBridgeDeregisterTest.unregisterAllCleansSlotsTheBridgeNeverRecorded`，且**只有**这一条红 ⇒
+"拿记住的名字当结论"这一刀被这一条真判红，没有靠别的用例蒙）。R2 交付数见 §9.9.6。
 
 ## 9.7 MB3 —— 保留 PARTIAL 的因果（工单明写"不硬凑"）
 
@@ -901,8 +959,10 @@ V2 本棒注点：        → if (content.length() <= (cap == ToolDescriptor.UNB
 - 与 `unregisteringIsNotStubOverwrite` 的关系（工单点名的"反向断言在修之前必须先红一次"）：
   这一把注回去之后，"不许留桩"的正面判据必须红 —— 读数是 R1/R2 的 `MB3 …` 行里点名了
   `unregisteringIsNotStubOverwrite`、`oldServerToolNamesAreGoneAfterUnregisterInsideTheSameJvm`、
-  `unregisterLeavesNoPlaceholderBehindInAnyListView` 三条〔待填：逐条对 R2 台账核〕。
-  这三条红**恰恰证明现在的产品码真在判这件事**（不是"用例名字像"）。
+  `unregisterLeavesNoPlaceholderBehindInAnyListView` 三条（R1 台账逐条对过：三条都在 `tests_that_went_red` 里）。
+  这三条红**恰恰证明现在的产品码真在判这件事**（不是"用例名字像"）。R1 台账 MB3 行
+  `tests_that_went_red` 列逐字含这三条（另 5 条也是点名的），mvn 原文 `r1_mut_MB3.log`：`Tests run: 527, Failures: 11`
+  ⇒ 8 条点名 + 3 条多红未点名 = 11，与台账自洽（R2 交付跑对核一次，读数见 §9.9.6）。
 - 判定仍是 `PARTIAL`：`named_expected==named_hit` 之外另有"红了但没点名"的差集。
   本棒**故意不回填 MB3 的期望集** —— 工单对这一行的指令是"保留 PARTIAL、把因果写明、不硬凑"。
   这与 TK11/TK4/TK7 的机械补集是两种处理，**差别来自工单指令，不是来自读数**；
@@ -919,8 +979,11 @@ TK11 的期望集从 13 条补到 17 条，**每一条补进来的都来自实�
 | `repavingWithTheSameToolNameWorksAfterUnregister` | 同上 |
 | `unregisterAllCleansSlotsTheBridgeNeverRecorded` | 本棒诊断跑 10:2x（`logs/mut_TK11.log`，留档 `logs/LEDGER_subset_1022.tsv` TK11 行）——本棒新写的桥级用例，owner 被顶成内建 owner 之后整组注销直接抛"不能注销" |
 
-三条上一棒的差集在 `p20b_mutation.py:218-224` 就地注明了出处（"上一棒 84ca7b9 那一跑的实跑差集"）。
-判定：`PARTIAL 13/13` ⇒ 〔待填〕。
+三条上一棒的差集在 `p20b_mutation.py:240-246`（现字节）就地注明了出处（"上一棒 84ca7b9 那一跑的实跑差集"）。
+判定：`PARTIAL 13/13` ⇒ **R1 取证跑 `RED-OK 17/17`**（`logs/LEDGER_R1.tsv` TK11 行，`named_expected=17 / named_hit=17`、
+note 里已无"多红未点名"；mvn 原文 `r1_mut_TK11.log`：`Tests run: 527, Failures: 5, Errors: 12` ⇒ 5+12=17，
+与台账 17 条红逐一对上，`Errors` 是 owner 校验抛的 `IllegalStateException` 而不是断言失败，判定按具名 testcase 取，
+不按 mvn 退出码取）。R2 交付数见 §9.9.6。
 
 
 ## 9.9 收尾重出（杠② 全量 21 个 / 杠① 串行三跑 / 杠③ 全量三阶段 / 杠④ 三数）
@@ -937,8 +1000,12 @@ TK11 的期望集从 13 条补到 17 条，**每一条补进来的都来自实�
 - **期望集先写死再跑**：R1 用的期望集在 `cde236b` 就进库了；R1→R2 之间只允许两类改动
   （① TK11/TK4/TK7 的差集**机械补集**，每条来自 R1 台账 `tests_that_went_red` 与 `MUTANTS` 的差；
   ② TK3 摘掉一条没出处的期望），**判定文本、判定逻辑（`p20b_mutation.py:582-601`）、注点语义、测试字节都没动**。
-- **测试字节在 R1 与 R2 之间一字未改**：`git diff --name-only 3ffe03f..HEAD -- '*/src/*'` 里除
-  `Toolsets.java:16` 那一行授权注释外没有 `src/test` 改动〔读数待填：R2 之前现场再量一次并粘原文〕。
+- **测试字节在 R1 与 R2 之间一字未改**（本棒第三实例 R2 之前现场量过，原文）：
+  `git diff --name-only 3ffe03f..HEAD -- z-bot-core/src | wc -l` ⇒ **`0`**
+  ⇒ R1 与 R2 之间只有 `_doc/**`（量具期望集 + 本文），`src/test` 与 `src/main` 字节 = `3ffe03f`。
+  诚实记一笔：简报与 §9.0 用的 `'*/src/*'` 这个 pathspec 在本仓**匹配不到东西**（当场实测返回空，
+  连 `Toolsets.java` 那处授权注释都没报出来）⇒ 本棒改成 `z-bot-core/src` 这种可直接匹配的形式，
+  ⇒ 按 §6 的"量具自己坏过的记录"口径，这条账记在**本节**（§0–§8 的历史账本棒一字未改）。
 - 中途 kill 过一次探针（本棒自己杀的，10:4x）：杀在 `wait_for_quiet` 阶段、**写盘之前**，
   事后四个被测源文件 md5 与 `git show HEAD:` 逐字节同（读数见 §9.0.1 最后一行）⇒ §6(6) 那个坑没重犯。
 
@@ -949,18 +1016,51 @@ TK11 的期望集从 13 条补到 17 条，**每一条补进来的都来自实�
 | TK3 | 摘（收窄） | `deregisterActuallyRemovesTheSlotFromEveryView` | R1 `TK3 … 点名=4/5`；出处见 §9.3 的三行源码 |
 | TK11 | 补 | `bridgeRegistersAnAvailabilityProbeBackedByTheConnection`、`reloadDropsTheDeadServersToolNamesFromGetToolNames`、`repavingWithTheSameToolNameWorksAfterUnregister` | 上一棒 p20b 交付态全量跑 `84ca7b9`（§2.2(6) 的差集） |
 | TK11 | 补 | `unregisterAllCleansSlotsTheBridgeNeverRecorded` | 第一个实例 10:2x 子集诊断跑（`logs/LEDGER_subset_1022.tsv` TK11 行）+ R1 复核 |
-| TK4 | 补 | 〔待填：R1 `多红未点名` 原文〕 | R1 |
-| TK7 | 补 | 〔待填：R1 `多红未点名` 原文〕 | R1 |
-| MB3 | **不补** | —（工单明写保留 PARTIAL） | — |
-| 其余 13 行 | 〔待填：若 R1 出现新的多红未点名，逐条列到这里，注明 R1 读数〕 | | R1 |
+| TK4 | 补 | `unboundedSentinelMeansNoTruncationAtAll` | R1 台账 TK4 行 note 原文：`… \| 多红未点名: unboundedSentinelMeansNoTruncationAtAll`（`r1_mut_TK4.log`：`Tests run: 527, Failures: 2` = 点名的 `perToolDeclarationBeatsTheGlobalDefault` + 这一条） |
+| TK7 | 补 | `unboundedSentinelMeansNoTruncationAtAll`、`zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot` | R1 台账 TK7 行 note 原文：`… \| 多红未点名: unboundedSentinelMeansNoTruncationAtAll,zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot`（`r1_mut_TK7.log`：`Tests run: 527, Failures: 5` = 3 条点名 + 这 2 条） |
+| MB3 | **不补** | —（工单明写保留 PARTIAL，见 §9.7） | R1 台账 MB3 行 note 原文：`… \| 多红未点名: bridgeOnlyNukesItsOwnToolset,serverNamesWithDashesGetUnambiguousToolsets,unregisterAllCleansSlotsTheBridgeNeverRecorded` —— 差集**原样挂在台账上**，本棒一个名字都没往期望里搬 |
+| 其余 13 行 | 不补（无需补） | —（R1 全量 21 行里只有 TK4/TK7/MB3 三行 note 含"多红未点名"，机器数出来的：`awk -F'\t' 'NR>1 && $6 ~ /多红未点名/ {print $1, $2}' logs/LEDGER_R1.tsv` ⇒ 恰好这三行） | R1 |
+
+补完之后 R2 的**期望集字节**在 `1c1737d`（先写死入库，再跑）；R2 用的 `MUTANTS` 与磁盘上那份逐字节同，
+由脚本自己的"锚点次数 + 盘上原文 == git show + 无漂移"预检保证（原文读数在 §9.0.2 的"锁与邻居"那一行）。
 
 ### 9.9.3 杠① —— `mvn -o test` 串行三跑（本棒自跑，不引用别人那一跑）
 
+命令（本树，串行，不起并发 mvn；原文 `_doc/acceptance/p20b/logs/p20d_gate1_run{1,2,3}.log`）：
 ```
-〔待填：三跑的起止时刻、rc、Tests run 原文行、BUILD SUCCESS 原文行〕
+rm -rf z-bot-core/target/surefire-reports && mvn -o test
 ```
-- `@Test` 求和〔待填〕（第一个实例加了两条用例 ⇒ 525 → 527；基线 `13027f4` 465）
-- 产品行为对拍：`git diff --name-only c3ab4da HEAD -- '*/src/main/*'` ⇒ 只应有 `Toolsets.java` 一行注释〔待填原文〕
+控制台原文（`~/.cache/zbot-p17/p20d/gate_console.log`，本棒第三实例）：
+```
+===== GATE1 串行三跑 start 2026-09-26 11:23:05 =====
+-- run1 start 2026-09-26 11:23:05
+-- run1 rc=0 end 2026-09-26 11:23:28
+[INFO] Tests run: 527, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+-- run2 start 2026-09-26 11:23:28
+-- run2 rc=0 end 2026-09-26 11:23:45
+[INFO] Tests run: 527, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+-- run3 start 2026-09-26 11:23:45
+-- run3 rc=0 end 2026-09-26 11:24:01
+[INFO] Tests run: 527, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+== @Test 求和（HEAD / 基线 13027f4）
+HEAD=527
+BASE13027f4=465
+```
+- 三跑都是 **527**（上一棒 525 + 本棒两条：`zbotHomeEnvLevelResolvesTheSpillDirInsideTheProfileRoot`、
+  `unregisterAllCleansSlotsTheBridgeNeverRecorded`）；`@Test` 求和同为 **527**，基线 `13027f4` 465 ⇒ 与 §1 同一口径。
+- 这三跑跑在 R2 交付跑的**同一份字节**上（HEAD `1c1737d`；`1c1737d` 只动 `_doc`，`src/test` 字节 = `3ffe03f`）：
+  `git diff --name-only 3ffe03f..HEAD -- z-bot-core/src` ⇒ 空（原文读数见 §9.9.1 最后一行）。
+  ⇒ 杠① 的绿与杠② 的台账是同一批测试字节，不是两次不同的心跳。
+- 产品行为对拍（本棒重量的路径，§9.0 那条 `*/src/*` pathspec 实测匹配不到东西，改用可匹配的形式）：
+  `git diff --name-only c3ab4da HEAD -- z-bot-core/src` ⇒
+  `z-bot-core/src/main/java/com/zifang/z/bot/tool/Toolsets.java`（唯一一处 `src/main` 改动 = 授权那一行注释）+
+  四个 `src/test` 文件；`git diff c3ab4da HEAD -- .../Toolsets.java` = `1 file changed, 1 insertion(+), 1 deletion(-)`，
+  且那一行是 `{@code tools/toolsets.py}` ⇒ `{@code toolsets.py}（她的仓根，不是 {@code tools/} 下）`，
+  实测 hermes 仓根 `toolsets.py` 存在、`tools/toolsets.py` 不存在 ⇒ **产品行为一字未动**。
+
 
 ### 9.9.4 杠③ —— 真进程三阶段全量重跑一次（动了测试与一行注释 ⇒ 结论要在新字节上重出）
 
