@@ -287,15 +287,107 @@ run1 rc=0 / run2 rc=0 / run3 rc=0 / run4 rc=0 / run5 rc=0     （两批各五条
 裁决一句话：**这条间歇红是量具 self-bug（已修，修在 run7 之前 28 秒），不是产品缺陷；
 判据本身不动。**
 
-### 3.3 其余段的读数
+### 3.3 其余段的读数（HEAD `3be6fbd` 上的本棒自跑批次，5 连跑）
 
-UNKNOWN —— 待最终 HEAD 上再整跑一批，把 stop/repl/cache/home/creds 五段的逐条 PASS 行原文贴这里。
+前置（jar 必须不旧于源码，否则"测的是旧字节"）：
+
+```
+cd /private/tmp/zbot-wt-p12
+mvn -o -q package -DskipTests -pl z-bot-core        # logs/p12c_package_clean.log ⇒ package rc=0
+for i in 1 2 3 4 5; do python3 -u _doc/acceptance/p12/p12_e2e.py \
+  --json _doc/acceptance/p12/out/p12c_e2e_run$i.json \
+  > _doc/acceptance/p12/logs/p12c_e2e_run$i.log 2>&1; echo "run$i rc=$?"; done
+```
+
+逐跑 summary + rc（`logs/p12c_e2e_index.txt` 原文）：
+
+```
+run1 10:56:15 rc=0 段=all 检查条数=25 PASS=25 FAIL=0
+run2 10:56:44 rc=0 段=all 检查条数=25 PASS=25 FAIL=0
+run3 10:57:14 rc=0 段=all 检查条数=25 PASS=25 FAIL=0
+run4 10:57:45 rc=0 段=all 检查条数=25 PASS=25 FAIL=0
+run5 10:58:16 rc=0 段=all 检查条数=25 PASS=25 FAIL=0
+```
+
+⇒ **K2 在本棒这一批 5 跑里 0 复发**；加上上一棒已有的 `e2e_c1/c2` 两批各 5 跑（§3.2），
+K2 的"改后"通过率是 **15/15**，改前 0/6。检查条数从 23 变 25 是本棒给 cache 段补的 C5/C6（§9），
+不是把任何一条判据换松或删掉。
+
+run1 全 25 条逐字（`sed -n '/===== summary/,$p' logs/p12c_e2e_run1.log`）：
+
+```
+段=all 检查条数=25 PASS=25 FAIL=0
+  PASS  [stop]  G0 主 JVM 起来并且 stub LLM 真收到了它的请求
+  PASS  [guard] G1 请求没出本机（JVM 日志里不出现任何非 127.0.0.1 的 LLM host）
+  PASS  [stop]  S1 工具子进程真的在飞（bash + sleep 两个 pid 数得到）
+  PASS  [stop]  S2 发 /stop 后工具子进程从内核进程表消失（pgrep -f token = 0 命中）
+  PASS  [stop]  S3 发 /stop → 工具子进程真退出 ≤ 2000ms（os.waitpid 自己 spawn 的 waiter）
+  PASS  [stop]  S4 那一轮以中止收尾（辅助读数；主判据是 S2/S3 的进程表）
+  PASS  [repl]  R0 真 pty REPL 起得来（JVM 自己打了欢迎面板）
+  PASS  [repl]  R2a REPL 这次真的把长命令跑起来了（进程表数得到）
+  PASS  [repl]  R2b 反面对照：chat 在飞时写进 pty 的 /stop 不会中断工具（进程还在）
+  PASS  [repl]  R1 REPL 自己收得掉（/exit → harness waitpid 拿到退出码）
+  PASS  [cache] C0 缓存段用的那台真 JVM 起来了（stub 收到过它的请求）
+  PASS  [guard] G1 请求没出本机（JVM 日志里不出现任何非 127.0.0.1 的 LLM host）
+  PASS  [cache] C0c 两次 chat 各打了一次 LLM（stub 收到 2 条请求）
+  PASS  [cache] C1 两次 chat 实际发出的 system prompt 逐字节相同（比 stub 落盘的请求原文）
+  PASS  [cache] C2 运行时上下文（时钟）确实走 user 消息，system 里没有它
+  PASS  [cache] C3 两轮之间那个易变时钟确实变了（否则 C1 的「相同」可以是两轮都没注入）
+  PASS  [cache] C4 用户原话仍然逐字出现在 user 消息末尾（上下文头没盖过正事）
+  PASS  [cache] C5 中途写进 SOUL.md 的那一行不进 system prompt（快照冻结；盘上真有那一行）
+  PASS  [cache] C6 反空跑：中途写的那行记忆下一轮真到了模型（在 user 消息里，不在 system 里）
+  PASS  [home]  H1 ~/.zbot 项数未变（`ls -A ~/.zbot | wc -l`）
+  PASS  [home]  H2 config.properties md5 未变
+  PASS  [home]  H3 state.db md5 未变
+  PASS  [creds] K1 反向钉住：stub key 真进了产物（出站请求头 = 它，且落盘了）
+  PASS  [creds] K2 产物里出现的每一种 key 值都只有 stub-key-not-real
+  PASS  [creds] K3 运行期产物里不出现真配置的痕迹（grep minimax 或真 ~/.zbot 绝对路径）
+  stub 落盘请求 2 份: …/out/llm-requests
+  ~/.zbot 跑前跑后: 项数 8→8, config md5 前缀 2dadaed0, state.db md5 前缀 690ddbc0
+```
+
+真进程层的计时读数（**判据全部落在进程表与 `os.waitpid`，没有一条来自 repl 日志行**）：
+
+```
+run1 S3 elapsed_ms=33   waiter pid=93195（harness 自己 spawn，退出条件只有 pgrep 空集这一条）
+run2 S3 elapsed_ms=92   run3 elapsed_ms=69   run4 elapsed_ms=55   run5 elapsed_ms=71
+```
+
+K2 逐跑的扫描面与取值集合（这是"间歇红"那一条的直接复算）：
+
+```
+run1  扫了 69 个运行期产物；见到的 key 值=['stub-key-not-real']
+run2  扫了 70 个运行期产物；见到的 key 值=['stub-key-not-real']
+run3  扫了 70 个运行期产物；见到的 key 值=['stub-key-not-real']
+run4  扫了 70 个运行期产物；见到的 key 值=['stub-key-not-real']
+run5  扫了 70 个运行期产物；见到的 key 值=['stub-key-not-real']
+```
+
+杠④ 的逐跑读数就在每跑 summary 末行（`8→8 / 2dadaed0 / 690ddbc0`，五跑逐字相同），§4 另有独立三数的直接量法。
 
 ---
 
 ## 4. 杠④：`~/.zbot` 零污染
 
-UNKNOWN —— 三个数：`ls -A ~/.zbot | wc -l`=8、config md5 前 8 位=`2dadaed0`、state.db 前 8 位=`690ddbc0`。
+三个数（本棒亲测，命令原文；**没读、没打印、没复制任何 key 值**）：
+
+```
+$ ls -A ~/.zbot | wc -l
+       8
+$ md5 -q ~/.zbot/config.properties | cut -c1-8
+2dadaed0
+$ md5 -q ~/.zbot/state.db | cut -c1-8
+690ddbc0
+```
+
+- 那 8 项逐字：`.stty.bak config.properties cron memories models-cache.json sessions state.db workspace`
+  （`ls -A ~/.zbot`）。与简报里"上一棒的账"给的三个数**逐字相同** ⇒ 本期所有跑动（杠①②③）都没碰过真家目录。
+- 真 key 的长度只量了长度：`python3 -c` 取 `minimax.api.key` 的 value 打印 `len()` ⇒ `125`
+  （值本身一个字节都没落到任何输出/文件里；这条读数的用途只是核对简报说的"125 字符"）。
+- E2E 侧的同一件事由 `p12_e2e.py` 的 home 段自己判（H1/H2/H3，跑前跑后各取一次）；
+  每一次 E2E 都用 `--config-dir <仓内 out/profile-*>`，**没有一处指向 `~/.zbot`**，逐跑读数见 §3.3 末行
+  `~/.zbot 跑前跑后: 项数 8→8, config md5 前缀 2dadaed0, state.db md5 前缀 690ddbc0`。
+- 复算：`python3 -u _doc/acceptance/p12/p12_e2e.py --only home`（只跑 home 段，同样不动真目录）。
 
 ---
 
