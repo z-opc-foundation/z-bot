@@ -63,13 +63,57 @@ for f in $(git ls-tree -r --name-only d71657d | grep 'Test\.java$'); do git show
 
 ## 杠② 注入自证（`_doc/acceptance/p16/p16_mutation.py`）
 
-命令：
+命令（p16ev2 续棒重跑：先把量具的三处自身缺陷修掉，再在**最终脚本字节**上整跑两轮）：
 
 ```
-python3 -u _doc/acceptance/p16/p16_mutation.py            > logs/mutation_full_r2.log
+python3 -u _doc/acceptance/p16/p16_mutation.py --only M09       > logs/m09_subset_r4.log   # RC=0
+python3 -u _doc/acceptance/p16/p16_mutation.py --only M09       > logs/m09_subset_r5.log   # RC=0
+python3 -u _doc/acceptance/p16/p16_mutation.py --only M07       > logs/m07_subset_r4.log   # RC=0（ran=82，不是 481）
+python3 -u _doc/acceptance/p16/p16_mutation.py --all-tests M07  > logs/fullsuite_m07_r2.log # RC=0
+python3 -u _doc/acceptance/p16/p16_mutation.py --all-tests M07  > logs/fullsuite_m07_r3.log # RC=0
+python3 -u _doc/acceptance/p16/p16_mutation.py --full 24        > logs/mutation_full_r4.log # RC=0
+python3 -u _doc/acceptance/p16/p16_mutation.py --full 24        > logs/mutation_full_r5.log # RC=0  ← 现 LEDGER.tsv
 ```
 
-读数（LEDGER.tsv 由脚本机械写出）：
+整跑两轮的原文台账行（`== 台账 ==` 段，r4 与 r5 各一次）：
+
+```
+== 台账 ==
+  RED-OK             22
+  PARTIAL            1
+  GREEN-BUT-MUTATED  1
+  BROKEN             0
+  NO-RUN             0
+  LEDGER -> /private/tmp/zbot-wt-p16ev/_doc/acceptance/p16/LEDGER.tsv
+  SRC_MD5_STABLE=yes
+```
+
+两轮**逐行判定**是否一致（只比 M 行前 120 列：id + 判定 + `点名=N/N` + 判红的具名清单 + `ran=`）：
+
+```
+$ diff <(grep -E "^M[0-9]" logs/mutation_full_r4.log | cut -c1-120) \
+       <(grep -E "^M[0-9]" logs/mutation_full_r5.log | cut -c1-120) && echo TWO_MUTATION_ROUNDS_IDENTICAL
+TWO_MUTATION_ROUNDS_IDENTICAL
+```
+
+> 说明：r4 跑在"断言级读数"（栈帧那两列）改进**之前**，所以两轮的差异只可能出现在 M 行以外；
+> 被比对的 M 行部分在两轮里逐字符相同 ⇒ 24 条判定与判红集合稳定，不是抖出来的。
+
+再和**上一棒封存的那份账**对拍（`LEDGER.tsv` 在 `ea538b9` 里，02:43 那一轮写的）：
+
+```
+$ git diff --numstat -- _doc/acceptance/p16/LEDGER.tsv
+1  1  _doc/acceptance/p16/LEDGER.tsv            # 整份文件只有 1 行进 1 行出
+$ diff <(git show HEAD:_doc/acceptance/p16/LEDGER.tsv | grep -v "^# ledger_generated_by") \
+       <(grep -v "^# ledger_generated_by" _doc/acceptance/p16/LEDGER.tsv) && echo LEDGER_ROWS_IDENTICAL_TO_SEALED_PREV_BATON=yes
+LEDGER_ROWS_IDENTICAL_TO_SEALED_PREV_BATON=yes
+```
+
+⇒ 本棒换脚本字节重跑之后，24 行判定 + 具名判红清单 + `ran` + `mvn_rc` + `restored` + 五条 md5 对拍行
+**与上一棒逐字节相同**，唯一变的是"这一份是谁在几点生成的"那一行（`02:43:19` → `04:00:38`）。
+两棒合起来等于三轮整跑同判（02:43 / r4 / 04:00）。
+
+读数（`LEDGER.tsv` 由脚本机械写出，`# ledger_generated_by p16_mutation.py at 2026-09-26T04:00:38+0800`）：
 
 | 项 | 读数 |
 | --- | --- |
@@ -81,6 +125,7 @@ python3 -u _doc/acceptance/p16/p16_mutation.py            > logs/mutation_full_r
 | BROKEN | 0 |
 | NO-RUN | 0 |
 | SRC_MD5_STABLE | **yes**（五支被测源文件注入前/后 md5 逐字节相同，LEDGER.tsv 里每支都打了 before/after 对拍行） |
+| 台账独立复算（不信任脚本自己的汇总） | `rows=24` / `Counter({'RED-OK': 22, 'GREEN-BUT-MUTATED': 1, 'PARTIAL': 1})`（`csv.DictReader` 读 LEDGER.tsv，只数判定列合法的行；裸读会因 `#` 注释尾出垃圾行，见「LEDGER.tsv 的复算式」） |
 
 ### 工单要求的 8 条闸 ⇒ 变异体 ⇒ 判红的具名用例
 
@@ -101,14 +146,67 @@ M12（本次发不出去的也认领 ⇒ `sweepOnlyClaimsRowsThisBootCanActually
 M15（尝试预算不封顶 ⇒ `exhaustedAttemptBudgetTurnsAbandonedInsteadOfSpinning`、`staleObligationIsAbandonedNotReplayed` 红）、
 M16（把 `delivered` 也放进认领范围 ⇒ `deliveredRowIsNeverClaimedAgain` 红）。
 
-### PARTIAL 如实记账（没洗）
+### PARTIAL 如实记账（没洗）：M09 逐条落到断言行
 
-`M09 闸⑦ 干净启动也给熔断器攒账` — 点名的 2 条红了，另有第 3 条一起红：
-`markerIsNotStackedWhenARowIsClaimedTwice`。
+`M09 闸⑦ 干净启动也给熔断器攒账` 的期望集是 2 条：
+`cleanBootWithNothingToResumeChargesNothing`、`thirdInterruptedBootWithinTheWindowSkipsAutoContinuation`
+⇒ 定义写在 `p16_mutation.py:206-207`（`--only M09` 单跑读数见 `logs/m09_subset_r4.log`、
+`logs/m09_subset_r5.log`，两次整跑见 `logs/mutation_full_r4/r5.log`，判定一致）。
+**点名的 2 条都红了（`点名=2/2`），另有第 3 条一起红** ⇒ 按脚本规则
+（`p16_mutation.py:20`："点名的红了但还有别人红 = PARTIAL"）记 PARTIAL，不记 RED-OK。
+
+三条红的断言级读数（原文，含栈帧；`logs/mutation_full_r5.log`）：
+
+```
+GatewayDeliveryP16Test#cleanBootWithNothingToResumeChargesNothing ⇒ java.lang.AssertionError
+   @ at com.zifang.z.bot.channel.GatewayDeliveryP16Test.cleanBootWithNothingToResumeChargesNothing(GatewayDeliveryP16Test.java:354)
+GatewayDeliveryP16Test#markerIsNotStackedWhenARowIsClaimedTwice ⇒ java.lang.AssertionError: expected:<1> but was:<-1>
+   @ at com.zifang.z.bot.channel.GatewayDeliveryP16Test.markerIsNotStackedWhenARowIsClaimedTwice(GatewayDeliveryP16Test.java:258)
+GatewayDeliveryP16Test#thirdInterruptedBootWithinTheWindowSkipsAutoContinuation ⇒ java.lang.AssertionError
+   @ at com.zifang.z.bot.channel.GatewayDeliveryP16Test.thirdInterruptedBootWithinTheWindowSkipsAutoContinuation(GatewayDeliveryP16Test.java:342)
+```
+
+对到源码（三条都是真断言，不是 NPE 之类的意外红）：
+
+| 用例 | 红在哪一行 | 那一行的断言 |
+| --- | --- | --- |
+| `cleanBootWithNothingToResumeChargesNothing` | `GatewayDeliveryP16Test.java:354`（跨 354-355） | `assertTrue(gw.supervisor().recentInterruptedBoots(Supervisor.DEFAULT_WINDOW_SECONDS, null).isEmpty());` ⇒ 干净启动之后熔断器账上**不空** |
+| `thirdInterruptedBootWithinTheWindowSkipsAutoContinuation` | `GatewayDeliveryP16Test.java:342` | `assertFalse(gw.supervisor().checkAndRecordInterruptedBoot());` ⇒ 测试自己第二次记「上次崩了」时就已经被熔断了（setUp 那次干净启动已占掉一个名额） |
+| `markerIsNotStackedWhenARowIsClaimedTwice`（**期望外的第 3 条**） | `GatewayDeliveryP16Test.java:258` | `assertEquals(1, gw.recoverPendingDeliveries());` ⇒ `expected:<1> but was:<-1>`（`-1` = 被熔断挡下，压根没去续跑） |
+
 因果判断：摘掉 `claimed.isEmpty() ⇒ return 0` 之后，**setUp 那次无活可续的启动也向熔断器记了一笔**，
-于是该用例里第三次带活启动的 `recoverPendingDeliveries()` 被熔断挡下（返回 -1 而不是 1）。
+于是与本条注入无关的那支"前缀不叠加"用例里，第三次带活启动的 `recoverPendingDeliveries()` 被熔断挡下
+（返回 -1 而不是 1）——`expected:<1> but was:<-1>` 正是这条因果的直接读数。
 这不是测试互相污染的假红，正是"干净启动攒账"的下游后果 —— 但按纪律**仍然记 PARTIAL**，
-不把它挪进期望集洗成 RED-OK。r1/r2 两次整跑读到的红集合完全一致（⇒ 不是抖动）。
+不把它挪进期望集洗成 RED-OK。两次单跑（r4/r5）+ 两次整跑（r4/r5）读到的红集合完全一致（⇒ 不是抖动）。
+
+### 本棒对量具做的事（只改 `p16_mutation.py`，产品代码一行未动）
+
+1. **选择器修好**：原来 `for ... in MUTANTS` 无视 `--only`，"单跑 M07"实际会跑全 24 条并覆盖 LEDGER。
+   现在带选择器会明说，读数：
+   ```
+   选择器 ['M07'] ⇒ 只跑 1/24 条（LEDGER 会被这一子集覆盖，整账要整跑）
+   ```
+   子集轮的台账另写到 `logs/LEDGER_subset.tsv`，**不再覆盖正式 LEDGER.tsv**（正式账只由 `--full 24` 生成）。
+2. **分母显式化**：把 `run_tests()` 参数化之后发现一个自己埋的雷——无参调用会悄悄从钉住的 82 条
+   变成全量 481 条。现在 `main()` 里是 `run_tests(TESTS)` 硬式传参，`--only M07` 子集轮读数
+   `ran=82`（`logs/m07_subset_r4.log`）证明没串味。
+3. **断言级读数**：判红的用例除标题外还要带 `type: message` 首行 + 指向本测试类的栈帧
+   （就是上面 M09 那三行），否则 PARTIAL 只能记成"红了"而落不到断言。
+4. **`--all-tests` 探针（新增，只为 M07 的"未覆盖"取证）**：把注入打到**全仓**测试上，
+   判定 `COVERED-BY-NAMED-TEST` / `NOT-COVERED-REPO-WIDE` / `BROKEN`，
+   只写 `logs/FULLSUITE.tsv`，**不碰 LEDGER.tsv**（`LEDGER.tsv 未改` 是脚本自己打印的）。
+5. `mvn` 只在有 `-Dtest=` 时才加参数；判定仍只认 surefire XML 里的具名 `<testcase>` 失败/错误，
+   **从不看 `mvn` 退出码**（`mvn_rc` 只是抄录）。
+6. **lint 现状如实记**（`python3 -m pyflakes`，两支量具一起）：`p16_e2e.py` 零告警；
+   `p16_mutation.py` 只剩一条继承来的装饰性告警：
+   ```
+   _doc/acceptance/p16/p16_mutation.py:378:5: local variable 'e' is assigned to but never used
+   ```
+   （`except OSError as e: … raise` —— `e` 用不上但 `raise` 原样上抛，行为无碍）。
+   它在主编封存的基线里就在（`git show ea538b9:_doc/acceptance/p16/p16_mutation.py` 同一位置同一条）。
+   本棒**没有为了让 lint 好看去动脚本字节**：正式 `LEDGER.tsv` 必须由"跑出它的那份字节"生成
+   （现账 `at 2026-09-26T04:00:38+0800`），改一个字符就得重跑一整轮 24 条才配得上"同一字节"这句话。
 
 ### 量具自己坏过的一条（记下来，免得后人以为那是"测到了"）
 
@@ -141,6 +239,76 @@ diff logs/locktest_status_before.txt logs/locktest_status_after.txt → STATUS_I
 （附：第一次"拒跑"读数差点被记错 —— 那条命令里用了 `timeout 60`，本机没有这个命令，
 `EXIT_WHEN_BUSY=127` 是"命令没跑成"而不是"被锁挡下"。已复测成上面的 4。这条按
 "坏读数也要复测"记账。）
+
+③ **本棒又撞上一次真的邻居攥锁，且这次不是我自演的**（03:40:11，兄弟编队 `w2-p20b` 的注入轮在飞）：
+
+```
+$ python3 -u _doc/acceptance/p16/p16_mutation.py --hold-lock 100     # 我方假邻居
+    → logs/locktest_holder_r2.log: "LOCK-BUSY 攥不住（[Errno 35] Resource temporarily unavailable）⇒ 已有别的注入脚本在飞"
+$ python3 -u _doc/acceptance/p16/p16_mutation.py --only M07           # 真跑，撞锁
+    → logs/locktest_busy_r2.log: "FATAL 互斥锁被别的注入脚本攥着（[Errno 35] ...）⇒ 本轮不跑，一个源文件都不碰"
+    → EXIT_WHEN_BUSY=4
+    → MD5_IDENTICAL=yes（五支被测源文件前后 md5 逐字节相同）
+    → STATUS_IDENTICAL=yes（全树 `git status --porcelain` 前后相同）
+```
+
+同一分钟内整跑与全量探针也都以 rc=4 拒跑（`run_bar2_chain.out` 里 `MUTATION_RC=4` /
+`FULLSUITE_RC=4`），**没有一条注入落到产品文件上**。邻居松开后的复测：
+
+```
+$ python3 -u _doc/acceptance/p16/p16_mutation.py --hold-lock 3
+    → logs/locktest_free_r2.log: "LOCK-HELD pid=1352 攥住 3.0s（不碰任何源文件）" / "LOCK-RELEASED pid=1352"
+```
+
+⇒ 双向都实测过：**攥不住时不改一个字节（rc=4）；松开时照常拿得到锁**。
+本棒之后所有整跑都在拿到锁后进行，且每轮末尾 `SRC_MD5_STABLE=yes`。
+
+### M07 处置：没有补网，但"未覆盖"是量出来的（不是嘴上说的）
+
+工单红线：M07 那条 GREEN-BUT-MUTATED（具名期望红 `0/0` = 没有任何用例能判红）
+**不许从期望集里摘掉来让 tally 好看** —— 要么补一条具名用例并双向实测，要么明写"未覆盖 + 为什么"。
+
+本棒选的是后者，并且把"未覆盖"从断言升级成了**测量**：新增 `--all-tests` 探针，
+把 M07 那一刀打到**全仓 481 条**测试上（不带 `-Dtest=`），两次独立跑读数一致：
+
+```
+$ python3 -u _doc/acceptance/p16/p16_mutation.py --all-tests M07      # logs/fullsuite_m07_r2.log、r3.log
+M07 闸④ bus 侧发成功不清死标（探未覆盖）  NOT-COVERED-REPO-WIDE  ran=481 点名集=0 红=- | mvn_rc=0 | 19.3s | 还原=True
+== FULLSUITE PROBE: 1 条注入 ⇒ NOT-COVERED-REPO-WIDE=M07（LEDGER.tsv 未改）==
+  SRC_MD5_STABLE=yes  FULLSUITE -> .../logs/FULLSUITE.tsv
+```
+
+`logs/FULLSUITE.tsv` 原文（判定的全部依据，含分母说明与五支源文件 before/after md5 对拍）：
+
+```
+id	verdict	tests_ran	named_expected_red	test_that_went_red	surefire_rc	restored
+M07 闸④ bus 侧发成功不清死标（探未覆盖）	NOT-COVERED-REPO-WIDE	481	0/0	全量 481 条具名 testcase 无一判红	0	True
+# denominator	全量测试类（不带 -Dtest），非本期五支的 82 条
+# md5	bus	before=7929741fc6206d82b62ad7f0f39c206e	after=7929741fc6206d82b62ad7f0f39c206e
+（dead / gw / led / sup 四行同形，before == after）
+```
+
+结论与账目：
+
+- **M07 仍留在 24 条账上**，判定 `GREEN-BUT-MUTATED`，`named_expected_red=0/0`，
+  LEDGER.tsv 里那条的 note 明写"点名集**故意留空**"（见 `logs/mutation_full_r5.log` 的缩进说明行）。
+  tally 因此是"难看"的 22/1/1 —— **没有**为了让它变成 23/0/0 而删条目。
+- **未覆盖的行为**：`ChannelBus` 直发路径上"这条发出去了 ⇒ 顺手把该目标的死标清掉"
+  （锚点 `ChannelBus.java:305-327`，`dead.clear(platform, chatId); // 发出去过一次 ⇒ 目标还活着，标记自愈`）。
+  摘掉这一行，全仓 481 条具名 testcase 无一判红 ⇒ 现存测试只在 `Gateway.redeliver` 那条路上验过清除。
+- **为什么本棒没补这条用例**：工单给本棒的改动面**只有两个量具文件**
+  （`p16_mutation.py` / `p16_e2e.py`）+ 验收文档；`z-bot-core/src/test/**` 属于产品树，
+  加一条 `@Test` 会同时挪动杠① 的 481 与杠② 的 82 两个钉住的分母，
+  那就等于在本棒"量具坏了"的账里再混进一笔"基线变了"，主编的复跑对比会失效。
+- **下一棒该写的用例（可直接照抄的规格）**：在 `GatewayDeliveryP16Test`（或新建 bus 侧用例类）里
+  1. `bus.deadTargets().markDead("chanA", "c-x", "chat-x", 1, "先判死")`；
+  2. 走 **bus 直发**（`bus.deliver(...)` / 出站回调那条路，不经 `Gateway.redeliver`）让同目标发送成功一次；
+  3. `assertFalse(gw.supervisor()... 无关)` 之后 `assertFalse(bus.deadTargets().isDead("chanA", "c-x"))`；
+  4. **双向实测**：还原态该用例必须绿；把 `ChannelBus.java:305-327` 的 `dead.clear(...)` 注掉后必须红
+     （复现命令：`python3 -u _doc/acceptance/p16/p16_mutation.py --only M07`，
+     再把新用例标题加进 `EXPECTED_TESTS` 与 M07 的 expected 列表 ⇒ 判定应从
+     `GREEN-BUT-MUTATED` 变 `RED-OK`）。
+  5. 记着分母：加一条用例 ⇒ `EXPECTED_TESTS` 82→83、全量 481→482，两处计数都要同步改。
 
 ---
 
@@ -375,3 +543,26 @@ PASS X5 每个真 JVM 的 --config-dir / ZBOT_HOME 都指在自己的临时 prof
 父进程也带 `ZBOT_HOME=<临时目录>`（见上面命令），`out/env-*.txt` 里留下的
 是每个 JVM 真正带出去的环境变量快照，`Z_BOT_API_KEY` 只有 `stub-key-not-real` 一种值。
 
+
+---
+
+## 这一项没做什么（别当成做了）
+
+1. **没改产品代码一行**（工单红线）：`z-bot-core/src/main/**`、`src/test/**` 全程只读。
+   杠② 里 M07 那条"未覆盖"本可以靠**加一条测试**变成 RED-OK，本棒**没有加**，
+   只把它测成 `NOT-COVERED-REPO-WIDE` 并写清规格（见「M07 处置」）。
+2. **没修任何产品缺陷**：杠③ 全段没抓到需要动手的缺陷（见「本期发现的产品缺陷（杠③ 段）：无」），
+   所以也没有"顺手修一下"。若后续认定 M07 那条不清死标算缺陷，那是**产品侧的账**，不在本棒改动面里。
+3. **没做并发/时序压测**：杠③ 的 B 段是**串行双开**（先确认第一个实例真把锁写进盘，再起第二个），
+   为的是让"谁拒了"可判定；同秒对撞的竞态窗（P17 那类 0.1–8.8 ms 落盘窗口）本棒没有量具覆盖。
+4. **没跑真通道**（微信/飞书/钉钉…）：E2E 的出站面全部是本地 stub LLM（`ThreadingHTTPServer`，
+   OpenAI 兼容），通道侧是 JVM 内假通道。任何"线上通道真发"都不在证据链里。
+5. **没接 CI、没写第二套量具**：两个 `.py` 仍要人喊；没有 GitHub Actions / 定时任务；
+   `mvn` 全程 `-o`（离线），换机器要先有本地仓库。
+6. **没有把 LEDGER 的历史轮次续写**：`logs/LEDGER_r1_superseded.tsv`（M16 坏注入那版）保留原样，
+   r4/r5 之前各轮的 LEDGER 也各自留在 `logs/`，正式 `LEDGER.tsv` 只由最终脚本字节的
+   `--full 24` 整跑写出（`at 2026-09-26T04:00:38+0800`）。
+7. **没动 `~/.zbot`、没动内核仓、没动兄弟工作树**（`w2-p20b` / `w2-p12` / `w1-p15b`）：
+   撞锁那次（03:40:11）也只是**等邻居松开**，没有去解对方的锁、没有 `kill` 邻居进程。
+8. **没 push、没合分支**：本棒只在本 worktree 里 commit（`fecf63b` → 本棒最后一笔），
+   `w2-p16` 的合并是主编的事。

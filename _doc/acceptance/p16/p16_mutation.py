@@ -436,7 +436,16 @@ def run_tests(classes=None):
                     txt = ((node.get("type") or "") + ": " + (node.get("message") or "")).strip(": ")
                     first = (txt.split("\n") or [""])[0][:200]
                     cls = (tc.get("classname") or "").split(".")[-1]
-                    msgs[tn] = "%s#%s ⇒ %s" % (cls, tn, first or "(无 message 属性)")
+                    body = node.text or ""
+                    frame = ""
+                    for ln in body.split("\n"):
+                        if cls + ".java:" in ln:
+                            if tn in ln:
+                                frame = ln.strip()
+                                break
+                            frame = frame or ln.strip()
+                    msgs[tn] = "%s#%s ⇒ %s%s" % (cls, tn, first,
+                                                ("\n        @ " + frame[:150]) if frame else "")
     return (proc.returncode, failing, ran, names, msgs,
             proc.stdout.decode("utf-8", "replace"), time.time() - t0)
 
