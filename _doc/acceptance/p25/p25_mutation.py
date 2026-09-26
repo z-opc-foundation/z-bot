@@ -239,7 +239,9 @@ def parse_class(out, fqcn):
     m = re.search(r"Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)[^\n]*-- in "
                   + re.escape(fqcn), out)
     simple = fqcn.split(".")[-1]
-    named = re.search(re.escape(simple) + r"\.[\w\[\]#.,-]+ <<< (FAILURE|ERROR)!", out)
+    # 实测行形：`[ERROR] com...AcpRealAgentChainTest.someTest -- Time elapsed: 0.013 s <<< FAILURE!`
+    # ⇒ 方法名与 <<< FAILURE! 之间还夹着 " -- Time elapsed: … s"，锚死紧邻会把真红误记成 SURVIVED。
+    named = re.search(re.escape(simple) + r"\.\w+[^\n]*? <<< (FAILURE|ERROR)!", out)
     return dict(ran=int(m.group(1)) if m else 0,
                 broke=(int(m.group(2)) + int(m.group(3))) if m else 0,
                 named=bool(named))
@@ -310,7 +312,9 @@ def main():
     for t, ok in eres.items():
         print("CONTROL|e2e:%s green=%d" % (t, int(ok)), flush=True)
     green_all = not bad and not ebad
-    row(control, "RED-OK" if green_all else "SURVIVED",
+    # CONTROL 行的记号口径：RED-OK = 零点成立（零注入全绿，本表每一行的红/绿才有参照）；
+    # 不成立记 PARTIAL 并把异常项写进 proof —— 这是**量具/测试的噪声**，不许记成产品缺陷。
+    row(control, "RED-OK" if green_all else "PARTIAL",
         "零注入下捕获者全绿（mvn 4 类 + e2e %d 判词）；异常项=%s%s"
         % (len(eres), ",".join(bad), ",".join(ebad)))
 

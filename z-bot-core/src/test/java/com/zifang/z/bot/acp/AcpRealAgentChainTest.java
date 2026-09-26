@@ -189,7 +189,12 @@ public class AcpRealAgentChainTest {
 
         recorder.clear();
         conn.handleLine(prompt(2, acpId, "列一下目录"));
-        List<String> frames = recorder.awaitFrames(2, 20_000L);
+        // 等的是"响应帧到了"这个因果，不是凑帧数：awaitFrames(2) 会在 tool_call +
+        // tool_call_update 两帧刚到就返回，那时末帧还是通知，:202 那条"末帧是响应"就成了假红
+        // （实测：同一条树单独跑绿、四个 ACP 类合跑红一次 —— 典型等 A 断言 B）。
+        String response = awaitFrame(recorder, "\"id\":2,\"result\"", 20_000L);
+        assertNotNull("prompt 必须有响应帧", response);
+        List<String> frames = recorder.lines();
 
         // 事件面：tool_call → tool_call_update(failed: 要人审) → agent_message_chunk → 响应
         List<String> kinds = sessionUpdates(frames);
@@ -221,13 +226,8 @@ public class AcpRealAgentChainTest {
         recorder.clear();
 
         conn.handleLine(prompt(3, acpId, "删掉 out 目录"));
-        List<String> frames = recorder.awaitFrames(1, 20_000L);
-        String permission = null;
-        for (String line : frames) {
-            if (line.contains(AcpMethods.SESSION_REQUEST_PERMISSION)) {
-                permission = line;
-            }
-        }
+        // 同一条理由：awaitFrames(1) 可能只等到 tool_call 通知，待批帧还在路上 ⇒ 假红。
+        String permission = awaitFrame(recorder, AcpMethods.SESSION_REQUEST_PERMISSION, 20_000L);
         assertNotNull("真 BotAgent 的待批必须外送成 session/request_permission", permission);
         assertEquals("队列真身就是 BotAgent 的那个 ApprovalService", 1, agent.pendingApprovals().size());
         String queuedId = agent.pendingApprovals().get(0).id();
@@ -382,8 +382,8 @@ public class AcpRealAgentChainTest {
         recorder2.clear();
         conn2.handleLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/load\",\"params\":{"
                 + "\"sessionId\":\"" + zbotId + "\",\"cwd\":\"/w\"}}");
-        String restored = recorder2.awaitFrames(2, 20_000L).size() >= 2 ? recorder2.last() : null;
-        assertNotNull("按 z-bot 会话 id 必须显式恢复", restored);
+        String restored = awaitFrame(recorder2, "\"id\":2,\"result\"", 20_000L);
+        assertNotNull("按 z-bot 会话 id 必须显式恢复（等响应帧本身，不凑帧数）", restored);
         assertEquals(zbotId, child(restored, "result", "_meta", "zbotSessionId").asText());
         assertFalse("恢复出来的 ACP 句柄是新的", zbotId.equals(child(restored, "result", "sessionId").asText()));
         registry.closeAll();
