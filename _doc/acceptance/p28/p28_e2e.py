@@ -943,6 +943,20 @@ def main():
         % (status_i, len(served_b), dig(served_b), n(disk_b), dig(disk_b), index_path,
            n(classes_b), dig(classes_b), classes_html))
 
+    # T9：控制台那一个 <script> 里"定义了但没人接住"的顶层函数。这一类缺陷前面几杠全看不见
+    # （mvn 那把尺不跑 JS，杠③ 的表是"名字在不在分支里"而不是"函数有没有被调"）：
+    # 浏览器层实测 loadCommands 从未被 INIT 调 ⇒ /help 恒说"命令表没取到"、快捷命令面板恒空；
+    # newSession 有两份顶层声明 ⇒ 后声明的假实现覆盖掉真走 POST /api/sessions 的那一份。
+    fns = js_functions(html_src)
+    dup = sorted(k for k, v in fns.items() if len(v) > 1)
+    unref = js_unreferenced(html_src, fns)
+    print("JS_FNS|top=%d dup=%s unref=%s" % (len(fns), dup, unref), flush=True)
+    chk("T9_console_scripts_have_no_duplicate_or_unwired_top_level_function",
+        bool(fns) and not dup and not unref,
+        "控制台里重复声明同名顶层函数（后者静默覆盖前者），或某个顶层函数没有任何调用点"
+        "（能力写好了却没接线 —— 页面上看得到按钮、后端有台账路由，浏览器实测一条请求都不发）",
+        "top=%d 重复=%s 零引用=%s" % (len(fns), dup, unref))
+
     diffs = {
         "3.1 只在服务端注册表": [x for x in A if x not in set(B) | set(C)],
         "3.2 只在 TUI 私有": [x for x in B if x not in set(A)],
