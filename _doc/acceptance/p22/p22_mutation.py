@@ -76,10 +76,14 @@ MUTANTS = [
     ),
     dict(
         name="TREE_KILL", family="超时只杀父", file=LOC, tests=[SPI],
-        needle="            ProcessTree.killTree(p);",
-        repl="            ProcessTree.killParentOnly(p);",
-        count_expect=3,
-        why="descendants() 不看 —— 孙子进程继续活（sleep 60 那种）",
+        # p22b 修正：原 needle 是 12 空格缩进的 `ProcessTree.killTree(p);`，实测在
+        # LocalExecEnvironment.java 里只命中 1 次（:217 的 InterruptedException 兜底），
+        # 而真正守「超时/中止要端整棵树」的是 :189（旗子路）与 :209（超时路）那两行
+        # `killedDescendants = ProcessTree.killTree(p);` ⇒ 改成它，count_expect=2。
+        needle="                    killedDescendants = ProcessTree.killTree(p);",
+        repl="                    killedDescendants = ProcessTree.killParentOnly(p);",
+        count_expect=2,
+        why="descendants() 不看 —— 孙子进程继续活（sleep 60 那种），且 killParentOnly 返回 0 ⇒ killedDescendants 谎报为 0",
         must_red=["localExec_timeoutTakesTheWholeProcessTreeDown"],
     ),
     dict(
@@ -142,7 +146,11 @@ def write(rel, data):
         f.write(data)
 
 
-MVN_SUMMARY = re.compile(r"^\[INFO\] Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)\s*$")
+# p22b 修正（第一跑 8/9 全被判 INJECTION_NOT_APPLIED 的真因就在这条正则上）：
+# mvn 的聚合行在**构建失败**时前缀是 `[ERROR]` 而不是 `[INFO]`（实测 baseline.log 与 8 份变异体日志
+# 逐行对过：`[ERROR] Tests run: 6, Failures: 3, Errors: 0, Skipped: 0`），旧正则只认 [INFO] ⇒
+# summary 取不到 ⇒ 被判成「套件跑不起来」。变异其实全落地了。
+MVN_SUMMARY = re.compile(r"^\[(?:INFO|ERROR)\] Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)\s*$")
 MVN_CLASS = re.compile(r"Tests run: .*-- in ([\w.$]+)$")
 MVN_FAILNAME = re.compile(r"^\[ERROR\]\s+([\w.$]+)\.([\w$]+)[:\[]")
 

@@ -130,6 +130,11 @@ public class BuiltinToolsExecWiringTest {
         final boolean[] sawStarted = {false};
         final boolean[] sawInterruptedPolled = {false};
         final boolean[] sawFinished = {false};
+        // P22b 结构性补口：上面三支旗子记的是 spy **自己重新塞进去**的 observer，
+        // 产品那份（BuiltinTools 里 `.observer(new InterruptBridgeObserver())`）被摘掉时它们照样绿 ——
+        // 杠② 第一跑把 INTERRUPT_BRIDGE 判成 SURVIVED，根因就在这。这里把 request 带进来的
+        // 那份 observer 抓下来，直接按桥的契约验它（读得到旗子 / 进了在飞表 / 退了清掉）。
+        final ExecRequest.ProcessObserver[] productObserver = {null};
         final String dir = scratch("p22-wiring-bridge");
         // 包装而不是继承：LocalExecEnvironment 是 final
         final ExecEnvironment inner = new LocalExecEnvironment(
@@ -142,6 +147,7 @@ public class BuiltinToolsExecWiringTest {
 
             @Override
             public ExecResult exec(ExecRequest request) throws IOException {
+                productObserver[0] = request.observer();
                 ExecRequest probed = ExecRequest.builder(request.argv())
                         .cwd(request.cwd())
                         .maxOutputBytes(request.maxOutputBytes())
@@ -215,6 +221,33 @@ public class BuiltinToolsExecWiringTest {
         assertTrue("后端没问过中断旗子 ⇒ 工具在飞时断不掉", sawInterruptedPolled[0]);
         assertTrue("子进程收工没回调 unwatch", sawFinished[0]);
         assertTrue(r.getContent().contains("bridge"));
+        // ↓↓↓ 这一段才是真的守 INTERRUPT_BRIDGE：验的是**产品递给 SPI 的那份 observer**本身。
+        com.zifang.z.agent.kernel.agent.InterruptFlag flag =
+                new com.zifang.z.agent.kernel.agent.InterruptFlag();
+        com.zifang.z.agent.kernel.agent.InterruptFlag previous = InterruptScope.bind(flag);
+        Process watched = null;
+        try {
+            assertTrue("exec 那一路一个 observer 都没递给 SPI ⇒ 中断桥根本没接线",
+                    productObserver[0] != null);
+            flag.request("p22b 杠② INTERRUPT_BRIDGE 判旗子");
+            assertTrue("递给 SPI 的 observer 读不到中断旗子 ⇒ 摘掉的就是 InterruptBridgeObserver",
+                    productObserver[0].interrupted());
+            int before = InterruptScope.liveProcessCount();
+            watched = new ProcessBuilder("/bin/sleep", "20").start();
+            productObserver[0].started(watched);
+            assertEquals("started 没把子进程登记进看门狗 ⇒ 在飞的命令断不掉",
+                    before + 1, InterruptScope.liveProcessCount());
+            productObserver[0].finished(watched);
+            assertEquals("finished 没取消登记 ⇒ 看门狗里留了僵尸",
+                    before, InterruptScope.liveProcessCount());
+            watched.destroyForcibly();
+            watched = null;
+        } finally {
+            if (watched != null) {
+                watched.destroyForcibly();
+            }
+            InterruptScope.restore(previous);
+        }
     }
 
     @Test

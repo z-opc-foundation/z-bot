@@ -156,7 +156,10 @@ public class ExecEnvironmentSpiTest {
 
     @Test
     public void localExec_rejectsSandboxEscape() throws Exception {
-        String dir = tempDir("p22-local-sandbox");
+        // p22b：沙箱根原来叫 tempDir("p22-local-sandbox")，它的**父目录是所有用例共用的 scratch 根** ——
+        // SANDBOX_CHECK 变异体留下的 escaped.txt 落在那儿就一直红（杠② 第一跑里 OUTPUT_CAP / SSH /
+        // BACKEND_FALLBACK 三支都被它连坐成"额外红"）。改成每次调用一个独立父目录，串味才没了。
+        String dir = tempDir("p22-local-sandbox-" + System.nanoTime() + "/ws");
         LocalExecEnvironment env = new LocalExecEnvironment(cfg(empty()), new Sandbox(dir));
         try {
             env.writeFile("ok.txt", "fine".getBytes(UTF_8));
