@@ -188,7 +188,6 @@ async def run_http(port, port_file, enable_advertise=True):
     import uvicorn
     _advertise_list_changed(enable_advertise)
     starlette_app = app.streamable_http_app()
-    port = int(os.environ.get("P21_REF_PORT", port))
     config = uvicorn.Config(starlette_app, host="127.0.0.1", port=port,
                             log_level="warning", lifespan="on", access_log=False)
     server = uvicorn.Server(config)

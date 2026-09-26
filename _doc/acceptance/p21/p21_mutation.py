@@ -211,11 +211,13 @@ MUTANTS = [
      "url 的 ?key= 就是凭据，而它出现在'连不上'的异常文本里"),
 
     # ============ T 族：超时/挂死面（本期与内核的分水岭）============
-    ("T1 请求不等自己的 deadline（回到内核那条错法）", "T-超时与挂死", "stdio",
+    ("T1 请求不等自己的 timeoutMillis（deadline 形同虚设）", "T-超时与挂死", "stdio",
      "            return future.get(options.timeoutMillis, TimeUnit.MILLISECONDS);",
-     "            return future.get();", 1,
+     "            return future.get(60_000L, TimeUnit.MILLISECONDS);", 1,
      ["McpRealStdioServerTest#zbotTransportHonoursItsOwnDeadlineWhileKernelBlocksInReadLine"],
-     "§1.2 那条缺陷的正面：没有真 deadline，一个不回话的 server 就把整个 bridge 挂死"),
+     "§1.2 那条内核错法的正面：等一个跟配置无关的常量上限 ⇒ 900ms 的 deadline 不再成立，"
+     "不回话的 server 把 bridge 挂死到 60s。（曾用 future.get() 无参式：javac 直接拒绝 —— "
+     "catch (TimeoutException) 变成不可达 ⇒ 那支变异体根本编不出来，记 BROKEN 不算杀掉的）"),
 
     ("T2 收到通知不派发（listener 恒 null）", "T-超时与挂死", "stdio",
      "                final McpNotificationListener l = listener;",

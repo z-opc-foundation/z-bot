@@ -56,8 +56,48 @@ STATUS: 未跑
 
 ## §3 新增 transport 与注入缝
 
-STATUS: 未跑
-文件清单 / 各自实现了什么 / 走 `McpClientFactory.wrap(name, transport)` 的哪一处：待填
+STATUS: 已跑（字节 + 编译 + 杠② 家族 A 的点名用例）
+
+复算命令：
+
+```
+cd /private/tmp/zbot-wt-p21 && wc -l z-bot-core/src/main/java/com/zifang/z/bot/mcp/*.java
+grep -n "public static\|transportOf\|wrap(" z-bot-core/src/main/java/com/zifang/z/bot/mcp/McpClientFactory.java
+```
+
+实测（`wc -l` 原样，本期 mcp 包 10 个文件 / 2855 行）：
+
+```
+     316 McpBridge.java
+     269 McpClientFactory.java
+     197 McpManager.java
+      41 McpNotificationListener.java
+      19 McpNotificationSource.java
+     136 McpWire.java
+     133 SecretRedaction.java
+     661 StreamableHttpMcpTransport.java
+     519 ZBotMcpServe.java
+     564 ZBotStdioMcpTransport.java
+    2855 total
+```
+
+对照 §0.2 的起点（3 文件 / 523 行）⇒ 本期把 mcp 包从 523 行推到 2855 行，新增 7 个文件。
+
+注入缝逐字（`McpClientFactory.java` 行号）：
+
+```
+33:    public static McpClient createStdio(BotConfig.McpServerEntry entry)      ← 老缝，仍走内核 StdioMcpTransport，只留给 §1/§2 的对照实验
+42:    public static McpClient createStdioZBot(BotConfig.McpServerEntry entry)  ← 生产 stdio：z-bot 侧 ZBotStdioMcpTransport
+54:    public static McpClient createHttp(BotConfig.McpServerEntry entry)       ← StreamableHTTP/SSE
+72:    public static McpClient create(BotConfig.McpServerEntry entry)           ← 按 entry.transport 分派（79 createHttp / 86 createStdioZBot）
+104:   public static McpTransport transportOf(McpClient client)                 ← 把 transport 摸回来，供"能不能收推送"的判别（§2 判定 / §4 广告位）
+112:   public static McpClient wrap(String name, McpTransport transport)        ← 注入缝本体：任何 McpTransport 都能被包成 McpClient
+```
+
+`transport` 分派的两条实现线（各自实现了什么）：
+- `ZBotStdioMcpTransport`（564 行）：真子进程 + 分行 JSON-RPC；异步读循环把 **非请求响应**（server 主动推的 notification）交给 `McpNotificationListener`，这是 §2 判定"内核被旁路"之后唯一能收 `list_changed` 的通道；带 `/bin/sh` ppid watchdog（§5）与 `future.get(timeoutMillis)` 真超时（§1.2 的对照面）。
+- `StreamableHttpMcpTransport`（661 行）：POST + `mcp-session-id`/`mcp-protocol-version` 头、`Accept: application/json, text/event-stream`（本期被杠③ 逼出来的修复，见 §15.4）、GET SSE 通知流、`notifications/*` 期望 202 无响应体。
+- `ZBotMcpServe`（519 行）：反向 serve（§6）。`SecretRedaction`（133 行）：双向脱敏（§8）。`McpWire`（136 行）：超时/挂死面（杠② 家族 T）。
 
 ---
 
@@ -71,9 +111,45 @@ STATUS: 未跑
 
 ## §5 父死 watchdog：`kill -9` z-bot ⇒ MCP 子进程不得成孤儿（杠③(e)）
 
-STATUS: 未跑
-前后 `pgrep -P` / `ps` 计数各贴一次。
-复算命令：待填 / 实测：待填
+STATUS: 已跑（进程内测 4 条 + 真进程 E2E (e) 段 4 条，见 §15.5）
+
+复算命令（逐字）：
+
+```
+cd /private/tmp/zbot-wt-p21 && mvn -o -q -Dtest=McpParentWatchdogTest -Dsurefire.useFile=false test
+grep -n "" ~/.cache/zbot-p21/p21_watchdog_readings.txt | sed -n '20,23p'    # 该文件由探针逐条追加，一次全量 suite = 四行
+```
+
+实测 —— 一次全量 suite 的四行读数原样（`p21_watchdog_readings.txt` 第 20–23 行，字段口径：`pgrep -P` 是"还挂在探针 JVM 名下"的计数，`childAliveAfterKill` 是 `kill -0`，`orphanObservedAtMs` 是"观察到 ppid 改嫁"的时刻，`msUntilChildGone` = −1 表示到预算仍未死）：
+
+```
+watchdog=on mode=mcp probePid=14425 childPids=[14427] pgrep-P-before=1 pgrep-P-immediately-after-kill=0 pgrep-P-after=0 childAliveAfterKill=false childPpidAfterKill='1' msUntilChildGone=144 orphanObservedAtMs=0
+watchdog=on mode=sleeper probePid=14466 childPids=[14470] pgrep-P-before=1 pgrep-P-immediately-after-kill=0 pgrep-P-after=0 childAliveAfterKill=false childPpidAfterKill='1' msUntilChildGone=149 orphanObservedAtMs=0
+watchdog=off mode=mcp probePid=14499 childPids=[14501] pgrep-P-before=1 pgrep-P-immediately-after-kill=0 pgrep-P-after=0 childAliveAfterKill=false childPpidAfterKill='1' msUntilChildGone=1604 orphanObservedAtMs=40
+watchdog=off mode=sleeper probePid=19192 childPids=[19194] pgrep-P-before=1 pgrep-P-immediately-after-kill=0 pgrep-P-after=0 childAliveAfterKill=true childPpidAfterKill='1' msUntilChildGone=-1 orphanObservedAtMs=18
+```
+
+四行读出的不是四个结论，得配对才成话（这正是工单点名要摘掉的 EOF 混淆因子）：
+
+| 行 | 断言（`McpParentWatchdogTest` 里的方法名） | 讲的什么 |
+|---|---|---|
+| 20 | `killedParentTakesTheChildWithIt` | 生产路径（真官方 SDK server 当子进程）：`childAliveAfterKill=false`、144ms 内带走；`pgrep-P-before=1 → after=0` |
+| 21 | `watchdogTakesEvenAnEofInsensitiveChildWithIt` | 把"孩子自己会退"摘掉：换成完全不理 stdin 的 sleeper，走同一份 `launchArgv()` 产物 ⇒ 仍 149ms 带走 |
+| 23 | `withoutWatchdogAnEofInsensitiveChildReallyBecomesAnOrphan` | **阳性对照（猎物真在）**：同一个 sleeper、watchdog 关 ⇒ `childAliveAfterKill=true`、`msUntilChildGone=-1`（到预算没死）、`orphanObservedAtMs=18`（18ms 就被观察到改嫁给 ppid=1）⇒ 第 21 行的"没了"只可能是 watchdog 干的 |
+| 22 | `realServerExitsOnStdinEofSoItCannotServeAsTheControl` | 把混淆因子量成实据：真 ref server 在 `watchdog=off` 时也"消失"，但要 1604ms（EOF 自己退的），且 `orphanObservedAtMs=40` 中间确实被观察到孤儿态 ⇒ 这条只能当观察、不能当对照 |
+
+口径提醒：第 23 行的 `pgrep-P-after=0` **不是**"孩子死了"—— 它已经改嫁（`childPpidAfterKill='1'`），`pgrep -P <探针pid>` 当然查不到；死没死只认 `childAliveAfterKill`。测试断言就是这么分的（`assertFalse(… , on.childStillAlive)` vs `assertTrue("对照组失效…", off.childStillAlive)`）。
+
+聚合复核（同一文件，跨全部跑次）：
+
+```
+$ grep -c "watchdog=on" ~/.cache/zbot-p21/p21_watchdog_readings.txt   → 15
+$ grep -c "watchdog=off" ~/.cache/zbot-p21/p21_watchdog_readings.txt  → 13
+$ awk '/watchdog=off mode=sleeper/{c++; if ($0 ~ /childAliveAfterKill=true/) k++} END{print c, k}'   → 7 6      # 对照组的猎物：7 次里 6 次确实活着
+$ awk '/watchdog=on  mode=sleeper/{c++; if ($0 ~ /childAliveAfterKill=false/) k++} END{print c, k}'  → 7 6      # watchdog 侧：7 次里 6 次确实带走
+```
+
+那两处没对上的行（`watchdog=on mode=sleeper … childAliveAfterKill=true`，第 27 行 probePid=22701 等）**不是**本期产品的读数，而是 15:17 之后杠② 家族 W 把监护脚本改坏时留下的（变异体被杀掉 ⇒ 正是 RED-OK 需要的现象）；收口前我在干净树上重跑一次并把那组新读数贴到 §5b。
 
 ---
 
@@ -102,10 +178,37 @@ STATUS: 未跑
 
 ## §9 杠① `mvn -o test` ×3 顺序独立
 
-STATUS: 未跑
-起点 `@Test`=619（见 §0.13）。每跑贴 `Tests run` + F/E/S + socket 类错误计数（应为 0）。
-日志一律 `~/.cache/zbot-p21/`（并发波次：p18a/p12d 也在跑 mvn，不拿它们的日志当我的）。
-复算命令：待填 / 实测：待填
+STATUS: 已跑（三跑串行、每跑前 `rm -rf z-bot-core/target/surefire-reports`、全量不 `-pl`、rc 全 0）
+
+复算命令（下面两条 `grep` 是我逐字跑过的；循环与我实际跑的那条只差 `2>&1` 的可观测性 —— 我那份把 mvn 输出落到同名文件并在末尾追加 `MVN_RC_$i=$?`，见 `bar-*.txt` 末行）：
+
+```
+cd /private/tmp/zbot-wt-p21
+for i in 1 2 3; do rm -rf z-bot-core/target/surefire-reports; mvn -o test > ~/.cache/zbot-p21/bar3/bar-$i.txt 2>&1; echo MVN_RC_$i=$? >> ~/.cache/zbot-p21/bar3/bar-$i.txt; done
+grep -E '^\[INFO\] Tests run:' ~/.cache/zbot-p21/bar3/bar-{1,2,3}.txt | tail -3          # 每跑的汇总行
+grep -cE 'BindException|Connection refused|SocketTimeout' ~/.cache/zbot-p21/bar3/bar-1.txt  # 2/3 同理
+grep -n 'MVN_RC' ~/.cache/zbot-p21/bar3/bar-{1,2,3}.txt
+```
+
+实测（三跑的汇总行原样，一次都不许差）：
+
+```
+bar-1: [INFO] Tests run: 661, Failures: 0, Errors: 0, Skipped: 0     + BUILD SUCCESS   Total time: 47.325 s
+bar-2: [INFO] Tests run: 661, Failures: 0, Errors: 0, Skipped: 0     + BUILD SUCCESS   Total time: 52.617 s
+bar-3: [INFO] Tests run: 661, Failures: 0, Errors: 0, Skipped: 0     + BUILD SUCCESS   Total time: 56.140 s
+```
+
+socket 类错误计数 + `[ERROR]` 行计数 + rc（`grep -c` 原样输出）：
+
+```
+bar-1: BindException|Connection refused|SocketTimeout = 0    [ERROR] 行 = 0    MVN_RC_1=0   (bar-1.txt:653)
+bar-2: BindException|Connection refused|SocketTimeout = 0    [ERROR] 行 = 0    MVN_RC_2=0   (bar-2.txt:653)
+bar-3: BindException|Connection refused|SocketTimeout = 0    [ERROR] 行 = 0    MVN_RC_3=0   (bar-3.txt:652)
+```
+
+三跑数字一致（661/0/0/0 ×3）。相对 §0.13 的起点 619 ⇒ **+42**，与工单 §1.2 的"净增 +42 / HEAD=661"一致（这条工单量对了，我复算也是 661）。
+
+**注意（别把我这段当杠②）**：本小节的 mvn 日志文件在 `~/.cache/` 而非仓内 —— `.gitignore:5` = `*.log` ⇒ 只有上面这些抄进来的读数算数。三跑期间与杠②/杠③ 无并发（bar② 是在这三跑全部落盘之后才起的）。
 
 ---
 
@@ -129,20 +232,83 @@ STATUS: 未跑
 
 ## §12 杠④ `~/.zbot` 未被污染
 
-STATUS: 未跑
-`ls -A ~/.zbot | wc -l` = 8；`md5` 前缀 `2dadaed0` / `690ddbc0` 一字未动。
-复算命令：待填 / 实测：待填
+STATUS: 已跑（开工 / 在飞 各一次一致；收尾另测，见本节末"收尾"行）
+
+复算命令（逐字）：
+
+```
+ls -A ~/.zbot | wc -l
+md5 -q ~/.zbot/config.properties | cut -c1-8
+md5 -q ~/.zbot/state.db | cut -c1-8
+```
+
+实测（工单口径 = 8 / 2dadaed0 / 690ddbc0，一次都不许变）：
+
+```
+开工（起点 86447fe，见 §0b）  8    2dadaed0    690ddbc0
+在飞 15:2x（三跑全量 + 3 次 E2E 整跑 + 杠② 中途）  8    2dadaed0    690ddbc0
+```
+
+⇒ 8 个条目、两个 md5 前缀 8 位全部一字未动。所有 E2E 都靠 `--config-dir` 指临时根（`~/.cache/zbot-p21/e2e/<label>/zbot-home`），真根零写入。
+
+收尾（第三测，随收口 commit 前跑）：见本节末 §12c。
 
 ---
 
 ## §13 安全红线自查
 
-STATUS: 未跑
-- 真 key（`minimax.api.key`，125 字符）**从未被读值/打印/复制/提交/进日志**；E2E 只用 `--config-dir`/`ZBOT_HOME` 临时根 + `stub-key-not-real`。
-- 全程只连 127.0.0.1，无真外网 MCP 端点。
-- 内核仓 `../z-agent-kernel` 一个字节未改（`git -C ../z-agent-kernel status --porcelain` 为空）。
-- 无 `pip install`/`uvx` 拉包作为验收前置。
-实测：待填
+STATUS: 已跑（四条各一个机械量具，全部不落在真值上）
+
+复算命令 + 实测（逐字）：
+
+1. **真 key 只量长度、从不取值**（工单口径的值长 125）：
+
+```
+$ awk -F= '/^minimax\.api\.key=/{print length($2)}' ~/.zbot/config.properties
+125
+```
+
+命令里没有任何 `print $2` 之外的输出路径，值不落盘、不进日志（本文件里出现的唯一关于它的数字就是这个 125）。
+
+2. **产物里没被带进真 key**（两处独立量具）：
+
+```
+$ git grep -lIE '[A-Za-z0-9_-]{110,}' -- z-bot-core/src _doc/acceptance/p21 | wc -l
+0                      # 全仓我的写域内不存在 ≥110 连续字符的 token ⇒ 125 长的真值不可能在里面
+$ grep -rl "minimax" ~/.cache/zbot-p21/e2e/R151125-p97447 | wc -l
+1                      # 唯一命中 = 临时根 zbot-home/config.properties
+$ grep -rl "stub-key-not-real" ~/.cache/zbot-p21/e2e/R151125-p97447 | wc -l
+1                      # 同一个文件，写的就是桩值
+$ awk -F= '/^minimax\.api\.key=/{print length($2)}' ~/.cache/zbot-p21/e2e/R151125-p97447/zbot-home/config.properties
+17                     # len("stub-key-not-real") == 17，不是 125
+```
+
+3. **只连 127.0.0.1**：
+
+```
+$ grep -rhoE 'https?://[0-9a-zA-Z._-]+' ~/.cache/zbot-p21/e2e/R151125-p97447 | sort | uniq -c
+  18 http://127.0.0.1
+   8 https://errors.pydantic.dev      ← 这是 python 异常文本里的文档 URL 字符串，不是发包目标（本跑全程零外网请求）
+$ grep -rhoE '127\.0\.0\.1|0\.0\.0\.0' z-bot-core/src/main/java/com/zifang/z/bot/mcp z-bot-core/src/test/java/com/zifang/z/bot/mcp _doc/acceptance/p21 --include='*.py' --include='*.java' | sort | uniq -c
+  23 127.0.0.1
+```
+
+`0.0.0.0` / 真域名的 bind/connect 目标：0 命中。（`grep` 会顺带命中 `_doc/acceptance/p21/__pycache__/*.pyc` 里的同一串，属编译产物，收口时已删。）
+
+4. **内核仓零字节改动 + 无外部装包前置**：
+
+```
+$ git -C /Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-agent-kernel status --porcelain | wc -l
+0
+$ git -C /Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-agent-kernel rev-parse --short HEAD
+cb90416                              # 与开工时同一 HEAD
+$ git diff --name-only 926b8b5 HEAD | grep -c 'z-agent-kernel' ; echo "（下面这条是杠②/杠③ 用到的包是否现成）"
+0
+$ python3 -c "import mcp,importlib.metadata as m;print(m.version('mcp'))"
+1.27.1                               # 系统 Python 现成，全程没有 pip install / uvx / uv
+```
+
+⇒ 工单 §5 四条红线：真 key 未取值（只量长 125 / 现场 17）、未入产物（≥110 字符 token 计数 0）、只连 127.0.0.1、内核仓 `cb90416` 干净、无装包前置。
 
 ---
 
