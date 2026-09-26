@@ -38,7 +38,13 @@ REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
 LEAD = os.path.expanduser("~/.cache/zbot-p27-lead")
 BAK = os.path.join(LEAD, "mutbak")
 OUT = os.path.join(LEAD, "mutation")
-LEDGER = os.path.join(REPO, "_doc/acceptance/p27/LEDGER.tsv")
+# 默认仍写**受跟踪**的那份（正式台账必须由脚本自写，见 §11.5 的守卫）；
+# 只想验量具自己有牙时把 ZBOT_LEDGER_OUT 指到 ~/.cache —— 整跑会重写台账字节，
+# 而还原步不能靠 `git checkout --`（那会连被测量的其它未提交改动一起抹掉）。
+LEDGER = os.environ.get("ZBOT_LEDGER_OUT") or os.path.join(REPO, "_doc/acceptance/p27/LEDGER.tsv")
+# 杠④ 的采样对象：真 profile 目录。本脚本对它**只读**，且 key 只量长度、值不读（红线）。
+PROFILE_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("ZBOT_PROFILE_DIR") or "~/.zbot"))
 MAIN_DIR = "z-bot-core/src/main/java/com/zifang/z/bot/delegate"
 TEST_DIR = "z-bot-core/src/test/java/com/zifang/z/bot/delegate"
 SCOPE = "com.zifang.z.bot.delegate.*Test,BotAgentTest"   # 具名范围（含被波及的 BotAgentTest）
@@ -550,6 +556,142 @@ def md5(path):
     return h.hexdigest()
 
 
+KEY_PREFIX = "minimax.api.key="
+
+
+def bar4_sample(point, home=None):
+    """杠② 对杠④ 负责：每跑首尾各采一次真 profile 的不变量。
+
+    只读，且**永不读 key 的值** —— `minimax.api.key` 只量长度（125 那格）。
+    缺目录/缺文件不当成"没变"：problems 非空即判这次采样不完整，
+    两个不完整点互相"相等"也算不上绿（见 bar4_probe 的 CTRL4）。
+    """
+    home = home or PROFILE_DIR
+    problems = []
+    entries = -1
+    try:
+        entries = len(os.listdir(home))
+    except OSError:
+        problems.append("dir_missing")
+    digests = []
+    for name in ("config.properties", "state.db"):
+        p = os.path.join(home, name)
+        if os.path.isfile(p):
+            digests.append(md5(p)[:8])
+        else:
+            digests.append("<缺>")
+            problems.append(name + "_missing")
+    key_len = "<无>"
+    try:
+        with open(os.path.join(home, "config.properties"), encoding="utf-8") as f:
+            for line in f:
+                if line.startswith(KEY_PREFIX):
+                    key_len = str(len(line[len(KEY_PREFIX):].rstrip("\r\n")))
+    except OSError:
+        pass
+    reading = (entries, digests[0], digests[1], key_len)
+    print("BAR4|%s|dir=%s|entries=%d|cfg_md5=%s|db_md5=%s|key_len_only=%s%s"
+          % (point, home, entries, digests[0], digests[1], key_len,
+             ("|PROBLEMS=" + ",".join(problems)) if problems else ""))
+    sys.stdout.flush()
+    return reading, problems
+
+
+def bar4_verdict(start, start_problems, end, end_problems):
+    """首尾两次采样对账：值相同 **且** 两次都完整，才算杠④ 在这一跑里成立。"""
+    diff = [k for k, a, b in zip(("entries", "cfg_md5", "db_md5", "key_len"), start, end) if a != b]
+    complete = not (start_problems or end_problems)
+    same = (start == end) and complete
+    print("BAR4_VERDICT|same=%s|start=%s|end=%s|diff=%s|problems=%s/%s"
+          % ("YES" if same else "NO", start, end,
+             ",".join(diff) or "无",
+             ",".join(start_problems) or "无", ",".join(end_problems) or "无"))
+    return same
+
+
+def bar4_probe():
+    """`--bar4-probe`：不跑 mvn，只证这把自己刚补上的尺会咬。
+
+    六支对照，全在临时目录里做，真 profile 只读：
+      CTRL1 真 profile 连采两次 ⇒ 必须判"相同"（尺连没变都判不出 ⇒ 读数作废）
+      CTRL2 临时目录不动 ⇒ 两次相同（反方向：证明 1 不是"每次都不同"）
+      CTRL3 加一个文件 ⇒ 必须判"不同"且**只**点名 entries
+      CTRL4 改 config.properties 字节 ⇒ 必须点名 cfg_md5 + key_len
+      CTRL5 删掉 config.properties ⇒ 必须带 PROBLEMS，且不许因"两次都缺"算成相同
+      CTRL6 与 shell 那把独立尺（`ls -A` / `md5 -q` / `awk length`）逐格对账
+    """
+    fails = []
+    real, real_problems = bar4_sample("probe_real", home=PROFILE_DIR)
+    real2, _ = bar4_sample("probe_real_repeat", home=PROFILE_DIR)
+    ok1 = (real == real2 and not real_problems)
+    print("CTRL1|真 profile 连采两次应相同=%s" % ("YES" if ok1 else "NO"))
+    if not ok1:
+        fails.append("CTRL1")
+
+    tmp = os.path.join(LEAD, "bar4-probe")
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    for i in range(6):
+        open(os.path.join(tmp, "filler_%d" % i), "w").close()
+    cfg = os.path.join(tmp, "config.properties")
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write("minimax.api.key=stub-key-not-real\n")
+    open(os.path.join(tmp, "state.db"), "w").close()
+    a, _ = bar4_sample("probe_a", home=tmp)
+    b, _ = bar4_sample("probe_b", home=tmp)
+    ok2 = (a == b)
+    print("CTRL2|临时目录未改动应相同=%s" % ("YES" if ok2 else "NO"))
+    if not ok2:
+        fails.append("CTRL2")
+
+    open(os.path.join(tmp, "extra_file"), "w").close()
+    c, _ = bar4_sample("probe_c", home=tmp)
+    d2 = [k for k, x, y in zip(("entries", "cfg_md5", "db_md5", "key_len"), b, c) if x != y]
+    ok3 = (c != b) and d2 == ["entries"]
+    print("CTRL3|加一个文件应且只应点名 entries=%s diff=%s" % ("YES" if ok3 else "NO", ",".join(d2) or "无"))
+    if not ok3:
+        fails.append("CTRL3")
+
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write("minimax.api.key=stub-key-changed\n")
+    e, _ = bar4_sample("probe_e", home=tmp)
+    d3 = [k for k, x, y in zip(("entries", "cfg_md5", "db_md5", "key_len"), c, e) if x != y]
+    ok4 = (d3 == ["cfg_md5", "key_len"])
+    print("CTRL4|改 config 字节应点名 cfg_md5+key_len=%s diff=%s" % ("YES" if ok4 else "NO", ",".join(d3) or "无"))
+    if not ok4:
+        fails.append("CTRL4")
+
+    os.remove(cfg)
+    g, g_problems = bar4_sample("probe_g", home=tmp)
+    h, _ = bar4_sample("probe_h", home=tmp)
+    ok5 = bool(g_problems) and not bar4_verdict(g, g_problems, h, [])
+    print("CTRL5|缺文件必须带 PROBLEMS 且不许算成相同=%s" % ("YES" if ok5 else "NO"))
+    if not ok5:
+        fails.append("CTRL5")
+
+    default_home = os.path.abspath(os.path.expanduser("~/.zbot"))
+    if PROFILE_DIR != default_home:
+        print("CTRL6|跳过：ZBOT_PROFILE_DIR 把采样对象指走了=%s（独立尺只认 ~/.zbot）" % PROFILE_DIR)
+        shutil.rmtree(tmp, ignore_errors=True)
+        print("BAR4_PROBE|fails=%s" % (",".join(fails) or "无"))
+        return 1 if fails else 0
+    shell = sh(["bash", "-c",
+                'printf "%s/%s/%s/%s" "$(ls -A ~/.zbot | wc -l | tr -d \' \')" '
+                '"$(md5 -q ~/.zbot/config.properties | cut -c1-8)" '
+                '"$(md5 -q ~/.zbot/state.db | cut -c1-8)" '
+                '"$(awk -F= \'/^minimax\\.api\\.key=/{print length($2)}\' ~/.zbot/config.properties)"'])
+    want = "%d/%s/%s/%s" % real
+    ok6 = (shell[0] == 0 and shell[1].strip() == want)
+    print("CTRL6|独立 shell 尺=%s python=%s" % ("YES" if ok6 else "NO", want))
+    print("      shell=%s" % shell[1].strip())
+    if not ok6:
+        fails.append("CTRL6")
+
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("BAR4_PROBE|fails=%s" % (",".join(fails) or "无"))
+    return 1 if fails else 0
+
+
 def forever_wait_health_check():
     """杠② 前置体检：测试里不许出现无界 await()/waitFor()（P14a 死法）。"""
     rc, out = sh(["grep", "-rn", "-E", r"\.await\(|\.waitFor\(", TEST_DIR])
@@ -645,6 +787,7 @@ def main():
 
 def run_all():
     hits = forever_wait_health_check()
+    bar4_start, bar4_start_problems = bar4_sample("start")
     rows = []
     header = ["mutant", "file", "outcome", "mvn_rc", "killed_by_or_red_tests", "expected_red",
               "unexpected", "elapsed_s", "md5_restored", "allowed_extra"]
@@ -767,7 +910,11 @@ def run_all():
         print("== SURVIVED 点名 ==")
         for sid, why in survivors:
             print("   " + sid + " —— " + why)
-    return 0
+
+    # ---- 杠④：整跑首尾两次采样对账。判定照常写台账，但这一轮不许多吃一个"绿" ----
+    bar4_end, bar4_end_problems = bar4_sample("end")
+    code = 0 if bar4_verdict(bar4_start, bar4_start_problems, bar4_end, bar4_end_problems) else 1
+    return code
 
 
 def write_ledger(rows, header, counts, hits, baseline_green, survivors):
@@ -792,4 +939,7 @@ if __name__ == "__main__":
     # --selftest 只验尺自己的判据（纯函数 + 伪造表），不抢锁、不碰 src、不跑 mvn
     if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
         sys.exit(selftest())
+    # --bar4-probe 只验杠④ 采样这把自己会咬，同样不抢锁、不跑 mvn、真 profile 只读
+    if len(sys.argv) > 1 and sys.argv[1] == "--bar4-probe":
+        sys.exit(bar4_probe())
     main()

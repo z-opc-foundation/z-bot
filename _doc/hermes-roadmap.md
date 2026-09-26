@@ -1122,7 +1122,8 @@ BAR1_DONE|end=2026-09-27 02:02:08 dir=/Users/zifang/.cache/zbot-integrate/bar1_2
 - ~~杠② p27：21 支按 `6f6b21f` 的新表整批复跑未做 ⇒ 新 expect 集"推导成立、未经实测"~~ → **已闭（§8.13.7：新表 22 支五跑，`RED-OK=21 SURVIVED=1`，三格按机制裁决；逐跑原文见 `p27/EVIDENCE.md` §13）**。
 - ~~杠③：当前树 ×3 真进程 E2E 未跑（§8.12.5 那条待补不变）~~ → **已闭（§8.13.7：`0b47cc8` 上 03:21:26–03:57:32 串行 ×3，逐轮 32/32、`CROSS|e2e_verdict=1` + `CROSS_CTRL|…实测=2`，原文见 `p28/EVIDENCE.md` P28-lead-10）**。
 - 浏览器渲染层 `/help` 实输出对照未做（`P28-lead-6` 的未完项）。
-- **杠② 的 `p27_mutation.py` 不采样 `~/.zbot`**（`grep -c bar4 rerun_2.log rerun_4.log rerun_env.log` = 0）⇒ 杠② 那五跑对杠④ 没有直接读数，只被杠①/杠③ 的 `bar4=` 采样点夹着。补法是在每跑首尾各打一条 `BAR4|…`，但**注意**：整跑会把受跟踪的 `LEDGER.tsv` 覆写一遍（"跑一次就改一次台账字节"），所以补这一刀要么先把 r5 字节存档、跑完按字节对账，要么给脚本加一个"台账只落 stdout、不写 `LEDGER.tsv`"的 dry 档 —— 别用 `git checkout --` 当还原步。
+- ~~**杠② 的 `p27_mutation.py` 不采样 `~/.zbot`**（`grep -c bar4 rerun_2.log rerun_4.log rerun_env.log` = 0）⇒ 杠② 那五跑对杠④ 没有直接读数，只被杠①/杠③ 的 `bar4=` 采样点夹着。补法是在每跑首尾各打一条 `BAR4|…`，但**注意**：整跑会把受跟踪的 `LEDGER.tsv` 覆写一遍（"跑一次就改一次台账字节"），所以补这一刀要么先把 r5 字节存档、跑完按字节对账，要么给脚本加一个"台账只落 stdout、不写 `LEDGER.tsv`"的 dry 档 —— 别用 `git checkout --` 当还原步。~~
+  → **已闭（§8.13.8 / `p27/EVIDENCE.md` §13.7：首尾各一条 `BAR4|…` + `BAR4_VERDICT` 参与退出码，六支对照证有牙，整批复跑台账逐列不变；覆写问题走 `ZBOT_LEDGER_OUT` 出口，未用 `git checkout --`）**。
 - P29 其余：`z-agent` / `z-agent-kernel` / `z-agent-proxy` 三篇 README、`<revision>` 抬号、发 Central —— 后两件在 z-bot 的 push 授权之外，等点头。
 
 ### 8.13.7 杠②（p27 族）：21→22 支整批五跑 + 三格按机制裁决，杠①③ 在新树补量（09-27 02:43:43–03:57:32，主编亲测）
@@ -1162,3 +1163,27 @@ BAR1_DONE|end=2026-09-27 02:02:08 dir=/Users/zifang/.cache/zbot-integrate/bar1_2
   改为只取 `checks=` 判决行 + 阳性对照 `OLD|count=4 / FIXED|count=1 / CTRL|expect=2 got=2`，
   三条读数原文在 `~/.cache/zbot-integrate/cross_gauge_recheck_270207.log`，`bash cross_gauge_recheck.sh <批目录>` 可复算）也记在同一节——
   这是 `P28-lead-7` 那个病的第二次现形，同族的尺该合并而不是各写一套剥法。
+
+### 8.13.8 杠② 自己采样杠④：`p27_mutation.py` 补 `BAR4|start/end` + 六支对照 + 整批复跑逐列不变（09-27 04:04:46–04:07:21，主编亲测）
+
+§8.13.6 最后一条"杠② 对杠④ 没有直接读数"由此关闭。改动 795 → 945 行（`152/2`），**只重量具、不重被量的表**这句话不是我说，是尺：
+
+```
+$ git diff --ignore-all-space -- '*.java' --numstat | wc -l                                     ⇒ 0
+$ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
+    | grep -vE "^(\+\+\+|---)" | grep -E 'id="M|expect=|allow_extra=' | wc -l                   ⇒ 0
+```
+
+- **先证有牙**（`--bar4-probe`，rc=0，不取锁不跑 mvn）：`CTRL1` 真 profile 连采两次相同 / `CTRL2` 临时目录未改相同 /
+  `CTRL3` 加一个文件**且只应**点名 `entries` / `CTRL4` 改 config 字节点名 `cfg_md5,key_len` /
+  `CTRL5` **缺文件必须带 `PROBLEMS` 且不许算成相同**（这一支是整件事的理由：只看"start==end"的尺在 profile 被删掉后仍会说 `YES`）/
+  `CTRL6` 与一支**独立 bash 尺**对拍（防自算自验）。收口行 `BAR4_PROBE|fails=无`，`--selftest` 另测 `cases=14 failures=0`。
+- **再拿它量一次整批**（台账经 `ZBOT_LEDGER_OUT` 重定向，因此受跟踪的 `LEDGER.tsv` **字节未被覆写**：跑前后
+  `md5 -q` 同为 `b52619503be915960b91831daf7a1b5b`；全程未使用 `git checkout --`）：
+  `head=681791b dirty_lines=3`、`BAR4|start` 与 `BAR4|end` 均 `8/2dadaed0/690ddbc0/key_len_only=125`、
+  `BAR4_VERDICT|same=YES|diff=无|problems=无/无`（判决参与退出码）、`== 计数: RED-OK=21, SURVIVED=1 ==`（SURVIVED 仍是 M13）、`== 锁已释放 ==`。
+- **补刀没有改变任何一支判决**：新台账与提交台账逐列比（列数从表头现取、行数当分母打出来，`elapsed_s` 归一）
+  ⇒ `ROWS|committed=22 new=22 cols=10/10` + `DIFF|cells=0 ids=无`。
+- **口径边界（别把话说满）**：首尾同字节只证"整跑开始与结束那两个时刻完备且相同"，**不**证"中途一次没被写过又改回来"；
+  中途不变仍由 `ZBOT_HOME` 临时根隔离 + 杠② 不启动 serve 来保证，与杠①/杠③ 同口径。真 key 全程只量长度（125），值未进任何读数。
+  逐字原文与六支对照输出见 `p27/EVIDENCE.md` §13.7。

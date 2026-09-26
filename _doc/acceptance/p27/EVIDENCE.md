@@ -1158,9 +1158,83 @@ BAR1_DONE|end=2026-09-27 03:20:51 dir=… HEAD=0b47cc8 dirty_tracked=0 src_md5_d
 - 杠④：**先记一处我这节的空档**——`p27_mutation.py` 这五跑**没有**采样 `~/.zbot`（`grep -c bar4 rerun_2.log rerun_4.log rerun_env.log` 全是 0），
   所以杠② 这五跑（墙钟合计约 15 分钟）里"不变量成立"这句话**没有直接读数**，只能由前后两天的杠①/杠③ 驱动采样点（它们每个 `ROUND`/`ROUND_START` 都打一条 `bar4=`）夹住。
   本节能引的都是那些点：`8/2dadaed0/690ddbc0` 全等，真 key 只量长度 `key_len_only=125`，值未被读取。
-  要把这个空档补成硬账，就该在 `p27_mutation.py` 的每跑首尾各打一条 `bar4=`（下一步做，别在做了之前先声称）。
+  ~~要把这个空档补成硬账，就该在 `p27_mutation.py` 的每跑首尾各打一条 `bar4=`（下一步做，别在做了之前先声称）~~
+  → **已由 §13.7 补成硬账**（六支对照证量具有牙 + 整批复跑逐列不变）。
   锁的纪律这五跑是齐的：各自打印 `== 锁已释放 ==`，我只 `os.close(fd)`，未 `unlink` 共享锁。
 - 跨轮一致性那把尺的口径错与修补（`CROSS|e2e_verdict` 数出 4 那件事）**写在 `p28/EVIDENCE.md` P28-lead-10**——
   尺和被量的判据都在 p28 那一族，别在两个文件里各写一遍然后各自漂。本节只借用它的结论：
   杠③ 在当前树成立 —— `0b47cc8` 上 03:21:26–03:57:32 串行三轮，每轮 `checks=32 pass=32 fail=0`、
   `CROSS|e2e_verdict=1`、`CROSS_CTRL|…实测=2`，且 `BAR3_SRC_MD5_END` 与 START 同字节 ⇒ `§8.12.5`/`§8.13.6` 那句"待补"可以划掉。
+
+## §13.7 把 §13.6 那句"下一步做"兑现掉：杠② 现在自己采 `~/.zbot`，六支对照 + 整批复跑逐列不变（09-27 04:04:46–04:07:21，主编亲测）
+
+上一节的空档原话（`EVIDENCE.md:1158–1162`）："**先记一处我这节的空档**——`p27_mutation.py` 这五跑**没有**采样 `~/.zbot`
+…… 要把这个空档补成硬账，就该在 `p27_mutation.py` 的每跑首尾各打一条 `bar4=`（下一步做，别在做了之前先声称）。"
+这一节做掉它，并按老规矩**先证量具有牙，再拿它量一次整批**。
+
+**改了什么**（`p27_mutation.py` 795 → 945 行，`git diff --numstat` = `152 2`）：新增 `PROFILE_DIR`、
+`bar4_sample()`（只量条目数 + `config.properties`/`state.db` 的 md5 前 8 位 + `minimax.api.key` 的**长度**，值一次都不读）、
+`bar4_verdict()`（首尾同字节才算 `same=YES`，且两次采样都必须完备）、`bar4_probe()`（六支对照），并把 `run_all()`
+的收尾 `return 0` 换成"判决参与退出码"。还加了一个 `ZBOT_LEDGER_OUT` 出口 —— 默认仍写**受跟踪**那份台账（正式台账必须脚本自写），
+它只服务下面那次"自证跑不覆写提交树字节"。那 2 条删除行就是 `LEDGER = os.path.join(...)` 原句与 `return 0`。
+
+**"只改量具、没改被量的表"这句话要有尺**，不能靠我描述：
+
+```
+$ git diff --ignore-all-space -- '*.java' --numstat | wc -l          ⇒ 0     # Java 侧一字未动
+$ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
+    | grep -vE "^(\+\+\+|---)" | grep -E 'id="M|expect=|allow_extra=' | wc -l  ⇒ 0     # 预期红集表零改动
+```
+
+**量具有牙**（`python3 _doc/acceptance/p27/p27_mutation.py --bar4-probe`，rc=0，不取锁、不跑 mvn；原文，真 profile 只出现长度）：
+
+```
+CTRL1|真 profile 连采两次应相同=YES
+CTRL2|临时目录未改动应相同=YES
+CTRL3|加一个文件应且只应点名 entries=YES diff=entries
+CTRL4|改 config 字节应点名 cfg_md5+key_len=YES diff=cfg_md5,key_len
+CTRL5|缺文件必须带 PROBLEMS 且不许算成相同=YES
+CTRL6|独立 shell 尺=YES python=8/2dadaed0/690ddbc0/125
+      shell=8/2dadaed0/690ddbc0/125
+BAR4_PROBE|fails=无
+```
+
+CTRL3–CTRL5 是三张"必红"的对照，其中 **CTRL5 是这刀的全部理由**：删掉 `config.properties` 后两次采样字节相同，
+一把只看"start == end"的尺会说 `same=YES` —— 所以判决要求"两次采样都完备"，缺文件当场 `same=NO` +
+`PROBLEMS=config.properties_missing`（原文：`BAR4_VERDICT|same=NO|…|diff=无|problems=config.properties_missing/无`，
+即 `diff=无` 而 `same=NO`，两者不是一回事）。CTRL6 拿一支完全独立的 bash 尺
+（`ls -A | wc -l` / `md5 -q | cut -c1-8` / `awk -F= '/^minimax\.api\.key=/{print length($2)}'`）对拍 python 侧读数，
+防的是"自己算自己验"那种同源自证。`--selftest` 另跑一遍：`SELFTEST|cases=14 failures=0`。
+
+**整批复跑（补刀后的第一次正式量）**：`ZBOT_LEDGER_OUT=$HOME/.cache/zbot-p27-lead/LEDGER.bar4probe.tsv` 重定向台账，
+控制台 `~/.cache/zbot-integrate/p27_mut_bar4_batch.log`（`*.log` 被 `.gitignore` 拦 ⇒ 决定性行原样贴在这里）。
+起 04:04:46、止 04:07:21（日志 `ctime` 与台账 `#generated_by 2026-09-27T04:07:21+0800 pid=52787`），2 m 35 s，
+`head=681791b`、`dirty_lines=3`（就是这份 harness 改动 + 两个 `__pycache__`）：
+
+```
+TABLE_SELFCHECK|mutants=22 ids_unique=yes fields_exact=yes dup_keys=0 expectations_nonempty=yes
+TARGET|repo=/Users/zifang/workplace/ceo_workplace/z-opc-foundation/z-bot head=681791b branch=main dirty_lines=3
+BAR4|start|dir=/Users/zifang/.zbot|entries=8|cfg_md5=2dadaed0|db_md5=690ddbc0|key_len_only=125
+   rc=0 elapsed=3.0s [INFO] Tests run: 88, Failures: 0, Errors: 0, Skipped: 0
+== 计数: RED-OK=21, SURVIVED=1 ==
+   M13-non-atomic-state-write —— 丢掉 ATOMIC_MOVE：单进程读写序下这条不可观测（预期可能 SURVIVED，见 EVIDENCE §6）
+BAR4|end|dir=/Users/zifang/.zbot|entries=8|cfg_md5=2dadaed0|db_md5=690ddbc0|key_len_only=125
+BAR4_VERDICT|same=YES|start=(8, '2dadaed0', '690ddbc0', '125')|end=(8, '2dadaed0', '690ddbc0', '125')|diff=无|problems=无/无
+== 锁已释放 ==
+```
+
+**新台账与提交台账逐列比**（这次比对的尺把 §13.5 那个"过滤器把 22 行全筛掉却打印 0 格不同"的病补掉了 ——
+列数从表头现取、并把行数当分母打出来，`elapsed_s` 一列归一后参与比对）：
+
+```
+ROWS|committed=22 new=22 cols=10/10
+DIFF|cells=0 ids=无
+```
+
+⇒ 补这一刀没有改变任何一支的判决，`RED-OK=21 SURVIVED=1` 与 §13.1 的 r4/r5 同形；唯一 `SURVIVED` 仍是 **M13**（§11.4 判过的等价变异位）。
+受跟踪台账**字节未被覆写**：`md5 -q _doc/acceptance/p27/LEDGER.tsv` 在这一次跑的前后都是
+`b52619503be915960b91831daf7a1b5b`（重定向正是为了这一条；未使用 `git checkout --` 当还原步）。
+
+**这一节证到哪一步为止**：它证的是"杠② 整跑期间真 profile 的**首尾**两个时刻读数完备且相同"。
+`same=YES` 不证明"中途一次都没被写过又改回来"—— 中途不变这条仍靠 `ZBOT_HOME` 临时根隔离与"杠② 不启动 serve"的结构保证，
+和 §13.6/杠① 用的是同一个口径，不把它说成比读数更强。锁的纪律这次也一样：打印 `== 锁已释放 ==`，只 `os.close(fd)`，未 `unlink`。
