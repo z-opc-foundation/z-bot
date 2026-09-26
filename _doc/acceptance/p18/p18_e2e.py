@@ -204,6 +204,7 @@ class FakeImHandler(BaseHTTPRequestHandler):
                 else:
                     query[pair] = ""
         rec = {"t": time.time(), "method": "POST", "path": path, "raw_target": self.path,
+               "peer": self.client_address[0],
                "query": query,
                "headers": {k.lower(): str(v) for k, v in self.headers.items()},
                "body": raw.decode("utf-8", "replace"),
@@ -628,9 +629,14 @@ def section_a(base_url, fake_base):
                   "A17 sign 独立重算比对（HMAC-SHA256(secret, ts+\"\\n\"+secret) 的 base64，URL 解码后）",
                   "A18 钉钉体形状：msgtype=text 且 text.content 就是回复串"):
             check(n, False, "没有钉钉请求可断")
-    check("A19 全程没有朝非回环地址发过东西（真域名零外连）",
-          all("127.0.0.1" in l or "[::1]" in l for l in jvm_connections(gw.pid())),
-          "JVM TCP 连接=%d 条，全为回环" % len(jvm_connections(gw.pid())))
+    conns = jvm_connections(gw.pid())
+    outside = [l for l in conns if "127.0.0.1" not in l and "[::1]" not in l]
+    recs = im_records()
+    peers = sorted({r.get("peer") for r in recs})
+    check("A19 真域名零外连：JVM 无非回环 TCP 连接，且假端点侧对端全是 127.0.0.1",
+          not outside and len(recs) >= 4 and peers == ["127.0.0.1"],
+          "JVM TCP 行=%d 其中非回环=%d；假端点收到=%d 对端=%s（阳性对照：收到数>=4）"
+          % (len(conns), len(outside), len(recs), peers or "-"))
     gw.terminate()
     gw.close()
     check("A20 收尾：A 段 JVM 已退出（waitpid 过）", not gw.alive(), "rc=%s" % gw.rc())
@@ -671,6 +677,8 @@ def section_b(base_url, fake_base):
     gw2.start()
     ok2 = gw2.listening(gw2.http_port)
     check("B4 重启后 gateway 又起来了（同一数据根）", ok2, "pid=%d listening=%d" % (gw2.pid(), ok2))
+    wait_until(lambda: any(r["state"] == "delivered"
+                           for r in (read_ledger(root, "B-poll")[0] or [])), 45)
     marker = recovered_marker()
     rows2, how2 = read_ledger(root, "B-afterrestart")
     states2 = {}
@@ -769,17 +777,23 @@ def hygiene(before):
           and after["state_md5"] == before["state_md5"],
           "n=%d config=%s state=%s" % (after["n"], (after["config_md5"] or "")[:8],
                                         (after["state_md5"] or "")[:8]))
-    leaked = []
-    for path in glob.glob(os.path.join(OUT, "env-*.txt")) + glob.glob(os.path.join(OUT, "jvm-*.out")):
-        text = io.open(path, encoding="utf-8", errors="replace").read()
-        for tok in (FAKE_APP_SECRET, DING_SECRET, DING_TOKEN, STUB_KEY):
-            if tok in text and "env-" in os.path.basename(path):
-                leaked.append("%s:%s" % (os.path.basename(path), "含 stub 值（设计如此，值本身是假的）"))
-        if len(re.findall(r"[A-Za-z0-9]{100,}", text)) and "t-fake" not in text:
-            pass
-    check("H5 现场文件里出现的 key 只有 stub 串（真 key 从不进本量具，长度判据见 §未做）",
-          all("len=" in io.open(p, encoding="utf-8").read() or True for p in []),
-          "env-*.txt 用 len= 形式记录 KEY 字段，不落值：%d 份" % len(glob.glob(os.path.join(OUT, "env-*.txt"))))
+    long_tok = re.compile(r"[A-Za-z0-9_-]{100,}")
+    scanned, hits = 0, []
+    for path in sorted(glob.glob(os.path.join(OUT, "*"))):
+        if os.path.isdir(path):
+            continue
+        try:
+            text = io.open(path, encoding="utf-8", errors="replace").read()
+        except Exception:
+            continue
+        scanned += 1
+        # 阳性对照：同一把尺对 125 字符的合成长串必须命中，否则 0 命中没意义
+        assert long_tok.search("x" * 125), "尺坏了"
+        for m in long_tok.finditer(text):
+            hits.append("%s:%d字符" % (os.path.basename(path), len(m.group(0))))
+    check("H5 现场文件里没有 100+ 字符的令牌串（真 key 125 字符，从未进过量具）",
+          not hits, "扫了 %d 份现场文件，命中=%s；尺的阳性对照=125 字符合成串命中"
+                    % (scanned, hits or "0"))
     return after
 
 
