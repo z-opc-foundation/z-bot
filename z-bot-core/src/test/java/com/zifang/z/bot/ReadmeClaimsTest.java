@@ -35,6 +35,8 @@ import static org.junit.Assert.fail;
  */
 public class ReadmeClaimsTest {
 
+    private static File root;
+
     /** 一条定量主张：名字 + README 里的原文正则（第 1 组是被钉的数）+ 代码侧重算值。 */
     private static final class Claim {
         final String name;
@@ -289,15 +291,39 @@ public class ReadmeClaimsTest {
     }
 
     private static File repoFile(String relative) {
-        List<File> bases = Arrays.asList(new File(".").getAbsoluteFile(),
-                new File("..").getAbsoluteFile(), new File("../..").getAbsoluteFile());
-        for (File base : bases) {
-            File f = new File(base, relative);
-            if (f.exists()) {
-                return f.getAbsoluteFile();
-            }
+        return new File(repoRoot(), relative);
+    }
+
+    /**
+     * 仓根 = 从 CWD 往上，第一份 pom.xml 里带 {@code <revision>} 的目录。
+     *
+     * <p>不能按"文件存在"逐个挑：surefire 的 CWD 是 {@code z-bot-core}，那里也有一份
+     * {@code pom.xml}（子 pom，不含 {@code <revision>}），先命中它就等于拿子 pom 当版本尺的
+     * 参照集 —— 参照集为空，整把尺会静默变成"没数字可对"。所以根只由"这份 pom 带
+     * {@code <revision>}"决定，且 {@code pom.xml} 与 {@code README.md} 一律从同一个根起算。</p>
+     */
+    private static synchronized File repoRoot() {
+        if (root != null) {
+            return root;
         }
-        throw new IllegalStateException("仓根里找不到 " + relative
-                + "（从 " + new File(".").getAbsolutePath() + " 起找）");
+        File dir = new File(".").getAbsoluteFile();
+        for (int up = 0; dir != null && up < 6; up++) {
+            File pom = new File(dir, "pom.xml");
+            if (pom.isFile() && readQuietly(pom).contains("<revision>")) {
+                root = dir.getAbsoluteFile();
+                return root;
+            }
+            dir = dir.getParentFile();
+        }
+        throw new IllegalStateException("找不到仓根：从 " + new File(".").getAbsolutePath()
+                + " 往上 6 层内没有一份 pom.xml 含 <revision>");
+    }
+
+    private static String readQuietly(File f) {
+        try {
+            return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return "";
+        }
     }
 }
