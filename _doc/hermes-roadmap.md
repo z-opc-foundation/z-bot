@@ -739,3 +739,45 @@ _(W1 起逐期追加)_
 **P10 剩余子项 (P10d 之后)**:
 - P10e: README.md (7 仓欠账) + `<revision>` 0.2.0→0.3.0
 - P10f: 0.3.0 发 Central (走既有 dry-run→deploy→repo1 同步→pull 集成验证流程) + 全链路回归验收
+
+---
+
+## 8.9 第五期合并轮（09-26 2026-09-26 19:46:58+0800，主编亲测）
+
+**并了什么**：并入 `w8-p26`（p26c 收口）、`w10-p24`（p24d）、`w11-p27`（p27b）；当前提交树
+`@Test=1060` / 测试文件 97 个（`git grep -c '@Test' HEAD -- z-bot-core/src/test` 现算）。
+其间先落一条我自己该负责的合并回归修复。
+
+**这条回归只有合并树能抓到**：`w9-p22` 带进来的 `tool/env/ExecEnvConfig.java` 有两处自解析
+`System.getProperty("user.home")`（docker socket 缺省、docker ledger 缺省目录），把 P11b 红线 1 的
+"profile 目录单一解析点"从 1 个撑成 3 个 —— p11b 的 E6 在 p22 自己的单棒四杠里从没跑过，所以全程绿。
+修法：两路都交回 `BotConfig`（新增 `userHome()` 原语 + ledger 回落 `defaultConfigDir()`），
+现在 `grep -rn user.home z-bot-core/src/main/java` 只有 `config/BotConfig.java` 一个文件命中。
+
+**目标树杠①（全 reactor，不 `-pl`）×3**：`BAR1 run=1 rc=0 parse_rc=0 BAR1PARSE /Users/zifang/.cache/zbot-integrate/final1000plus/bar1_1.log module_lines=1 class_lines=96 module_sum=1058 class_sum=1058 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES BAR1 run=2 rc=0 parse_rc=0 BAR1PARSE /Users/zifang/.cache/zbot-integrate/final1000plus/bar1_2.log module_lines=1 class_lines=96 module_sum=1058 class_sum=1058 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES BAR1 run=3 rc=0 parse_rc=0 BAR1PARSE /Users/zifang/.cache/zbot-integrate/final1000plus/bar1_3.log module_lines=1 class_lines=96 module_sum=1058 class_sum=1058 F=0 E=0 S=0 build=SUCCESS socket_hits=0 agree=YES `（逐字读数在 `~/.cache/zbot-integrate/final1000plus/SUMMARY.txt`），
+判词 `TOKEN=BAR1_GREEN_3OF3`、`notgreen_or_fatal=0`、`socket_bad_runs=0`。
+
+**目标树杠③（跨期回归面）**：老 13 序列 19 跑 `nonzero_rc=1`；补漏清单
+（p24/p26/p27 三支新序列 + p16 复测）另 12 跑 `nonzero_rc=0`。
+唯一那次红是 `p16` rc=1，红在**它自己的量具**：段 A 去 `stat()` 一个只在连接打开时存在的 `state.db-shm`，
+抛 `FileNotFoundError`（日志里它自己也打印了"读数不可信"）。同一 harness 在合并树复跑 3/3 rc=0
+⇒ 判为**量具在瞬时 sidecar 文件上的竞态**，不是产品回归；这条 FAIL 不复现，不记进产品缺陷账。
+
+**杠④**：`~/.zbot` 在杠① 的 t0/t_end、杠③ 的 t0/三轮中点/t_end、补漏 4 个中点共十余个采样点逐格相同
+`entries=8 / config.properties=2dadaed0 / state.db=690ddbc0`；真 key 全程只量长度（125），值未被读取。
+
+**四杠之外的账（不当已通过）**
+- p24d 台账 `27 KILLED / 1 SURVIVED / 1 PARTIAL`；p27b 台账 21 支 `8 RED-OK / 10 PARTIAL / 3 SURVIVED`（检出 85.7%），
+  三处 SURVIVED 已点名（M13 ATOMIC_MOVE 单进程不可观测、M17 并发闸只数 RUNNING、M19 关 reconcile 的双写覆盖）⇒ 并发测试仍缺。
+- p27b 交接两条**尺的缺陷**未改：`p27_mutation.py` 的锁文件 0 字节时 `int()` 抛错 → 走 `unlink` 接管别人的锁
+  （真持有者活着时闸形同虚设）；`p27_e2e.py` 实测完全不取锁。
+- p24d 报"我自己四枚提交从 `w10-p24` 消失"：那四个 SHA 在本仓对象库 `git cat-file -t` 全部
+  `Not a valid object`，且 `w10-p24` reflog 里没有它们的位置 ⇒ **失窃叙述不成立**，其步 1—4 都在 `9b4a66c` 里。
+- 我这轮两处自造的量具事故要记着：① `bar3_merged.sh` 用 `grep -c add_argument` 猜入参口径，把只吃
+  `--only/--json` 的 `p12` 喂了 `--label` ⇒ `rc=2 logbytes=112` 被我读成"这系列跑不动"（实为派发器缺陷，
+  现改为"脚本自己声明 `--label` 才传"）；② `grep -c` 命中 0 时退出码非 0，把 `XBAD=0` 那次整条 `&&` 链
+  短路掉了 —— 第一次提交因此"什么都没写进去"，是 `git commit` 报 `nothing added to commit` 才暴露的。
+
+**待收口**：P25（ACP）与 P28（控制台对等）的收口棒 p25b/p28b **又各自死于 150 轮**，
+`w12-p25`/`w13-p28` 上仍有未提交的实现与验收目录 ⇒ 这两支没并进 main，下一轮第一动作是保现场再跑四杠。
+P19（命令表单源多端）未派（等 P28 的 `WIRING.md` 接缝）；P29（README×7 + 抬号 `0.2.0→0.3.0` + 发 Central + 对外拉取验证）未开工。
