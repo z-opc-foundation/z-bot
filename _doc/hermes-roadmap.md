@@ -160,6 +160,14 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
   `curl -o /dev/null -w %{http_code} repo1.maven.org/maven2/io/github/yuku123/z-agent-kernel/{0.2.0,0.2.0-p20}/` **两个都是 404**,
   即整个 kernel 从来没上 Central, z-bot 任何一支都依赖本机 sibling 构建 (不是 P20 引入的, 但 P20 把它变成了分叉的版本线)。
   ⇒ P20 并入的前置是 kernel 出一个**真发布**的 0.2.1 并让所有仓一起抬 pin (或把 `Toolset` 那层从内核收回 z-bot 侧), 不能把私有快照 `0.2.0-p20` 带进 main。
+- **P20 的归宿 (09-27 04:2x 实测, 结论: 不并 `w2-p20`, 它已被 `w2-p20b` 整支取代)**:
+  本条雷的"前置"两件都已成立 —— main 的 `<z-agent-kernel.version>` 已是 **0.2.1** (`pom.xml:69`, 内核 0.2.1 已 install 到本机并推 GitHub),
+  且 `Toolset` 那一层落在 kernel-tool 的发布件里 (`unzip -l z-agent-kernel-tool-0.2.1.jar` = 11 个 class, 含 `ToolsetDistributions.class`,
+  与私有快照 `0.2.0-p20` 那份**同类计数**)。真正判死的是**内容已被覆盖**：
+  `git show w2-p20:…/Toolkit.java` = 529 行 vs main 567 行, 且**公开方法集合逐字比较后 main 独有的差集为空、w2-p20 独有的差集也为空**
+  (`comm -13 <(main 的 public 签名排序) <(w2-p20 的 …)` ⇒ 无输出); `McpBridge.java` 同形 (w2-p20 150 行 vs main 316 行, 独有方法差集空),
+  而那支 stub 覆盖 hack 早已被真注册表替换 —— `McpBridge.java:186`/`:247` 现在调的是 `toolkit.deregisterToolset(toolset(), owner())`。
+  ⇒ 该分支的残余价值只剩历史; 它带着私有快照 pin, **不并**。工作树 `/private/tmp/zbot-wt-p20` 与分支 `w2-p20` 的删否属于不可撤销动作, 等点头。
 
 **P16 网关送达三件套** — 锚点 §2#17 #18 · 边界 `channel/Gateway.java`, `channel/ChannelBus.java`, 新 `channel/TurnLease.java`, `channel/DeliveryLedger.java`, `channel/DeadTargets.java`, `channel/Supervisor.java`
 - **turn lease 按解析后 session_id** (照她的理由: 多对一 `switch` 会让按路由键的锁错位, 两个聊天交织刷同一份 transcript); 超时 fail-open + 身份校验幂等释放;
@@ -1211,3 +1219,35 @@ $ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
   并打印 `api_web_with_alias` 与 `api_web_no_alias` 两个数（本次都是 6，说明这批没有别名混进 web 段）。
   这与 §13.5 那把"过滤器把 22 行全筛掉却报 0 格不同"的尺是同一个病的第三种现形：**凡"两边比一比"的尺，
   期望集必须由被比那一侧的规则现算，且分母要打印。**
+
+### 8.13.9 浏览器层 `/help` 实输出 == `/api/commands` 的 web 段（09-27 04:16:01–04:18:47，主编亲测）
+
+`P28-lead-11` 的结论搬到这一层：起**真 serve**（`bind(0)` 取到 64461、临时 profile + `stub-key-not-real`）＋开**真页面**，
+在 `#msg-input` 里输入 `/help` 走页面自己的 `keydown` 监听（`index.html:1538`）⇒ DOM 那条气泡与 API 的 web 段
+**逐字逐序相同**：`COMMANDS|rows=29 web_rows=6` → `A|help_blocks=1 … B|dom=6 api_web_no_alias=6 … VERDICT|same=YES`。
+不是空跑也不是过定：三把对照都落在"必须 False"那一侧 —— `CTRL|web_equals_all=False`、
+`CTRL_RUNTIME|dom_vs_all: dom=6 all=26 equal=False`、`dom_vs_tui: tui=26 equal=False`。
+收尾 `KILLED|pid_gone=True listener_on_port=''` + `BAR4_ASSERT|cfg_same=True db_same=True`。
+
+- **这节没证的三样**（本机 `browser-use` 报 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE … viewport=0x0, visibilityState=hidden`）：
+  物理按键与窗口焦点、视觉样式与布局、窗口可见时的点击路径。触发方式换成页内 `dispatchEvent(KeyboardEvent)`，
+  并**以"`dispatchEvent` 返回 `false`（`index.html:1540` 的 `preventDefault()` 生效）+ 气泡进 DOM"作为"页面自己的 handler 真跑了"的读数** ——
+  而不是直接调 `handleSlash()`（那会绕开监听器，也就绕开了本节要量的那一环）。
+- **尺先被验再用**：`dom_compare.py` 上四份合成 DOM 自证（齐 / 少一条 / 多一条 / 整块缺失）⇒ 第一遍就抓出自己
+  `line[3:]` 把前导 `/` 一起吃掉这个 bug（"齐"那份也报 NO）。另外避开一个假不一致：`serve_up.py` 的 `web_names` 不滤别名行，
+  而 DOM 的规则是 `!aliasOf && endpoints 含 web` ⇒ 判等尺**按被比那一侧的规则从原始 `rows` 现算期望集**，
+  并把两个分母都打印（`api_web_with_alias=6 / api_web_no_alias=6`，本次相等说明这批没有别名混进 web 段）。
+  这是 §13.5 那把"过滤器把 22 行全筛掉却报 0 格不同"的尺的第三种现形：**凡"两边比一比"，期望集由被比侧规则现算 + 分母必须打印。**
+- 量具在 `~/.cache/zbot-help-browser/`（`serve_up.py` / `dom_compare.py` / `kill.py`，不在仓内 ⇒ 复算步骤与全部读数原样贴在
+  `p28/EVIDENCE.md` P28-lead-11）。
+
+### 8.13.10 最后一个未并分支 `w2-p20` 判为"已被取代、不并"（09-27 04:2x，实测两条差集）
+
+`git branch -a` 逐支过 `git merge-base --is-ancestor <b> main`：19 支里 **18 支已并**，唯一 `UNMERGED ahead=2` 是
+`w2-p20`（`d79e321` 私有快照 pin + `7043e91` Toolkit 半成品）。§8 P20 那条雷的两件前置今天都已成立
+（main 钉 `0.2.1`；`z-agent-kernel-tool-0.2.1.jar` 11 个 class、含 `ToolsetDistributions.class`），
+但**并它的理由消失了**：`comm -13 <(main 的 Toolkit public 签名) <(w2-p20 的)` ⇒ 无输出（w2-p20 独有的方法差集为空，
+行数 529 < main 567），`McpBridge.java` 同形（150 < 316），且它想换的那个 stub 覆盖 hack 早在 `McpBridge.java:186`/`:247`
+被真注册表调用 `toolkit.deregisterToolset(toolset(), owner())` 取代。⇒ **P20 的产物已通过 `w2-p20b`（`7a5f125`）在 main 里，
+`w2-p20` 只剩历史价值**；删分支/删工作树属不可撤销动作，等点头，不做。
+至此"集成收口 = 四期分支并入 main 并在目标树复测四杠"这一条的**分支侧全部结清**，目标树四杠读数见 §8.13.7–§8.13.9。
