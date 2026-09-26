@@ -12,8 +12,11 @@
   4. A 组：**真 PTY + 真管道**各起一个探针 JVM，量 `runBounded` 是否真把 fd 0 继承给 `stty`
   5. B 组：**真 `z-bot serve` 子进程** + 自写裸 socket HTTP 客户端，把 `/bot/chat/stream` 的
      **线上原始字节**（含 chunked 框架）落盘，再逐帧判 SSE 语法与换行转义
-  6. C 组：命令面三张表（`SlashRegistry` / `LOCAL_COMMANDS` / web `index.html`）与
-     `ROUTES.tsv`、`WIRING.md` 里写死的条数与成员，**按 WIRING.md 自述的口径重算一遍并比对**
+  6. C 组：命令面四张表 —— P19 并入后 A/B/D 三段从**真进程** `GET /api/commands` 的
+     `endpoints` 分段取（http / tui−http / web），C 从盘上 `index.html` 的分支取；
+     与 `ROUTES.tsv`、`WIRING.md` §3 的条数与成员**三向比对**（文档 == 重算 == 本文件定值）。
+     原先那三处静态解析（注册表 `name()` 字面量 / `LOCAL_COMMANDS.asList` / web `命令列表：`）
+     降级成 T8 的回归探测器：P19 之后任何一处再长出字面量清单，就是绕开单源。
   7. D 组：杠④ 三时点 + 卫生（假 LLM 实际收到的 Authorization 只能是 stub）
 
 每条判据都写明了"坏实现长什么样"；写不出坏实现的判据不放进来的纪律见 EVIDENCE.md `## p28c 杠③`。
@@ -53,20 +56,23 @@ BAR4_HOME = os.path.expanduser("~/.zbot")
 BAR4_ENTRIES = 8
 BAR4_CFG = "2dadaed0"
 BAR4_DB = "690ddbc0"
-# WIRING.md §1/§3 与 ROUTES.tsv 声称的数字：尺的重算必须与文档一致，漂了就红
+# WIRING.md §1/§3 与 ROUTES.tsv 声称的数字：尺的重算必须与文档一致，漂了就红。
+# 这一格定值自 P19 并入起是**三向对齐**的一向（文档 == 重算 == 定值），
+# 数来自 `p28_e2e.py lead_p19_emit` 的 WIRING_EMIT 行（合并树 79c77d0，量具日志 p28_emit.log）：
+# 3.4 与 3.5 从 1 掉到 0 是 P19 关掉的两条假广告（`/exit`、`/help`），不是量具坏。
 WIRING_BUCKETS = {
     "服务端注册表（唯一单源）": 20,
     "终端私有命令": 9,
     "3.1 只在服务端注册表": 17,
     "3.2 只在 TUI 私有": 9,
     "3.3 只在 web 有分支": 0,
-    "3.4 web 广告了但没有分支接住": 1,
-    "3.5 web 有分支但没广告": 1,
+    "3.4 web 广告了但没有分支接住": 0,
+    "3.5 web 有分支但没广告": 0,
     "3.6 两边都有、实现不同": 6,
-    "合计点名条数": 34,
+    "合计点名条数": 32,
 }
-ROUTES_PATHS = 22
-ROUTES_ROWS = 25
+ROUTES_PATHS = 23
+ROUTES_ROWS = 26
 
 # 一帧的语法：`event: <name>\ndata: <单行正文>`，帧与帧之间由 \n\n 分隔（分隔符已被 split 吃掉，
 # 所以帧内没有收尾 \n —— 原先内联写的 `\n$` 就是这个意思上的错，三帧全被判"语法坏"）。
