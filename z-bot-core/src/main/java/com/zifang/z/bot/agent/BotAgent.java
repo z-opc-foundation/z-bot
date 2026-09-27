@@ -180,6 +180,17 @@ public class BotAgent {
     /** MCP bridge 聚合（null = 未启用），按 config.mcp.servers 拉起各 server 并把工具注入 toolkit。 */
     private final McpManager mcpManager;
 
+    /**
+     * 没有"可以等的人"：委托子代理为 true（{@code DelegateManager.buildChild} 盖上）。
+     * 见 {@link #emitToolResult} 里那条自动 deny 分支。
+     */
+    private final boolean nonInteractive;
+    /** 本 agent 替用户拒掉了几次审批（审计与测试对账用，只增不减）。 */
+    private final java.util.concurrent.atomic.AtomicInteger subagentAutoDenied =
+            new java.util.concurrent.atomic.AtomicInteger();
+    /** {@link #shutdown()} 是否已经跑过 —— 异步委托的 {@code finally} 里那句收口唯一的可观测证据。 */
+    private volatile boolean shutDown;
+
     /** 执行前需要打快照的破坏性工具（写文件 / 任意命令 / Maven 构建都会改沙箱）。 */
     private static final Set<String> CHECKPOINT_TOOLS = new HashSet<String>(
             Arrays.asList("write_file", "exec", "mvn_build"));
@@ -234,6 +245,7 @@ public class BotAgent {
         }
         this.checkpoints = b.checkpointManager;
         this.delegation = b.delegation;
+        this.nonInteractive = b.nonInteractive;
         this.memoryStore = b.memoryStore;
         this.skillsRoot = b.skillsRoot;
         if (b.config != null) {
@@ -685,6 +697,37 @@ public class BotAgent {
     private void emitToolResult(ToolCall effectiveCall, ToolResult result, StreamListener listener) {
         String name = effectiveCall.getName();
         if (Confirmations.isRequired(result)) {
+            if (nonInteractive) {
+                // 子代理没有"可以等的人"。修之前这里照旧抛 ToolConfirmationNeeded，
+                // chat() 捕获它（现 :324）并把 "WAIT_CONFIRM:tool|args|reason" 揉成
+                // **最终回复返回**，DelegateManager 再把那条字符串记成 TASK_COMPLETED
+                // ⇒ 父模型收到的是一次"看起来成功完成"的委托，而实际一个字节都没执行、
+                // 也没任何人被问过。
+                // 现在按 hermes 的做法给子代理装非交互裁决：默认 deny（delegate_tool.py:58-86
+                // 整块，_subagent_auto_deny 本体 :74-86 —— "Returns 'deny' so the subagent
+                // sees a refusal it can recover from"），让子模型看见一句它能从中改道的
+                // 拒绝、回合继续走。
+                // 不设 pendingConfirmation、不抛暂停信号：那是交互路径的契约，
+                // 子代理这边没有"可以等的人"来恢复它。
+                String reason = Confirmations.reason(result);
+                // exec 闸门已经替这次调用在本 agent 私有的队列里落了一条 pending
+                // （入队发生在 BuiltinTools.exec 里，见 BuiltinToolsExecGateTest
+                // #dangerousCommandQueuesRequestAndAsks，不在 BotAgent 这一层）。裁决既然当场做了，
+                // 那条记录就必须同场结掉 —— 否则子代理每撞一次闸门就攒一条永不消费的待批，
+                // 正是红线 8 禁止的账实分离。DENY 不留任何可复用痕迹。
+                String requestId = Confirmations.requestId(result);
+                if (approvals != null && requestId != null) {
+                    approvals.resolve(approvals.currentSessionKey(), requestId,
+                            ApprovalService.Resolution.DENY);
+                }
+                int n = subagentAutoDenied.incrementAndGet();
+                LOG.warn("[BotAgent] 子代理 #{} 次申请人工确认被自动拒绝: {} ({})", n, name, reason);
+                String denial = "[auto-denied] 子代理不能申请人工确认，该调用未执行：" + reason
+                        + "（要放开请改父配置：agent.exec.confirm=off 或 agent.exec.confirm.whitelist）";
+                memory.add(Msg.toolResult(effectiveCall.getId(), denial));
+                listener.onEvent(new StreamEvent.ToolResult(name, null, denial, true));
+                return;
+            }
             pendingConfirmation = effectiveCall;
             enqueueApprovalRequest(name, effectiveCall, result);
             listener.onEvent(new StreamEvent.ToolResult(name, null, Confirmations.reason(result), false));
@@ -706,6 +749,14 @@ public class BotAgent {
      * {@link ToolConfirmationNeeded}），不是 hermes 那种"工具线程阻塞在自己那条审批上"。
      * 所以一个会话同时只可能有一条活待批 —— 新待批到来时，队列里更老的那些永远不会再被执行。
      * 留着它们就会出现"账记着 A、人放行后跑的是 B"（红线 8 禁止的账实分离）。</p>
+     *
+     * <p><b>子代理不会走到这里</b>（P27c）：{@code buildChild} 不注入 {@code approvalService}，
+     * {@code build()} 便给每个子 agent 现造一个 {@link ApprovalService}（见 Builder 里的
+     * {@code newApprovalService}）—— 那条队列是子 agent 私有的，父会话的 {@code /confirm}
+     * 结构上读不到。修之前子代理照旧入队 + 抛 {@code ToolConfirmationNeeded}，于是同一时刻
+     * 留着两样没人消费的东西：队列里一条永远 pending 的申请，和 {@code chat()} 揉成
+     * {@code WAIT_CONFIRM:…} 字符串当最终回复的那次"成功"。现在 {@link #emitToolResult} 在
+     * {@code nonInteractive} 时当场 deny，既不申请也不入队。</p>
      */
     private void enqueueApprovalRequest(String toolName, ToolCall call, ToolResult result) {
         if (approvals == null) {
@@ -1511,6 +1562,7 @@ public class BotAgent {
     }
 
     public void shutdown() {
+        shutDown = true;
         if (cronScheduler != null) {
             cronScheduler.stop();
         }
@@ -1520,6 +1572,27 @@ public class BotAgent {
         if (lifecycle != null) {
             lifecycle.stop();
         }
+        // P27c：委托线程池跟着 agent 走 —— 修之前它是 `private static final`，全进程共用一口，
+        // 任何 agent 的 shutdown() 都收不掉它（roadmap §W5 P27 记的那条"线程池不随生命周期
+        // 关闭"，也是这份台账里唯一一条"记了未做"却没被写进代码的）。
+        if (delegation != null) {
+            delegation.shutdown();
+        }
+    }
+
+    /** {@link #shutdown()} 是否已经跑过（异步委托 {@code finally} 里那句收口的可观测证据）。 */
+    public boolean isShutDown() {
+        return shutDown;
+    }
+
+    /** 本 agent 是否"没有可以等的人"（委托子代理为 true）。 */
+    public boolean isNonInteractive() {
+        return nonInteractive;
+    }
+
+    /** 被自动 deny 掉的审批次数（审计/测试对账）。 */
+    public int subagentAutoDeniedApprovals() {
+        return subagentAutoDenied.get();
     }
 
     public Toolkit getToolkit() {
@@ -2098,6 +2171,8 @@ public class BotAgent {
         private IterationBudget budgetOverride;
         /** 子代理禁接入 center，避免重复注册生命周期。 */
         private boolean noCenter;
+        /** 没有可以等的人（委托子代理）：审批一律自动 deny，见 {@link #emitToolResult}。 */
+        private boolean nonInteractive;
         /** 本地记忆三层；config 模式缺省建在 {@code <configDir>/memories}。 */
         private MemoryStore memoryStore;
         /** 本地技能根目录；config 模式缺省 {@code <configDir>/skills}。 */
@@ -2200,6 +2275,16 @@ public class BotAgent {
         /** 禁接入 center（子代理用）。 */
         public Builder withoutCenter() {
             this.noCenter = true;
+            return this;
+        }
+
+        /**
+         * 声明"这个 agent 背后没有可以等的人"（委托子代理由 {@code DelegateManager} 盖上）。
+         * 只改变**审批怎么裁决**（自动 deny 而不是挂起本回合），不放宽任何一档闸门：
+         * {@code ExecGuard} 的红线档照旧拦，工具能不能跑、要不要问，判定逻辑一个字没动。
+         */
+        public Builder nonInteractive(boolean v) {
+            this.nonInteractive = v;
             return this;
         }
 

@@ -206,12 +206,19 @@ public final class DelegateManager {
             String reply = child.chat(task, StreamListener.NOOP);
             IterationBudget used = child.context().budget();
             String head = "（子代理" + (label.isEmpty() ? "" : "[" + label + "] ")
-                    + "完成 steps=" + used.apiCalls() + " tokens=" + used.tokensUsed() + "）";
+                    + "完成 steps=" + used.apiCalls() + " tokens=" + used.tokensUsed()
+                    + (child.isNonInteractive() && child.subagentAutoDeniedApprovals() > 0
+                            ? " 自动deny审批=" + child.subagentAutoDeniedApprovals() : "")
+                    + "）";
             live.reply = reply;
+            // P27c：进父上下文的这一份要过预算（她的 DEFAULT_MAX_SUMMARY_CHARS=24000 那一层）。
+            // 台账里那条 live.reply 仍是全文（磁盘侧另有 REPLY_ON_DISK_CAP 那一档）。
+            SummaryBudget.Trimmed trimmed = SummaryBudget.trim(reply, summaryCap(), summariesRoot(), live.id);
             advanceQuiet(live, DelegateEvent.TASK_COMPLETED,
-                    "steps=" + used.apiCalls() + " tokens=" + used.tokensUsed());
+                    "steps=" + used.apiCalls() + " tokens=" + used.tokensUsed()
+                            + (trimmed.truncated ? " 摘要已裁切 全文=" + trimmed.spillPath : ""));
             com.zifang.z.bot.agent.InterruptScope.checkpoint();
-            return ToolResult.text(head + "\n" + reply);
+            return ToolResult.text(head + "\n" + trimmed.text);
         } catch (com.zifang.z.agent.kernel.agent.InterruptFlag.AgentInterruptedException e) {
             // 用户按了停止，不是子代理出了错：揉成 ToolResult.error 回灌给模型，
             // 等于告诉它「换个办法再试」，父 agent 就停不下来了。原样上抛交给 chat()。
@@ -279,6 +286,9 @@ public final class DelegateManager {
                 .sandbox(sandbox)
                 .sessionManager(new SessionManager(sessionDir))
                 .delegateDepth(depth + 1)
+                // 子代理跑在线程池里（异步）或父的回合里（同步），两条路上都没有人
+                // 会去消费它的待批队列 ⇒ 声明成"没有可以等的人"，审批自动 deny。
+                .nonInteractive(true)
                 .withoutCenter();
         BotAgent p = parent.get();
         if (p != null) {
@@ -352,7 +362,7 @@ public final class DelegateManager {
         if (store != null) {
             store.upsertDelegation(id, task, "QUEUED", "");
         }
-        ASYNC_POOL.submit(new Runnable() {
+        Runnable job = new Runnable() {
             @Override
             public void run() {
                 d.status = "RUNNING";
@@ -374,7 +384,10 @@ public final class DelegateManager {
                     // ★ 只推进生命周期轴：DONE 说的是"子代理自己收工了"，
                     //   投递轴这一格必须留在 PENDING —— 有人 claim + ack 才算送达。
                     //   修之前这里等于替消费者把 "ok" 一起写了（P16 同型洞）。
-                    advanceQuiet(live, DelegateEvent.TASK_COMPLETED, "异步收工");
+                    advanceQuiet(live, DelegateEvent.TASK_COMPLETED,
+                            child.subagentAutoDeniedApprovals() > 0
+                                    ? "异步收工 自动deny审批=" + child.subagentAutoDeniedApprovals()
+                                    : "异步收工");
                 } catch (Exception e) {
                     d.reply = "执行失败: " + e.getMessage();
                     d.status = "FAILED";
@@ -384,13 +397,32 @@ public final class DelegateManager {
                     if (child != null) {
                         inFlight.remove(child);
                         liveIdByChild.remove(child);
+                        // 同步那条路一直有这一步（:227），异步没有 ⇒ 子 agent 的 cron/mcp/
+                        // lifecycle 线程全留在进程里。cron 的子代理也是这个形状（cron 收口时
+                        // 就是这么写的），所以这不是设计，是漏的一行。
+                        child.shutdown();
                     }
                 }
                 if (s != null) {
                     s.upsertDelegation(id, task, d.status, d.reply);
                 }
             }
-        });
+        };
+        try {
+            asyncPool.submit(job);
+        } catch (java.util.concurrent.RejectedExecutionException closed) {
+            // 池已随 agent.shutdown() 收掉。这里必须当场判 FAILED：条目留在 QUEUED 会
+            // 永久占着"数非终态"那道宽度闸门，且调用方拿到一个永远取不到结果的 id。
+            d.status = "FAILED";
+            d.reply = "委托池已关闭，任务未提交";
+            live.error = "pool-shutdown";
+            advanceQuiet(live, DelegateEvent.TASK_FAILED, "pool-shutdown");
+            StateStore s = store();
+            if (s != null) {
+                s.upsertDelegation(id, task, "FAILED", d.reply);
+            }
+            return "异步委托未提交：" + d.reply;
+        }
         return "已提交异步委托 " + id + "（/agents 查看进度，/background result " + id + " 取回结果）";
     }
 
@@ -447,7 +479,9 @@ public final class DelegateManager {
         } else {
             tail = "\n（投递：ack 未生效 " + delivery.describe(key) + "）";
         }
-        return "[" + d.status + "] " + d.task + "\n" + d.reply + tail;
+        // 取回给控制台/模型看的这一份同样过预算；内存与 state.db 里仍存全文。
+        return "[" + d.status + "] " + d.task + "\n"
+                + SummaryBudget.trim(d.reply, summaryCap(), summariesRoot(), d.id).text + tail;
     }
 
     // ===== 内部 =====
@@ -459,7 +493,18 @@ public final class DelegateManager {
         return sm == null ? null : sm.getStore();
     }
 
-    private static final java.util.concurrent.ExecutorService ASYNC_POOL =
+    /**
+     * 异步委托的执行池。<b>实例级</b>（P27c：roadmap 记的"去掉 {@code static} 使池随 agent
+     * 生命周期关闭"这一条）—— 修之前它是 {@code private static final}，全进程共用一口，
+     * {@code BotAgent.shutdown()} 收不掉里面的线程：每开一个带委托能力的 agent 就多一条
+     * 活路线，进程要么靠 daemon 线程被强杀收尾，要么泄漏到下一次。
+     *
+     * <p>宽度仍由 {@link #submitAsync} 那道"数非终态"的闸门决定（不是 {@code newFixedThreadPool}），
+     * 与她同构：她的池是 cached，宽度在派发处裁（{@code delegate_tool.py} 的
+     * {@code _get_max_concurrent_children}）。改成固定池会把"改配置要重启"这件事
+     * 悄悄变成产品行为，闸门那条用例（连发第 4 条被顶回）也不再是同一件事。</p>
+     */
+    private final java.util.concurrent.ExecutorService asyncPool =
             java.util.concurrent.Executors.newCachedThreadPool(new java.util.concurrent.ThreadFactory() {
                 private final AtomicInteger n = new AtomicInteger();
                 @Override
@@ -469,6 +514,40 @@ public final class DelegateManager {
                     return t;
                 }
             });
+
+    /**
+     * 收池：不再接受新委托，已在飞的跑完（{@code shutdown()} 而非 {@code shutdownNow()} ——
+     * 子代理可能正写着台账，强杀会把现场留在 RUNNING）。由 {@code BotAgent.shutdown()} 调。
+     */
+    public void shutdown() {
+        asyncPool.shutdown();
+    }
+
+    /** 池是否已收（测试判"生命周期真的接上了"）。 */
+    boolean asyncPoolShutdown() {
+        return asyncPool.isShutdown();
+    }
+
+    /** 父上下文摘要的字符上限；{@code <=0} = 关掉（她的 "0 disables the ceiling"）。 */
+    private int summaryCap() {
+        return config == null
+                ? SummaryBudget.DEFAULT_MAX_SUMMARY_CHARS : config.getDelegateMaxSummaryChars();
+    }
+
+    /**
+     * 溢出全文的落盘目录：{@code <configDir>/delegate/summaries}，与
+     * {@link #ledgerRootFor(BotConfig, File)} 同一种推导（推不出就返回 null ⇒ 只裁不存，
+     * footer 里如实写明"全文没能落盘"）。裁切本身绝不依赖这个目录可写。
+     */
+    File summariesRoot() {
+        if (config != null && config.getConfigDir() != null) {
+            return new File(config.getConfigDir(), "delegate/summaries");
+        }
+        if (childSessionDir != null && childSessionDir.getParentFile() != null) {
+            return new File(childSessionDir.getParentFile(), "summaries");
+        }
+        return null;
+    }
 
     private static String str(Map<String, Object> args, String key) {
         Object v = args == null ? null : args.get(key);

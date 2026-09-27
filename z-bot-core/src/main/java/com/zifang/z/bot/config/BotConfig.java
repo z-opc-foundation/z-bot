@@ -114,6 +114,13 @@ public final class BotConfig {
     private int delegateMaxDepth = 2;
     /** 异步委托并发宽度（agent.delegate.max.children）：同时在跑的子代理上限，默认 3。 */
     private int delegateMaxChildren = 3;
+    /**
+     * 子代理回复进入父上下文的字符上限（agent.delegate.max.summary.chars）：0 = 关掉裁切。
+     * 缺省值与 {@code SummaryBudget.DEFAULT_MAX_SUMMARY_CHARS} 逐字相同 —— 这里不 import
+     * 那个类是为了让 config 包保持零业务依赖，两值相符由
+     * {@code SummaryBudgetTest#defaultCapIsTheHermesNumberAndTheConfigDefaultAgrees} 钉住。
+     */
+    private int delegateMaxSummaryChars = 24000;
     /** MCP server 列表（mcp.servers），每一项 name + stdio 命令行。空 = 不接 MCP。 */
     private List<McpServerEntry> mcpServers = new ArrayList<McpServerEntry>();
     private String centerUrl;
@@ -229,6 +236,10 @@ public final class BotConfig {
         String delegateChildren = trim(props.getProperty("agent.delegate.max.children"));
         if (!delegateChildren.isEmpty()) {
             this.delegateMaxChildren = parseInt(delegateChildren, this.delegateMaxChildren);
+        }
+        String delegateSummary = trim(props.getProperty("agent.delegate.max.summary.chars"));
+        if (!delegateSummary.isEmpty()) {
+            this.delegateMaxSummaryChars = parseInt(delegateSummary, this.delegateMaxSummaryChars);
         }
         this.centerUrl = trim(props.getProperty("center.url"));
         String appCode = trim(props.getProperty("center.app.code"));
@@ -673,6 +684,14 @@ public final class BotConfig {
     /** {@code agent.delegate.max.children}：异步委托并发宽度。 */
     public int getDelegateMaxChildren() {
         return delegateMaxChildren;
+    }
+
+    /**
+     * {@code agent.delegate.max.summary.chars}：子代理回复注入父上下文前的字符上限，
+     * {@code <= 0} = 关掉裁切。
+     */
+    public int getDelegateMaxSummaryChars() {
+        return delegateMaxSummaryChars;
     }
 
     /** MCP server 配置列表。{@code mcp.servers} 解析结果；空 = 不接 MCP。 */

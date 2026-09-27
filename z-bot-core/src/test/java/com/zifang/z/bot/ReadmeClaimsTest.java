@@ -1,6 +1,7 @@
 package com.zifang.z.bot;
 
 import com.zifang.z.bot.channel.HttpChannel;
+import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.slash.CommandCatalog;
 import org.junit.Test;
 import picocli.CommandLine;
@@ -17,6 +18,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -56,6 +58,7 @@ public class ReadmeClaimsTest {
 
     private static List<Claim> claims() {
         String pom = readRepoFile("pom.xml");
+        BotConfig defaults = emptyProfileDefaults();
         return Arrays.asList(
                 new Claim("当前源码版本", "\\| 当前源码版本 \\| `([^`]+)`", revisionFrom(pom)),
                 new Claim("内核 pin", "\\| 内核 pin \\| `z-agent-kernel\\.version=([^`]+)`",
@@ -67,7 +70,29 @@ public class ReadmeClaimsTest {
                 new Claim("/api/commands 行数", "实测返回 \\*\\*(\\d+) 行\\*\\*",
                         CommandCatalog.defs().size()),
                 new Claim("顶层子命令支数", "顶层子命令共 (\\d+) 支",
-                        subcommandSpecs().size()));
+                        subcommandSpecs().size()),
+                // P27c：委托这一族三个缺省值都从代码重算（键写在 README 里就得对得上现值，
+                // 不能拿"hermes 那个数是 24000"当第二手证据）。
+                new Claim("委托深度缺省", "深度上限缺省 \\*\\*(\\d+)\\*\\*",
+                        defaults.getDelegateMaxDepth()),
+                new Claim("异步并发宽度缺省", "异步并发宽度缺省 \\*\\*(\\d+)\\*\\*",
+                        defaults.getDelegateMaxChildren()),
+                new Claim("摘要字符上限缺省", "字符上限缺省 \\*\\*(\\d+)\\*\\*",
+                        defaults.getDelegateMaxSummaryChars()));
+    }
+
+    /**
+     * 一份**空** profile 的 {@link BotConfig}：{@code load(dir)} 只读 {@code <dir>/config.properties}，
+     * 文件不存在就整份用字段缺省，不会回落到 {@code ~/.zbot}（红线 1）。
+     */
+    private static BotConfig emptyProfileDefaults() {
+        try {
+            File dir = Files.createTempDirectory("zbot-readme-defaults").toFile();
+            assertFalse("空 profile 却读到了配置 ⇒ 这份缺省不可信", dir.list().length > 0);
+            return BotConfig.load(dir);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("造不出空 profile ⇒ 委托缺省值无从重算: " + e, e);
+        }
     }
 
     /** 逐条对账，返回不成立的条目（含 claimed/recomputed）；主张整条不见了也算不成立。 */
@@ -204,9 +229,13 @@ public class ReadmeClaimsTest {
                 "行（方法粒度）/ \\d+ 条路径",
                 "实测返回 \\*\\*\\d+ 行\\*\\*",
                 "顶层子命令共 \\d+ 支",
+                "深度上限缺省 \\*\\*\\d+\\*\\*",
+                "异步并发宽度缺省 \\*\\*\\d+\\*\\*",
+                "字符上限缺省 \\*\\*\\d+\\*\\*",
         };
         String[] names = {"当前源码版本", "内核 pin", "路由台账行数", "路由台账路径数",
-                "/api/commands 行数", "顶层子命令支数"};
+                "/api/commands 行数", "顶层子命令支数",
+                "委托深度缺省", "异步并发宽度缺省", "摘要字符上限缺省"};
         for (int i = 0; i < probes.length; i++) {
             String wrong = bumpOne(real, probes[i]);
             List<String> findings = audit(wrong);
