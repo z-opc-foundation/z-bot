@@ -237,9 +237,13 @@ def read_state_json(ledger_root):
 
 def config_properties(cfg, extra):
     with io.open(os.path.join(cfg, "config.properties"), "w", encoding="utf-8") as fh:
-        # `providers=stub` 不是可有可无：BotConfig 只自动识别 LEGACY_PROVIDERS 里的 code，
-        # 自造 code 必须显式声明，否则 `llm.provider=stub` 落空、activeProvider() 兜底成
-        # "openai + baseUrl=null" ⇒ 子进程真的往 api.openai.com 发包（run1 就踩了这个）。
+        # `providers=stub` 不是可有可无：BotConfig 只自动识别 LEGACY_PROVIDERS 里的 code
+        # (`BotConfig.java:27-32`)，自造 code 必须显式声明，否则 `llm.provider=stub` 落空、
+        # activeProvider() 兜底成 "openai + baseUrl=null" (`BotConfig.java:363-372`)，
+        # LlmRouter 那一跳就用 kernel 默认域 https://api.openai.com/v1 真发出去
+        # (`LlmRouter.java:40`)。真踩过这一刀的是 P26 run1（8 发全 401、本地 stub 一发没收到，
+        # `_doc/acceptance/p26/EVIDENCE.md:583/588`）；本 harness 的日志里该域 0 命中
+        # （复算：`grep -rl 'api\.openai\.com' ~/.cache/zbot-p27c-lead/` 无输出）。
         fh.write("llm.provider=stub\nproviders=stub\n"
                  "test.description=P27c e2e 隔离现场（key 是假的）\n"
                  "stub.type=openai\nstub.api.key=%s\n" % STUB_KEY +

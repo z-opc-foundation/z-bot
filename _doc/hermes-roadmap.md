@@ -268,9 +268,13 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
   溢出全文落 `<profile>/delegate/summaries/`（**只裁不写宿主家目录**）；`static` 线程池改成实例字段 +
   `BotAgent.shutdown()` 收口。**新发现的两条记录里没有**：①异步取回路径 `asyncResult()` 原本每次拉都现裁一遍，
   而溢出文件名带毫秒戳 ⇒ 同一个委托拉 N 次就往 profile 塞 N 份全文（她收集时只裁一次）；②`BotConfig.activeProvider()`
-  对不认识的 provider code 兜底成 `openai + baseUrl=null`，于是 `llm.provider` 打错一个字母 ⇒ 真提示词往
-  `https://api.openai.com/v1` 发（杠③ run1 就是这么撞出去的，现在量具把"非回环端点"判 NO-RUN；**产品侧的修法待裁定**，
-  见 §8.17 欠账）。
+  对不认识的 provider code 兜底成 `openai + baseUrl=null`（现测 `BotConfig.java:363-372`、`LlmRouter.java:40`），
+  于是 `llm.provider` 打错一个字母 ⇒ 真提示词按 kernel 默认域 `https://api.openai.com/v1` 发出去。
+  **这条出网本期没有发生**：杠③ 三跑的"零真发：三进程 stdout 里无非回环 http(s) 端点"判据全 PASS，
+  `~/.cache/zbot-p27c-lead/` 与 `~/.cache/zbot-p27-lead/` 下全部日志 grep `api\.openai\.com` 命中 0；
+  真出过网的是 **P26 的 run1**（8 发全打默认域拿 401，本地 stub 一发没收到，见
+  `_doc/acceptance/p26/EVIDENCE.md:583/588`）。量具侧现在把"非回环端点"判 NO-RUN；
+  **产品侧的修法待裁定**，见 §8.17 欠账）。
 
 **P28 前端 parity 收口 (不移植 React)** · 边界 `ui/*.java`, `web/index.html`, `channel/HttpChannel.java`
 - 只做 JLine 侧对等 (多行输入、Ctrl-R 搜索历史、粘贴折叠) 与 web 侧最小可用; **明确不做**她的 Ink 分屏/鼠标选择/滚轮加速 (理由在 §4)。
@@ -1351,3 +1355,33 @@ $ git diff HEAD -- _doc/acceptance/p27/p27_mutation.py | grep -E "^[+-]" \
   (a) **在测量循环中途改文档**。`README.md` 07:28:07 定稿、早于第一跑 07:28:31（它是全仓**唯一**运行时会被测试打开的 README：`ReadmeClaimsTest:186/198/233`），但 `p30/EVIDENCE.md`(07:29:56) 与本篇 (07:30:16) 是**跑途中**改的。我现测了"哪些 `_doc/` 目标真的被测试打开"（只有 `p28/ROUTES.tsv`、`p28/EVIDENCE.md`、`p15b/sessions_column_alignment.md`、`p21/` 四个，无一指向本期改的文件）来界定影响面 —— 但这只是解释不是合规：**下期文档笔全部赶在杠① 之前落**。
   (b) **差点把尺的读数写成叙述**。第一版 README 那行我未等杠① 跑完就写进了时刻，被自己按"断言只能排在测量之后"退回，时刻改为只引 `_doc/acceptance/p30c/EVIDENCE.md` §1；本文所有时刻同样只引那份文件里的原始 log 行（`bar1a` 那行 echo 没进 log，所以本期不引用它的起跑时刻）。
 - **本期仍然欠的**：①真凭据零验证一条没减（"飞书只用 POST"依据是 SDK + hermes 两份**离线参照**，不是一次真握手）；②**杠② 三族量具（p30/p30b/p30c）都不采样 `~/.zbot`** —— 那 5+7+15 支注入的窗口对杠④ 是空的，做法照 `p27_mutation.py`（现测 `grep -c BAR4`：p30c=0、p27=11）；③64 KiB 仍不是配置项；④p25 族预期集待按机制复查；⑤CI 未接成第五把尺；⑥`<revision>` 抬号 / 发 Central / 外部真 pull —— 都在 z-bot 推送授权之外，**等点头**。
+
+## 8.17 第十三期：P27c 收口 §W5 记的三条 delegate"未做"，并撞出两条没记的（09-27 08:39–09:54，主编亲测）
+
+闭合任务 #49 —— §5 那张表里 P27c 那三条。逐字读数与 md5 对账在 `_doc/acceptance/p27c/EVIDENCE.md`；本节只记结论、口径、以及我自己错在哪。行号全是本期现测（09:5x 重跑过 `grep -n`），别按上一期的号取。
+
+- **三条的落点**：
+  ① **子代理审批自动 deny** —— 旧形状比 §W5 记的"卡住"更糟：`chat()` 把 `WAIT_CONFIRM:exec|…` 当**最终回复**返回，`DelegateManager` 随即记 `TASK_COMPLETED` ⇒ 父模型收到一条**假成功**，而那条待批申请烂在**每个子 agent 私有的** `ApprovalService` 里（父侧 `/pending` 永远看不见、也没人能回答它）。现在：`BotAgent.Builder.nonInteractive`（字段 `BotAgent.java:187/:248`、Builder 侧 `:2176/:2287`、判定 `:700`、getter `:1591`）由 `buildChild` 打开 ⇒ 撞闸门**当场 deny**，把 `[auto-denied] ` + 闸门给的原因回灌给子模型，队列那行同步结清；`subagentAutoDeniedApprovals()` 的计数进 `TASK_COMPLETED` 的 detail（`DelegateManager.java:386-393`）。对标她 `tools/delegate_tool.py:57-73` 那段说明 + 本体 `:74-85`（`return "deny"` 在 `:85`）。**没抄的另一半是故意的**：`:88 _subagent_auto_approve` 不接 —— 自动放行等价于把 `agent.exec.confirm=off` 藏进委托面，那是放宽闸门不是补差距。
+  ② **摘要上限 + 溢出落文件** —— 新类 `delegate/SummaryBudget.java`：`:37 DEFAULT_MAX_SUMMARY_CHARS=24000`（她 `:590`，`"0 disables the ceiling"` 在 `:589`）、`:66 trim(summary, cap, spillDir, id)` 头尾 75%/25% 吸附到行边界、`:111 spill` 是 best-effort（她 `_spill_summary_to_file:1615` / `_trim_summary_with_footer:1640` ⇒ 写不进去只裁、不抛）。父模型-facing 的出口两处：同步 `DelegateManager.java:216`、异步 `:495-501 renderedReply` + `:504-509 trimNote`；上限是配置项 `:556-558`（`agent.delegate.max.summary.chars`，没配才回落 24000），溢出目录 `:566 summariesRoot()` **只由 profile 推导**（红线 1，落不到宿主家目录）；footer 指 `read_file path=… offset=…`（1-indexed）。**她的第二把尺不抄**：`_parent_summary_char_budget`（`:1695-1733`：取父代理剩余 headroom 的 `_SUMMARY_HEADROOM_FRACTION=0.5` `:595` 按**一批 N 条**分摊、地板 `_MIN_SUMMARY_CHARS=2000` `:598`）是为 batch 扇出（一次返回 N 份完整摘要）造的，而 z-bot 的 delegate 面一次只回一条（`delegate_task` 只有单个 `task` 参数），没有"分摊"这一步可算。
+  ③ **线程池随 agent 生命周期关闭** —— `static` 那口进程共用池改成实例字段 `DelegateManager.java:531`，`shutdown()` `:546-547`，由 `BotAgent.java:1580` 在 agent 收口时调；池关掉之后再提交 ⇒ **当场拒收**（"异步委托未提交：委托池已关闭，任务未提交"）且台账落 `FAILED`。
+
+- **两条 §W5 没记的，都是这一期撞出来的**：
+  (a) **异步取回路径每拉一次就往 profile 塞一份全文**：`asyncResult()` 原本每次拉都现裁，而溢出文件名带毫秒戳 ⇒ 同一个委托拉 N 次落 N 份（她收集时只裁一次）。改成收工那一刻算一次、之后只读（`:386`/`:495-501`）。守卫 `DelegateSummaryWiringTest#repeatPullsRenderOnceAndShareOneSpillFile`，变异 **E5** 打这一句，E2E **A8c** 在真进程里对着磁盘数文件（`spill=1 一次含指针=True 二次含指针=True`）。
+  (b) **未知 provider 代号会静默换出口**：`BotConfig.java:27-32` 只自动登记 `LEGACY_PROVIDERS`（实测就 `minimax`/`spark` 两个），`activeProvider()` `:363-372` 查不到代号时**不报错** —— 表里还有别人就交第一个（换的是另一家的凭据与端点），表空则回落 `new Provider(code, "openai", null, …)`，`LlmRouter.java:40` 于是交出没有 baseUrl 的 `OpenAIProvider` ⇒ 真提示词按 kernel 默认域往 `https://api.openai.com/v1` 发。**归因订正见下面"我自己的账" (a)**：机制站得住，"本期出过网"站不住。产品侧修法（未知代号直接 FATAL，还是允许回落但不许无 baseUrl 出站）**等裁定**，已进 README"明确没做的"。
+
+- **杠②**：`p27c_mutation.py` 21 支（C 4 / D 6 / E 5 / F 4 / G 2）**全 RED-OK**，`PARTIAL/GREEN-BUT-MUTATED/BROKEN/NO-RUN` 均 0；另 5 支族内阳性对照注入前全绿且点名的用例真实存在（`CTRL-C ran=5`、`CTRL-D ran=8`、`CTRL-E ran=6`、`CTRL-F ran=5`、`CTRL-G ran=2`，`点名=` 与 `ran=` 逐族相等）；21 支各 `还原=True`，收尾 `注入后 src 有差异的文件: 无` + `git diff --name-only :（空）`。台账 `_doc/acceptance/p27c/LEDGER.tsv`（`#generated_by 2026-09-27T09:41:33+0800`），run1–4 归档 `LEDGER-run1..4.tsv`。红集互不相同是**机制层面**写死的（脚本头部：C1⊃C2、C3⊃C1、C4 只红交互那支）⇒ "机制在 / 账平了 / 接上了 / 只作用于子代理"是四把分开的尺，少任何一支另一句就会被读成它。p27 族在被测文件已变的前提下**整批重跑**（22 支）：`21 RED-OK / 1 SURVIVED`，幸存者仍是判等价的 `M13-non-atomic-state-write`（单进程读写序下 `ATOMIC_MOVE` 不可观测），收尾同样 `BAR4_VERDICT|same=YES`。
+
+- **杠③**：`p27c_e2e.py`（真 jar / 真子进程 / 只绑 127.0.0.1 的假端点）**三轮 ×42 检查 `RUN|CHECKS=42|FAILED=0|全过`**，分母 = R1 16 + R2 11 + R3 11 + `K0/K0b` 构件身份 2 + `零真发`/`整跑一致` 2。配置矩阵是这一期的关键：R1 `agent.delegate.max.summary.chars=300`（必裁，且**必须有唯一溢出文件**、字节 == 假端点发出的那份原文、落在 `--config-dir` 之下）、R2 缺省 24000（2020 字符照回、零溢出）、R3 `=0`（关掉上限）⇒ **同一个键在真进程里改一次就换一次行为**，这是"配置项不是装饰"的进程外证据。`K0/K0b` 扫的是 jar 里的字节码：`SummaryBudget.class` 命中 1、本期没碰的 `DelegationLedger.class` 命中 0。牙口那一跑 `P27C_TEETH_PROBE=1`（持变异锁）把 `.nonInteractive(true)` 摘掉把旧形状装回去：`TEETH|病症显形=True 判据红=无` + `TEETH|还原 md5 对账=True`，且这一支自己"没出网"单列一条 PASS —— 负向判据红过一次才算有牙，但判据是"旧形状下 `WAIT_CONFIRM` 假成功显形 **且** `[auto-denied] 尚未诞生"这一对，不是随手"有 CHECK 变红"。
+
+- **杠④**：09:53:36（重跑杠③ 前）与 09:54:32（牙口探针后）两次现场复采，加上杠③ 每轮 `HOME|*.before/after` 与"整跑三点一致"行，全程 `8 / 2dadaed0 / 690ddbc0 / keylen 125`；真 key 只量长度、未读未印未提交；`~/.zbot` 底下始终没出现 `delegate/summaries`（A10 逐轮判）。杠② 两族的首尾采样见上面 `BAR4_VERDICT|same=YES`。
+
+- **按未覆盖/不可分记账的三处（不注入凑数）**：
+  (a) **E2**（"溢出目录不再按 configDir 推导"）前四跑全是 `GREEN-BUT-MUTATED` —— 不是尺坏，是**形状不可分**：`BotAgent.build()` 在 config 模式下把 `childSessions` 定在 `<configDir>/delegate/children`，于是 fall-through 之后 `new File(parentFile, "summaries")` 算出的还是同一个路径。第五跑改成有牙：另立一支**绕开 `build()`**、直接构造分岔形状的守卫 `DelegateSummaryWiringTest#configDirWinsOverWhereverTheChildSessionsSit`（把 children 塞到 profile 外），E2 立刻转 RED-OK；同时把那两支靠真实接线、结构上分不开的用例从 E2 的点名单里**摘掉** —— 留着只会虚增一张它们永远满足不了的"预测连带红"表。
+  (b) **D1**（头尾吸附到行边界）只有 1 支点名单（`footerOffsetPointsAtTheOmittedMiddleAndIsOneIndexed`）：不吸附就是在一行中间劈一刀，差异全靠 footer 的 `offset=` 反推 ⇒ 覆盖单薄，记着。
+  (c) **G2**（`BotConfig` 宽度缺省 3→4）只有 README 对账那支红：`DelegateManager` 的宽度取法是 `config == null ? 3 : …`（现测 `:340`，闸门 `:347`），那条连发用例 `DelegateManagerLedgerTest#concurrencyGateCountsQueuedRowsSoABurstCannotExceedWidth` 走的正是 `config==null` 那一支 ⇒ 改字段缺省**结构上碰不到它**，按覆盖面缺口记账而不是"已覆盖"。
+
+- **我自己的账（两笔都是被自己的取证抓回来的，不是被审稿抓的）**：
+  (a) **把 P26 的出网写成"本期杠③ run1 撞出去的"**。README 与 §5 第 272 行都这么写了，`p27c_e2e.py` 里那段注释也写"（run1 就踩了这个）"。复算：`grep -rl 'api\.openai\.com' ~/.cache/zbot-p27c-lead/ ~/.cache/zbot-p27-lead/` **无输出**（两目录下 19+ 份日志），`bar3-rounds4.log:66` 的"零真发…三进程 stdout 里无非回环 http(s) 端点"是 PASS；真出过网的原始行在 `_doc/acceptance/p26/EVIDENCE.md:583/588`（8 发全打默认域拿 401、本地 stub 一发没收到）。⇒ 三处都按证据改了边界，同一条 grep 在 P26 那份文件命中 7 行是它的阳性对照。**机制本身站得住**（读码可复算），错的是我把它当成"本期发生过的事件"写进台账。改完 `p27c_e2e.py`（只动 `#` 注释、可执行字节逐字未变、`ast.parse` OK）之后**杠③ 整跑重跑**（`bar3-rounds4.log` + `bar3-teeth-4.log`），所以 EVIDENCE §0 记的那份 md5 与台账读数是同一版字节。
+  (b) **M18 的连带红名单前两版只补了一半**。p27 族 `M18-poll-burns-delivery` 连续两跑 PARTIAL，而红的成员**每次不一样** —— 四支都轮询 `backgroundResult`，谁先输是竞态。第二版我只覆盖了当时看到的 2 支，后面又冒出第 3、第 4 支。定稿做法：四支**全部进 `allow_extra` 并带上日志里的原文失败行**（0.059s 早退 ⇒ 溢出目录尚未创建；`[DONE] ` 空回复 ×3），`why` 写明"同一份 src 两跑名单不同 ⇒ 四支一律进 allow，不往 expect 里塞"。**没有**靠扩 `expect` 把红"凑"出来 —— 那等于让预期红集去迁就读数。
+
+- **本期仍然欠的**：①真凭据握手零验证（飞书解密/飞书 SHA-256 验签/钉钉入站 `sign` 三条的证据仍全是"对 127.0.0.1 假端点发出的字节"，与 P30 那笔同源，一条没减）；②未知 provider 代号的修法**等裁定**（见 (b)）；③`_parent_summary_char_budget` 那把批分摊尺要接先得把批形状造出来；④D1 覆盖单薄、G2 结构上够不着、M13 判等价 —— 三处都是记账不是覆盖；⑤`POST /api/skill/push` 语义（D-P28-2）与 `/api/agent/register` 200-vs-501 仍未裁定；⑥`<revision>` 0.2.0→0.3.0 / 发 Central / 外部工程真 pull（P29）、p25 族预期集按机制复查、CI 当第五把尺、真 tty 人机体验（NO-RUN）—— 后四项都在 z-bot 推送授权之外，**等点头**。

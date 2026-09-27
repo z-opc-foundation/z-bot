@@ -133,13 +133,16 @@ mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.
    量具如 `_doc/acceptance/p28/p28_e2e.py`；
 4. **杠④** 测试与 E2E 一个字都不许动 `~/.zbot/`（一律 `--config-dir` 指临时根）。
 
-最近一次目标树读数（实现 `6f26621`；杠①×3 跑在**含本期文档笔的最终树**上，逐字读数与起始时刻见
-`_doc/acceptance/p30c/EVIDENCE.md` §1，被测量的生产文件与测试类逐字节未变，md5 对账见同一份 §0）：
-**1195 个测试 ×3 全绿**，测试文件 111 个（同一数字三把尺对着读：surefire 合计 1195 == 跑后 111 份
-`*/target/surefire-reports/*.xml` 求和 1195 == 文本 `@Test` 1198 − 注释里的 3 处字样），
-socket 命中 0，杠④ 三点不变；杠② 六族
-P19 8/8 KILLED、P27 21 支 `10 RED-OK / 10 PARTIAL / 1 SURVIVED`、P28 14 支 `13 RED-OK / 1 SURVIVED`
-（两族的 SURVIVED 分别是判为等价的 M13 与故意注入的阳性对照 M5）、P30 15 支、P30b 7 支、P30c 5 支全 RED-OK
+最近一次目标树读数（实现 `9b7c125`，其后的两处修复与杠② 台账在 `3a577dd`/`7f0fe4a`/`9951947`；杠①×3 跑在
+**含本期文档笔的最终树**上，逐字读数与起始时刻见 `_doc/acceptance/p27c/EVIDENCE.md` §1，
+被测量的生产文件与测试类逐字节未变，md5 对账见同一份 §0）：
+**1223 个测试 ×3 全绿**，测试文件 115 个（同一数字三把尺对着读：surefire 合计 1223 == 跑后 115 份
+`*/target/surefire-reports/*.xml` 求和 1223 == 文本 `@Test` 1226 − 注释里的 3 处字样），
+socket 命中 0，杠④ 三点不变；杠③ 是 `_doc/acceptance/p27c/p27c_e2e.py` 三轮真进程
+`CHECKS=42|FAILED=0`，外加一跑"把旧形状装回去"的牙口探针（病症显形=True、还原 md5 对账=True）。
+杠② 七族：P19 8/8 KILLED、**P27 22 支 `21 RED-OK / 1 SURVIVED`（本期在被测文件变了的前提下整批重跑过）**、
+P28 14 支 `13 RED-OK / 1 SURVIVED`（两族的 SURVIVED 分别是判为等价的 M13 与故意注入的阳性对照 M5）、
+**P27c 21 支全 RED-OK**、P30 15 支、P30b 7 支、P30c 5 支全 RED-OK
 （**每族的读数都是它自己收口那一跑的**，不是同一遍扫出来的；跨族汇总别照着这一行做减法）。
 
 ## 明确没做的（别当成已完成）
@@ -149,6 +152,17 @@ P19 8/8 KILLED、P27 21 支 `10 RED-OK / 10 PARTIAL / 1 SURVIVED`、P28 14 支 `
 - 入站 body 上限 64 KiB（四面共用、门在分配之前）已闭合（`_doc/hermes-roadmap.md` §8.15）；`GET /feishu/event?echostr=` 那条验签门外的回显也已拆掉（§8.16，D-P30-1），v1 平铺容错同时划了边界：无出处的 `event.content` 不是读取点，由一支边界用例钉住（D-P30-2）。仍欠的是**上限本身不是配置项**（改尺寸要重编）与真凭据握手零验证（上一条）。
 - 摘要预算只做**静态那一层**：她的第二把尺 `_parent_summary_char_budget`（`delegate_tool.py:1695-1733`：取父代理剩余 headroom 的 `_SUMMARY_HEADROOM_FRACTION=0.5` 按**一批 N 条**摘要分摊，地板 `_MIN_SUMMARY_CHARS=2000`）没抄 —— 那道尺是为 batch 扇出（一次返回 N 份完整摘要）造的，而 z-bot 的 delegate 面一次只回一条：`delegate_task` 只有单个 `task` 参数，`DelegateManager.java` 里 `tasks`/`batch` 实测 0 命中，没有"分摊"这一步可算。父代理剩余 headroom 的读数本身是有的（`context/CompressorEngine` 的 `contextWindow`），要接先得把批形状造出来。她的 `delegation.subagent_auto_approve`（自动放行）也没抄 —— roadmap 只点名 deny，而自动放行等价于把 `agent.exec.confirm=off` 藏进委托面，那是放宽闸门不是补差距。
 - `POST /api/skill/push` 的语义（推 vs 拉）尚未裁定（D-P28-2）；`POST /api/agent/register` 该返 200 还是 501 未定。
+- **未知 provider 代号会静默换出口**（P27c 杠③ 期间登记的缺口，未修）：
+  `BotConfig.fromProperties` 只自动登记 `LEGACY_PROVIDERS`（`BotConfig.java:27-32`，实测就 `minimax`/`spark` 两个），
+  别的代号没写 `providers=<code>` 就进不了 `providers` 这张表，而 `activeProvider()`（`:363-372`）在这种形状下
+  不报错：**表里还有别人就拿第一个**（换的是另一家的凭据与端点），**表空则回落成
+  `new Provider(code, "openai", baseUrl=null, …)`** ⇒ `LlmRouter:40` 交出没有 baseUrl 的 `OpenAIProvider`，
+  用的是它自己的默认域。这一条**不是推的**：P26 杠③ run1 就因此真出过网 —— 8 发全打到
+  `https://api.openai.com/v1/chat/completions` 拿 401、本地假端点一发没收到、整轮量的是空气
+  （`_doc/acceptance/p26/EVIDENCE.md` §8.0）。本期 E2E 的 profile 因此显式写 `providers=stub`
+  （见 `_doc/acceptance/p27c/p27c_e2e.py` 的 `config_properties`，缺这一行是 `9b7c125` 那版的实情，
+  `3a577dd` 才补上），量具同时把"非回环端点"判 NO-RUN；**本期三跑"零真发"判据全 PASS，没有出网记录**。
+  产品侧怎么修（未知代号直接 FATAL，还是允许回落但不许无 baseUrl 出站）**等裁定**。
 - 真 tty 下的人机体验（渲染、光标键、中文宽字符）没有自动化验收，只有 pty 探针取证，记 NO-RUN。
 - `z-bot-desktop-packager` 只有 jpackage 配置，本机没打过 .dmg/.exe/.deb。
 
