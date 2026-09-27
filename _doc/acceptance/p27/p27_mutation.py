@@ -260,8 +260,23 @@ MUTANTS = [
          new="if (false) {",
          expect=["q2_deliveryAxisHasNoLifecycleGateWhileOnlyTheInMemoryStatusGuardsThePullEntry",],
          allow_extra=["asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery",
-          "unfinishedAsyncSceneIsAdoptableAsOrphan",],
-         why="还没收工就去 claim ⇒ 看进度本身烧投递配额，8 次轮询后结果被记成 dropped G1 机制订正：确定性判据换成 `q2_…`（闸门还关着，子代理必定堵在 chat() 里 ⇒'没收工就去 claim'这一格必被执行）。原先那两支靠 `awaitPull` 以'判词含还在'为退出条件，M18 之后第一次拉取就早退 ⇒ 属同一场竞态，记为允许的波及。与 M17 的摘法同一条规矩：靠时序的量不到谓词。"),
+          "unfinishedAsyncSceneIsAdoptableAsOrphan",
+          # P27c 之后多出来的"轮询即拉取"等待者（09-27 两跑实测到的红，不是推的）：
+          # 这一族的成员是竞态决定的 —— 09:32 那跑红了前三支、09:36 那跑红了后三支里的两支，
+          # 同一份 src 两次名单不同 ⇒ 四支一律进 allow，不往 expect 里塞（expect 只留确定性那支）。
+          "asyncChildAlsoDeniesInsteadOfStalling",
+          "repeatPullsRenderOnceAndShareOneSpillFile",
+          "asyncDelegationCompletesAndResultRetrievable",
+          "asyncExitIsTrimmedByTheSameCap",],
+         why="还没收工就去 claim ⇒ 看进度本身烧投递配额，8 次轮询后结果被记成 dropped G1 机制订正：确定性判据换成 `q2_…`（闸门还关着，子代理必定堵在 chat() 里 ⇒'没收工就去 claim'这一格必被执行）。原先那两支靠 `awaitPull` 以'判词含还在'为退出条件，M18 之后第一次拉取就早退 ⇒ 属同一场竞态，记为允许的波及。与 M17 的摘法同一条规矩：靠时序的量不到谓词。"
+             "09-27 在 P27c 树上整批重跑，同一机制又见到四支轮询者，各自的红是读到的原文："
+             "`repeatPullsRenderOnceAndShareOneSpillFile` 红在 `expected:<1> but was:<0>` —— 第一次拉取就烧配额、"
+             "`waitFor` 提前退出，整支只跑 0.059 s，'收工那一刻'还没到 ⇒ 溢出目录尚未诞生（是早退，不是多写）；"
+             "`asyncChildAlsoDeniesInsteadOfStalling` 红在 `取回的回复不是子模型的下一句: [DONE] background dangerous task`、"
+             "`asyncDelegationCompletesAndResultRetrievable` 红在判词 `[DONE] background task x`、"
+             "`asyncExitIsTrimmedByTheSameCap` 红在 `异步出口没裁: [DONE] write a lot` —— "
+             "三条都是'状态闸门没了 ⇒ 父侧拿到一条 [DONE] 而 reply 还是空的'。"
+             "这四支都不算噪声：它们是从 P27c 那几台形状上把 M18 的病又看见一次（同一谓词的多把尺）。"),
     dict(id="M19-stale-copy-overwrites-scene",
          file=D("DelegationLedger.java"),
          old="if (disk.state.terminal()) {",
