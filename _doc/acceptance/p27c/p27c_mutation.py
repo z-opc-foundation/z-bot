@@ -201,15 +201,16 @@ MUTANTS = [
      "            return new File(config.getConfigDir(), \"delegate/summaries\");\n        }",
      "        if (config != null && config.getConfigDir() != null && false) {\n"
      "            return new File(config.getConfigDir(), \"delegate/summaries\");\n        }", 1,
-     [WIR + "syncExitTrimsIntoParentContextAndSpillsUnderProfileDir",
-      WIR + "asyncExitIsTrimmedByTheSameCap"], [],
-     "红线 1 的形状：写盘位置必须由 profile 推导，不能落到别处。红的断言：`onlySpillFile()`"
-     "（cfgDir 下没有那唯一一份）与 `assertEquals(1, summariesDir().listFiles().length)`。"
-     "注入体刻意不回落到 `~/.zbot` —— 杠② 期间一个字节都不许写进真 profile。"
-     "**判为等价（run1 GREEN-BUT-MUTATED，run2 仍注入以留证据）**：`BotAgent.build()` 在 config "
-     "模式下把 childSessions 定成 `<configDir>/delegate/children`，于是 fall-through 之后"
-     "`new File(parentFile, \"summaries\")` 算出的仍是 `<configDir>/delegate/summaries` —— 同一"
-     "个路径，两支在真实接线上不可分。可分的是 config==null 那一支，另立 E4。"),
+     [WIR + "configDirWinsOverWhereverTheChildSessionsSit"], [],
+     "红线 1 的形状：写盘位置必须由 profile 推导，不能落到别处。注入体刻意不回落到 `~/.zbot` "
+     "—— 杠② 期间一个字节都不许写进真 profile。"
+     "**预期红集是按机制点的，不是按主题**：run1~run4 这一支判 GREEN-BUT-MUTATED，原因是那两条"
+     "走真实接线的用例（`syncExitTrims…`/`asyncExitIsTrimmed…`）结构上分不开这两支 —— "
+     "`BotAgent.build()` 在 config 模式下把 childSessions 定成 `<configDir>/delegate/children`，"
+     "fall-through 之后 `new File(parentFile, \"summaries\")` 算出的仍是 "
+     "`<configDir>/delegate/summaries`，同一个路径。于是补了一支绕开 `build()` 直接构造分岔形状"
+     "的守卫（有 profile、children 在 profile 之外），这一支才真能杀它 —— "
+     "那两条旧用例继续留在它们该在的地方（量裁切行为），不再点到这一支的名单里充数。"),
 
     ("E4 摘掉 config==null 的那条 fallback 推导", "E-委托出口裁切", "dm",
      "        if (childSessionDir != null && childSessionDir.getParentFile() != null) {\n"

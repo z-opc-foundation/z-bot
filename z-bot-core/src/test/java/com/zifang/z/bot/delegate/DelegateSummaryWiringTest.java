@@ -184,6 +184,25 @@ public class DelegateSummaryWiringTest {
                 new File(base, "summaries"), bare.summariesRoot());
     }
 
+    /**
+     * {@code summariesRoot()} 的两条推导在真实接线上是同一个路径（{@code BotAgent.build()} 把
+     * config 模式下的 childSessions 定成 {@code <configDir>/delegate/children}，两支算出来都
+     * 是 {@code <configDir>/delegate/summaries}）—— 那两条走真实接线的用例因此结构上分不开
+     * "按 configDir" 与 "跟着 children 目录跑"。这里绕开 {@code build()} 直接构造那个分岔形状：
+     * 有 profile，而 children 目录在 profile 之外。钉的是红线 1 的方向 ——
+     * 溢出全文跟着 profile 根走，不跟着别人塞进来的目录走。
+     */
+    @Test
+    public void configDirWinsOverWhereverTheChildSessionsSit() throws Exception {
+        File outside = new File(tmp.getRoot(), "elsewhere/children");
+        DelegateManager dm = new DelegateManager(config("agent.delegate.max.summary.chars=300"),
+                new RecordingProvider(), new Sandbox(sandboxDir.getAbsolutePath()), outside, 0, 2);
+        assertEquals("children 目录在 profile 外，溢出目录不该跟着它搬走",
+                summariesDir(), dm.summariesRoot());
+        assertFalse("溢出目录不该落在 profile 之外: " + dm.summariesRoot(),
+                dm.summariesRoot().getAbsolutePath().startsWith(outside.getAbsolutePath()));
+    }
+
     // ===== helpers =====
 
     private File summariesDir() {
