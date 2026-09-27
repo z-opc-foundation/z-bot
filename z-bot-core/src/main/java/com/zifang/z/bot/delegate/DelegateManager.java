@@ -215,8 +215,7 @@ public final class DelegateManager {
             // 台账里那条 live.reply 仍是全文（磁盘侧另有 REPLY_ON_DISK_CAP 那一档）。
             SummaryBudget.Trimmed trimmed = SummaryBudget.trim(reply, summaryCap(), summariesRoot(), live.id);
             advanceQuiet(live, DelegateEvent.TASK_COMPLETED,
-                    "steps=" + used.apiCalls() + " tokens=" + used.tokensUsed()
-                            + (trimmed.truncated ? " 摘要已裁切 全文=" + trimmed.spillPath : ""));
+                    "steps=" + used.apiCalls() + " tokens=" + used.tokensUsed() + trimNote(trimmed));
             com.zifang.z.bot.agent.InterruptScope.checkpoint();
             return ToolResult.text(head + "\n" + trimmed.text);
         } catch (com.zifang.z.agent.kernel.agent.InterruptFlag.AgentInterruptedException e) {
@@ -381,13 +380,17 @@ public final class DelegateManager {
                     d.reply = reply;
                     d.status = "DONE";
                     live.reply = reply;
+                    // 裁切发生在"收工"这一刻，不在取回那一路：她也是收集时裁
+                    // （{@code _trim_summary_with_footer} 由父侧组装结果时调用一次）。
+                    // 放在读路径的后果是每拉一次重写一个溢出文件（文件名带毫秒戳）。
+                    SummaryBudget.Trimmed rendered = renderedReply(d);
                     // ★ 只推进生命周期轴：DONE 说的是"子代理自己收工了"，
                     //   投递轴这一格必须留在 PENDING —— 有人 claim + ack 才算送达。
                     //   修之前这里等于替消费者把 "ok" 一起写了（P16 同型洞）。
                     advanceQuiet(live, DelegateEvent.TASK_COMPLETED,
-                            child.subagentAutoDeniedApprovals() > 0
-                                    ? "异步收工 自动deny审批=" + child.subagentAutoDeniedApprovals()
-                                    : "异步收工");
+                            "异步收工" + (child.subagentAutoDeniedApprovals() > 0
+                                    ? " 自动deny审批=" + child.subagentAutoDeniedApprovals() : "")
+                                    + trimNote(rendered));
                 } catch (Exception e) {
                     d.reply = "执行失败: " + e.getMessage();
                     d.status = "FAILED";
@@ -479,9 +482,30 @@ public final class DelegateManager {
         } else {
             tail = "\n（投递：ack 未生效 " + delivery.describe(key) + "）";
         }
-        // 取回给控制台/模型看的这一份同样过预算；内存与 state.db 里仍存全文。
-        return "[" + d.status + "] " + d.task + "\n"
-                + SummaryBudget.trim(d.reply, summaryCap(), summariesRoot(), d.id).text + tail;
+        // 取回给控制台/模型看的这一份用的是收工时算好的那一份：读路径不再写盘，
+        // 反复 /background result 也只会有一个溢出文件（内存与 state.db 里仍存全文）。
+        return "[" + d.status + "] " + d.task + "\n" + renderedReply(d).text + tail;
+    }
+
+    /**
+     * 异步那条出口给父侧看的唯一一份。裁切算一次就存下来：{@code SummaryBudget} 的溢出文件名
+     * 带毫秒戳，读路径每次都现裁 ⇒ 同一个委托拉几次就多几个全文文件（她收集时只裁一次）。
+     * 与 {@link #asyncResult} 同一把监视器锁，免得"收工线程先读到 null"和"运维先来拉"各写一份。
+     */
+    private synchronized SummaryBudget.Trimmed renderedReply(AsyncDelegation d) {
+        SummaryBudget.Trimmed r = d.rendered;
+        if (r == null) {
+            r = d.rendered = SummaryBudget.trim(d.reply, summaryCap(), summariesRoot(), d.id);
+        }
+        return r;
+    }
+
+    /** 台账里那句指针：裁了才有；落不了盘要如实说落不了，别写出 {@code 全文=null}。 */
+    private static String trimNote(SummaryBudget.Trimmed t) {
+        if (t == null || !t.truncated) {
+            return "";
+        }
+        return t.spillPath == null ? " 摘要已裁切（全文未落盘）" : " 摘要已裁切 全文=" + t.spillPath;
     }
 
     // ===== 内部 =====
@@ -564,6 +588,8 @@ public final class DelegateManager {
         final String task;
         volatile String status = "QUEUED";
         volatile String reply = "";
+        /** 给父侧看的那一份（裁过 + 溢出指针）；收工时算一次，之后只读不写。 */
+        volatile SummaryBudget.Trimmed rendered;
 
         AsyncDelegation(String id, String task) {
             this.id = id;

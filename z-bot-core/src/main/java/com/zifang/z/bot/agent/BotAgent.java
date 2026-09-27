@@ -699,12 +699,13 @@ public class BotAgent {
         if (Confirmations.isRequired(result)) {
             if (nonInteractive) {
                 // 子代理没有"可以等的人"。修之前这里照旧抛 ToolConfirmationNeeded，
-                // chat() 捕获它（现 :324）并把 "WAIT_CONFIRM:tool|args|reason" 揉成
+                // chat() 捕获它（同文件 `catch (ToolConfirmationNeeded e)` 那一支）并把
+                // "WAIT_CONFIRM:tool|args|reason" 揉成
                 // **最终回复返回**，DelegateManager 再把那条字符串记成 TASK_COMPLETED
                 // ⇒ 父模型收到的是一次"看起来成功完成"的委托，而实际一个字节都没执行、
                 // 也没任何人被问过。
-                // 现在按 hermes 的做法给子代理装非交互裁决：默认 deny（delegate_tool.py:58-86
-                // 整块，_subagent_auto_deny 本体 :74-86 —— "Returns 'deny' so the subagent
+                // 现在按 hermes 的做法给子代理装非交互裁决：默认 deny（delegate_tool.py:57-85
+                // 整块，_subagent_auto_deny 本体 :74-85 —— "Returns 'deny' so the subagent
                 // sees a refusal it can recover from"），让子模型看见一句它能从中改道的
                 // 拒绝、回合继续走。
                 // 不设 pendingConfirmation、不抛暂停信号：那是交互路径的契约，

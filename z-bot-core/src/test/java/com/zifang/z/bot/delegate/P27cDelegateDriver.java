@@ -97,6 +97,7 @@ public final class P27cDelegateDriver {
         String reply = agent.chat("p27c 真进程：派一个子代理去删目录", StreamListener.NOOP);
         BotAgent child = agent.getDelegation().lastChild;
         System.out.println("E2E|parent_reply=" + oneLine(reply));
+        System.out.println("E2E|parent_reply_b64=" + b64(reply));
         System.out.println("E2E|child_present=" + (child != null));
         if (child != null) {
             System.out.println("E2E|child_non_interactive=" + child.isNonInteractive());
@@ -124,8 +125,12 @@ public final class P27cDelegateDriver {
             }
             Thread.sleep(100L);
         }
-        System.out.println("E2E|background_result_head=" + oneLine(cut(result, 260)));
+        System.out.println("E2E|background_result_b64=" + b64(result));
         System.out.println("E2E|background_result_len=" + (result == null ? -1 : result.length()));
+        // 再拉一次：读路径不该再写第二份溢出文件（她收集时裁一次；修之前是每次拉取都裁一遍，
+        // 文件名带毫秒戳 ⇒ 同一个委托 id 拉几次就多几个全文文件）。
+        String second = agent.backgroundResult(id);
+        System.out.println("E2E|background_result2_b64=" + b64(second));
         System.out.println("E2E|async_sentinel_after=" + keep.isFile());
         BotAgent child = agent.getDelegation().lastChild;
         System.out.println("E2E|async_child_auto_denied="
@@ -182,12 +187,17 @@ public final class P27cDelegateDriver {
         }
     }
 
-    private static String cut(String s, int n) {
-        return s == null ? "null" : (s.length() <= n ? s : s.substring(0, n));
-    }
-
     private static String oneLine(String s) {
         return s == null ? "null" : s.replace("\r", " ").replace("\n", "⏎");
+    }
+
+    /**
+     * 量具那边的解析是按"键=非空格串"取的 ⇒ 带空格的原文会被从第一个空格切掉
+     * （run1 里那句 footer 就是这么"看不见"的）。要送整份原文只能转码，不能截。
+     */
+    private static String b64(String s) {
+        return s == null ? "null"
+                : java.util.Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
     }
 
     private static void assertTrue(boolean ok, String what) {

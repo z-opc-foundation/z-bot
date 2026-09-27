@@ -16,8 +16,10 @@ P27c 杠③ —— 真 jar / 真子进程 / 真 HTTP 假端点的委托面 E2E�
            ⇒ A3 全程不许出现 `WAIT_CONFIRM`（那是修之前"假成功"的形状）
            ⇒ A4/A5/A6 摘要尺按本轮配置决定裁不裁；裁了就**必须**有溢出文件，
               且文件字节 == 假端点发出的那份长回复原文，且落在 `--config-dir` 之下
-           ⇒ A7 委托台账那条 detail 里看得见"摘要已裁切 全文=<路径>"（与 A5 同一个路径）
-  async  submitBackground 走线程池那条路 ⇒ A8 取回的回复过同一把尺、子代理收工被 shutdown
+           ⇒ A7 委托台账 events.log 里那句"摘要已裁切 全文=<路径>"与 A5 是同一个文件
+  async  submitBackground 走线程池那条路 ⇒ A8 取回的回复过同一把尺、子代理收工被 shutdown；
+           A8c 再拉一次**不产生第二个全文文件**（读路径不写盘），两次指针同一个；
+           A8d 异步的溢出目录跟着 async 那一份 profile；A8e 异步台账也带同一个指针
   closed agent.shutdown() 之后再提交 ⇒ A9 当场拒收（"委托池已关闭"）且台账落 FAILED
   A10 每一轮的 `~/.zbot` 三点采样（条目数 / 两个 md5 前 8 位 / 真 key 只量长度）逐轮不变，
       且 `~/.zbot` 底下**不许**出现 `delegate/summaries`（红线 1：写盘位置由 profile 推导）
@@ -27,6 +29,10 @@ P27c 杠③ —— 真 jar / 真子进程 / 真 HTTP 假端点的委托面 E2E�
   R2 不写这一行（缺省 24000）                ⇒ 不裁、零溢出
   R3 `=0`（"0 disables the ceiling"）        ⇒ 不裁、零溢出
 ⇒ 同一个"键"在真进程里改一次就换一次行为，这才是"配置项不是装饰"的进程外证据。
+
+驱动打的是 `E2E|key=value`，本脚本按"= 到下一个空格"取值 ⇒ 带空格的原文会被劈掉一半
+（run1 那句 footer 就是这么"看不见"的）。要送整份原文只能转码：footer/指针一律读
+`*_b64` 那几行，不读 `oneLine` 的截断版。
 
 `P27C_TEETH_PROBE=1` 那一支（需要变异锁）：把 `.nonInteractive(true)` 那行摘掉、重建、跑一轮 deny，
 要求 A1/A2/A3 里至少"父侧看见 WAIT_CONFIRM"这一条**真的红** —— 负向判据没红过一次就是空跑。
@@ -43,6 +49,7 @@ P27c 杠③ —— 真 jar / 真子进程 / 真 HTTP 假端点的委托面 E2E�
 import fcntl
 import glob
 import hashlib
+import base64
 import io
 import json
 import os
@@ -71,6 +78,8 @@ LINES = 20          # 长回复 20 行 × 101 字符 = 2020 字符
 
 CHECKS = []
 LLM = {"url": None, "seq": 0, "dir": None, "script": [], "lock": threading.Lock()}
+# 每一次 java 子进程 stdout 里出现的非回环端点都记这里；非空 ⇒ 整跑判 NO-RUN。
+REDLINE = {"hits": []}
 
 
 def chk(name, ok, detail=""):
@@ -228,7 +237,10 @@ def read_state_json(ledger_root):
 
 def config_properties(cfg, extra):
     with io.open(os.path.join(cfg, "config.properties"), "w", encoding="utf-8") as fh:
-        fh.write("llm.provider=stub\n"
+        # `providers=stub` 不是可有可无：BotConfig 只自动识别 LEGACY_PROVIDERS 里的 code，
+        # 自造 code 必须显式声明，否则 `llm.provider=stub` 落空、activeProvider() 兜底成
+        # "openai + baseUrl=null" ⇒ 子进程真的往 api.openai.com 发包（run1 就踩了这个）。
+        fh.write("llm.provider=stub\nproviders=stub\n"
                  "test.description=P27c e2e 隔离现场（key 是假的）\n"
                  "stub.type=openai\nstub.api.key=%s\n" % STUB_KEY +
                  "stub.base.url=%s\n" % LLM["url"] +
@@ -277,6 +289,10 @@ def run_java(mode, cfg, log_dir, tag):
             continue
         for k, v in re.findall(r'(?:^|\s)([A-Za-z_]\w*)=([^ ]*)', line[len("E2E|"):]):
             facts.setdefault(k, v)
+    # 红线：一个包都不许出本机。子进程 stdout 里出现非回环的 http(s) 端点 = 本轮不判定。
+    for url in re.findall(r'https?://[^\s"\')]+', "\n".join(lines)):
+        if not re.match(r'https?://(127\.0\.0\.1|localhost)(:|/|$)', url):
+            REDLINE["hits"].append("%s/%s → %s" % (tag, mode, url))
     print("JAVA|%s|tag=%s rc=%s lines=%d facts=%d" % (mode, tag, rc, len(lines), len(facts)))
     return rc, facts, lines
 
@@ -319,15 +335,15 @@ def all_recorded_text(seq_dir):
     return "\n".join(blob)
 
 
-def judge_round(tag, cfg, log_dir, mode_facts, reply, expect_trim, home_now):
+def judge_round(tag, cfgs, log_dir, mode_facts, reply, expect_trim, home_now):
     """一轮的判词。expect_trim=True ⇒ 摘要必须被裁且全文落盘。"""
     deny_dir = os.path.join(log_dir, "llm-deny")
     rows = bodies(deny_dir)
-    # 请求 3（子代理被 deny 之后那一问）与请求 4（父拿到委托结果那一问）
+    # 请求 3（子代理被 deny 之后那一问）里必须同时出现裁决句与闸门给的原因
     child_rows = [c for f, c in rows if "[auto-denied]" in c or "高危命令需要确认" in c]
-    parent_rows = [c for f, c in rows if "delegate" in f or "子代理" in c]
     joined = "\n".join(c for _, c in rows)
 
+    cfg = cfgs["deny"]
     sentinel = os.path.join(cfg, "workspace", "target-cache", "keep.txt")
     facts = mode_facts.get("deny", {})
     chk("%s A1 诱饵文件活着（申请被当场 deny）" % tag, os.path.isfile(sentinel)
@@ -337,10 +353,11 @@ def judge_round(tag, cfg, log_dir, mode_facts, reply, expect_trim, home_now):
         any("[auto-denied]" in c for c in child_rows)
         and any("高危命令需要确认" in c for c in child_rows),
         "命中行数=%d" % len(child_rows))
+    parent_reply = b64_val(facts.get("parent_reply_b64"))
     chk("%s A3 全程没有 WAIT_CONFIRM 假成功" % tag,
         "WAIT_CONFIRM" not in all_recorded_text(deny_dir)
-        and "WAIT_CONFIRM" not in str(mode_facts.get("deny", {}).get("parent_reply", "")),
-        "父回复=%s" % str(facts.get("parent_reply"))[:70])
+        and "WAIT_CONFIRM" not in parent_reply and parent_reply != "",
+        "父回复（转码回原样）=%s" % parent_reply[:70])
     chk("%s A3b 子代理计数恰好 1、两条队列都空" % tag,
         facts.get("child_auto_denied") == "1" and facts.get("child_pending") == "0"
         and facts.get("parent_pending") == "0" and facts.get("child_non_interactive") == "true",
@@ -377,7 +394,8 @@ def judge_round(tag, cfg, log_dir, mode_facts, reply, expect_trim, home_now):
                                       len(spill_files(facts.get("spill_dir")))))
 
     afacts = mode_facts.get("async", {})
-    ares = afacts.get("background_result_head", "") + afacts.get("background_result_len", "")
+    ares = b64_val(afacts.get("background_result_b64"))
+    ares2 = b64_val(afacts.get("background_result2_b64"))
     aspills = spill_files(afacts.get("spill_dir"))
     if expect_trim:
         chk("%s A8 异步出口过同一把尺（裁 + 唯一溢出）" % tag,
@@ -385,19 +403,37 @@ def judge_round(tag, cfg, log_dir, mode_facts, reply, expect_trim, home_now):
             and read_text(aspills[0]) == reply,
             "len=%s spill=%d child_shutdown=%s" % (afacts.get("background_result_len"),
                                                    len(aspills), afacts.get("async_child_shutdown")))
+        # 第二次拉取是这一支的猎物：修之前每次 /background result 都重新裁一遍，
+        # 而溢出文件名带毫秒戳 ⇒ 同一个委托拉两次就多两个全文文件。
+        chk("%s A8c 再拉一次不落第二份全文、指针仍是同一个文件" % tag,
+            len(aspills) == 1 and "[SUMMARY TRUNCATED]" in ares2
+            and bool(aspills) and aspills[0] in ares and aspills[0] in ares2,
+            "spill=%d 一次含指针=%s 二次含指针=%s" % (len(aspills), bool(aspills) and aspills[0] in ares,
+                                                     bool(aspills) and aspills[0] in ares2))
+        # 三份 profile 各归各的：这一条红了说明"根"又共用了（数溢出文件会串味）
+        chk("%s A8d 异步溢出落在 async 那一份 profile 里" % tag,
+            bool(aspills)
+            and os.path.abspath(afacts.get("spill_dir", "")).startswith(os.path.abspath(cfgs["async"]))
+            and not os.path.abspath(afacts.get("spill_dir", "")).startswith(
+                os.path.abspath(cfgs["deny"]) + os.sep),
+            "spill_dir=%s async_cfg=%s" % (afacts.get("spill_dir"), cfgs["async"]))
+        chk("%s A8e 异步台账那条 task_completed 里带同一个全文指针" % tag,
+            bool(aspills) and aspills[0] in delegate_detail(cfgs["async"]),
+            "detail=%s" % delegate_detail(cfgs["async"])[:160])
     else:
         chk("%s A8 异步出口整页照回且零溢出" % tag,
             len(aspills) == 0 and "[SUMMARY TRUNCATED]" not in ares,
             "len=%s spill=%d" % (afacts.get("background_result_len"), len(aspills)))
-    chk("%s A8b 异步子代理收工被 shutdown、也没 deny 计数" % tag,
+    # 同一个计数器在 deny 那一条读数是 1（A3b），这里读数是 0 ⇒ 0 不是"没接线"的默认值
+    chk("%s A8b 异步子代理收工被 shutdown、审批计数器读得出且为 0" % tag,
         afacts.get("async_child_shutdown") == "true"
-        and afacts.get("async_child_auto_denied") == "-1",
+        and afacts.get("async_child_auto_denied") == "0",
         "shutdown=%s auto_denied=%s" % (afacts.get("async_child_shutdown"),
                                         afacts.get("async_child_auto_denied")))
 
     cfacts = mode_facts.get("closed", {})
     refused = cfacts.get("refused_line", "")
-    states = read_state_json(os.path.join(cfg, "delegate", "live"))
+    states = read_state_json(os.path.join(cfgs["closed"], "delegate", "live"))
     chk("%s A9 池收掉后提交被当场拒且台账落 FAILED" % tag,
         "异步委托未提交" in refused and "委托池已关闭" in refused
         and any(str(v.get("state")) == "FAILED" for v in states.values()),
@@ -420,14 +456,27 @@ def read_text(path):
 
 
 def delegate_detail(cfg):
+    """台账的 events.log（append-only，每行 `<ts>|<kind>|<detail>`）。
+
+    state.json 里没有 events 这个键 —— 第一版照着 state.json 找 detail，于是 A7 恒拿空串。
+    """
     out = []
-    for name, st in sorted(read_state_json(os.path.join(cfg, "delegate", "live")).items()):
-        ev = st.get("events") or []
-        for e in (ev if isinstance(ev, list) else []):
-            if isinstance(e, dict):
-                out.append("%s %s %s" % (name, e.get("kind"), e.get("detail")))
-        out.append("%s state=%s" % (name, st.get("state")))
+    for path in sorted(glob.glob(os.path.join(cfg, "delegate", "live", "*", "events.log"))):
+        for line in read_text(path).splitlines():
+            parts = line.split("|", 2)
+            if len(parts) == 3:
+                out.append("%s %s %s" % (os.path.basename(os.path.dirname(path)), parts[1], parts[2]))
     return "\n".join(out)
+
+
+def b64_val(raw):
+    """驱动那边整份原文只能转码送（facts 是按"=非空格串"切的，带空格会被劈掉）。"""
+    if not raw or raw in ("null", "NULL"):
+        return ""
+    try:
+        return base64.b64decode(raw).decode("utf-8", "replace")
+    except Exception:
+        return ""
 
 
 def acquire_lock():
@@ -447,8 +496,17 @@ def acquire_lock():
 
 
 def teeth_probe(rounds):
-    """把 `.nonInteractive(true)` 摘掉重建，要求 A1/A2/A3 至少一条真的红（负向判据的活体阳性对照）。"""
-    print("\n== P27C_TEETH_PROBE：旧形状装回去，判据必须红 ==")
+    """把 `.nonInteractive(true)` 摘掉重建，跑一遍 deny 那一支，要求**旧形状确实带病**。
+
+    这支量的是量具自己：A2/A3 那两条判据（一条正向"看得见 [auto-denied]"、一条负向
+    "看不见 WAIT_CONFIRM"）如果在没修的形状下也全绿，那它们就是空跑，不能拿来当证据。
+    所以判"有牙"的条件是两条**旧形状观察项都成立** ⇒ rc=0；任一不成立 ⇒ rc=5（这一支没牙）。
+
+    第一版这里写反过：把"某条 CHECK 红了"当成有牙，而那条红其实是
+    "旧形状下 WAIT_CONFIRM 没显形"（当时还没有假端点，`stub.base.url=None`，
+    子进程连一次 HTTP 都没发出去）。现在两端都钉：显形才算有牙，且发不出包当场判 NO-RUN。
+    """
+    print("\n== P27C_TEETH_PROBE：旧形状装回去，病症必须显形 ==")
     src = os.path.join(ZBOT, MUT_SRC)
     original = read_text(src)
     if original.count(MUT_ANCHOR) != 1:
@@ -458,48 +516,67 @@ def teeth_probe(rounds):
     if lock is None:
         return 4
     baseline = hashlib.md5(original.encode("utf-8")).hexdigest()
+    restored = [False]
     try:
         with io.open(src, "w", encoding="utf-8") as fh:
             fh.write(original.replace(MUT_ANCHOR, "", 1))
-        if not build("teeth"):
-            return 2
-        before = len([c for c, ok, _ in CHECKS if not ok])
-        CHECKS[:] = []
-        facts = {}
-        tag = "TEETH"
+        rc = teeth_body()
+    finally:
+        # 还原无条件发生；但"没还原成功"不许用 finally 里的 return 覆盖上面的判定，
+        # 所以只记账，rc 在块外合成。
+        with io.open(src, "w", encoding="utf-8") as fh:
+            fh.write(original)
+        restored[0] = hashlib.md5(read_text(src).encode("utf-8")).hexdigest() == baseline
+        print("TEETH|还原 md5 对账=%s" % restored[0])
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        if not restored[0]:
+            print("TEETH|FATAL: src 没还原成原样 —— 别再量，先修还原")
+    return rc if restored[0] else 6
+
+
+def teeth_body():
+    if not build("teeth"):
+        return 2
+    srv = start_stub()          # 没有假端点，这支量的是"发不出包"，不是旧形状
+    home_first = home_gauge("teeth.start")
+    try:
         cfg = os.path.join(E2E, "teeth", "cfg")
         log = os.path.join(E2E, "teeth")
         if os.path.isdir(cfg):
             shutil.rmtree(cfg)
         os.makedirs(cfg)
         config_properties(cfg, ["agent.delegate.max.summary.chars=300"])
-        LLM["script"] = deny_script(long_reply("TEETH"))
-        rc, facts["deny"], _ = run_java("deny", cfg, log, tag)
+        tag = "TEETH"
+        reply = long_reply(tag)
+        LLM["script"] = deny_script(reply)
+        rc, _facts, _ = run_java("deny", cfg, log, tag)
         sentinel = os.path.join(cfg, "workspace", "target-cache", "keep.txt")
         rows = bodies(os.path.join(log, "llm-deny"))
         joined = "\n".join(c for _, c in rows)
         saw_auto_denied = "[auto-denied]" in joined
         saw_wait_confirm = "WAIT_CONFIRM" in all_recorded_text(os.path.join(log, "llm-deny"))
-        chk("TEETH 旧形状下 [auto-denied] 不该出现", not saw_auto_denied,
-            "saw_auto_denied=%s" % saw_auto_denied)
-        chk("TEETH 旧形状下 WAIT_CONFIRM 假成功必须显形", saw_wait_confirm,
+        chk("TEETH 旧形状下父侧真的收到过 WAIT_CONFIRM 假成功", saw_wait_confirm,
             "saw_wait_confirm=%s rc=%s sentinel=%s" % (saw_wait_confirm, rc, os.path.isfile(sentinel)))
+        chk("TEETH 旧形状下 [auto-denied] 确实还没诞生", not saw_auto_denied,
+            "saw_auto_denied=%s" % saw_auto_denied)
+        chk("TEETH 这一支自己没出网", not REDLINE["hits"], "; ".join(REDLINE["hits"][:3]))
         red = [n for n, ok, _ in CHECKS if not ok]
         CHECKS[:] = []
-        after = before
-        print("TEETH|判据红=%s" % (",".join(red) or "无（⇒ 这一支探针没有牙）"))
-        return 0 if red else 5
+        sick = saw_wait_confirm and not saw_auto_denied
+        print("TEETH|病症显形=%s 判据红=%s" % (sick, ",".join(red) or "无"))
+        home_last = home_gauge("teeth.end")
+        if home_first != home_last:
+            print("TEETH|FATAL: 这一支动了真 profile %s → %s" % (home_first, home_last))
+            return 7
+        if REDLINE["hits"]:
+            print("NO-RUN: 出网了，这一支不作数")
+            return 3
+        return 0 if sick else 5
     finally:
-        with io.open(src, "w", encoding="utf-8") as fh:
-            fh.write(original)
-        ok = hashlib.md5(read_text(src).encode("utf-8")).hexdigest() == baseline
-        print("TEETH|还原 md5 对账=%s" % ok)
-        try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        if not ok:
-            return 6
+        srv.shutdown()
 
 
 build.cp = ""
@@ -526,26 +603,39 @@ def main():
         tag, extra, expect_trim = plan[i % len(plan)]
         tag = "%s-%d" % (tag, i + 1)
         root = os.path.join(E2E, tag)
-        cfg = os.path.join(root, "cfg")
+        log = root
         if os.path.isdir(root):
             shutil.rmtree(root)
-        os.makedirs(cfg)
+        # 三个 mode 各一个 profile：共用的话，async 落的溢出文件会被 deny 那一条数进去，
+        # 台账也会被 closed 那条 FAILED 污染（"三个子进程互不共享状态"是这轮的判词前提）。
+        cfgs = {}
+        for mode in ("deny", "async", "closed"):
+            cfgs[mode] = os.path.join(root, "cfg-" + mode)
+            os.makedirs(cfgs[mode])
+            config_properties(cfgs[mode], extra)
         home_before = home_gauge("%s.before" % tag)
-        config_properties(cfg, extra)
         reply = long_reply(tag)
-        log = root
         facts = {}
         LLM["script"] = deny_script(reply)
-        rc_deny, facts["deny"], _ = run_java("deny", cfg, log, tag)
+        rc_deny, facts["deny"], _ = run_java("deny", cfgs["deny"], log, tag)
         LLM["script"] = async_script(reply)
-        rc_async, facts["async"], _ = run_java("async", cfg, log, tag)
+        rc_async, facts["async"], _ = run_java("async", cfgs["async"], log, tag)
         LLM["script"] = []
-        rc_closed, facts["closed"], _ = run_java("closed", cfg, log, tag)
+        rc_closed, facts["closed"], _ = run_java("closed", cfgs["closed"], log, tag)
         home_after = home_gauge("%s.after" % tag)
         chk("%s A0 三个子进程都正常退出" % tag, rc_deny == 0 and rc_async == 0 and rc_closed == 0,
             "rc=%s/%s/%s" % (rc_deny, rc_async, rc_closed))
-        judge_round(tag, cfg, log, facts, reply, expect_trim, (home_before, home_after))
+        judge_round(tag, cfgs, log, facts, reply, expect_trim, (home_before, home_after))
+        if REDLINE["hits"]:
+            # 出网就是出网：本轮之后的判词全部作废，别把它写成"某条 CHECK 红了"
+            print("NO-RUN: 子进程往本机以外发过包 ⇒ 红线破裂，判词不作数：")
+            for h in REDLINE["hits"][:8]:
+                print("   " + h)
+            srv.shutdown()
+            return 2
     home_last = home_gauge("end")
+    chk("零真发：一个包都不出本机（假端点只绑 127.0.0.1）", not REDLINE["hits"],
+        "; ".join(REDLINE["hits"][:3]) or "三进程 stdout 里无非回环 http(s) 端点")
     chk("整跑 ~/.zbot 三点一致", home_first == home_before == home_last,
         "%s / %s / %s" % (home_first, home_before, home_last))
     srv.shutdown()

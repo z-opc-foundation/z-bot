@@ -169,9 +169,10 @@ MUTANTS = [
              "只有终态闸挡得住），实测 3/3 红。"),
     dict(id="M11-done-means-delivered",
          file=D("DelegateManager.java"),
-         old='advanceQuiet(live, DelegateEvent.TASK_COMPLETED, "异步收工");',
+         old='advanceQuiet(live, DelegateEvent.TASK_COMPLETED,\n                            "异步收工"',
          new=('live.delivery = DeliveryState.DELIVERED;\n'
-              '                    advanceQuiet(live, DelegateEvent.TASK_COMPLETED, "异步收工");'),
+              '                    advanceQuiet(live, DelegateEvent.TASK_COMPLETED,\n'
+              '                            "异步收工"'),
          expect=["asyncSceneExistsBeforeTheChildFinishesAndDoneIsNotDelivery",
           "unclampedChildBudgetIsRecordedOnDiskWhenParentIsNotAttached",
           "q1_capEightCountsPerDelegationDeliveryAttemptsNotQueueLengthOrInFlightWidth",

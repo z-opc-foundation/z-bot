@@ -139,9 +139,33 @@ public class SummaryBudgetTest {
         assertEquals("从 offset 那一行起就是被省略的中间段", line(7), lines.get(offset - 1));
     }
 
+    /**
+     * 三条"落不成"的路各自都要只回 null，不能把裁切本身带走：
+     * {@code dir==null}（推不出根目录）、目录建不出来（{@code mkdirs} 返回 false，压根没异常）、
+     * 目录在但写不进去（open 抛 {@code FileNotFoundException}，走 catch）。
+     * 前两支都在 catch 之前返回，只拿"是个文件"当 fixture 是量不到第三支的 ——
+     * 杠② run1 的 D3 因此恒绿过一次（见 EVIDENCE §4）。
+     */
     @Test
-    public void spillFailureStillTrimsButSaysSo() throws Exception {
-        File notADir = tmp.newFile("blocked");   // 是个文件 ⇒ mkdirs 必失败
+    public void spillDirectoryUnwritableStillTrimsButSaysSo() throws Exception {
+        File dir = tmp.newFolder("spill-blocked");
+        assertTrue("fixture 没成立：目录改不成只读", dir.setWritable(false));
+        SummaryBudget.Trimmed t;
+        try {
+            t = SummaryBudget.trim(liney(50), 1000, dir, "bg3");
+        } finally {
+            dir.setWritable(true);
+        }
+        assertTrue("落盘失败不能连裁切一起放弃", t.truncated);
+        assertNull(t.spillPath);
+        assertTrue(t.text, t.text.contains("（全文没能落盘，上面的头尾就是保留下来的全部）"));
+        assertFalse(t.text, t.text.contains("read_file path="));
+        assertEquals("写不进去就不该留下半截文件", 0, dir.listFiles().length);
+    }
+
+    @Test
+    public void spillDirectoryUnbuildableStillTrimsButSaysSo() throws Exception {
+        File notADir = tmp.newFile("blocked");   // 是个文件 ⇒ mkdirs 必失败（无异常，走早退那一支）
         SummaryBudget.Trimmed t = SummaryBudget.trim(liney(50), 1000, notADir, "bg3");
         assertTrue("落盘失败不能连裁切一起放弃", t.truncated);
         assertNull(t.spillPath);

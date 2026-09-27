@@ -59,6 +59,7 @@ models-cache.json    # 模型目录缓存
 | `agent.max.steps` / `agent.max.tokens` / `agent.token.budget` / `agent.temperature` | ReAct 循环预算 | `BotConfig.java` |
 | `agent.tool.choice` | 工具选择策略 | 同上 |
 | `agent.exec.confirm` / `agent.exec.confirm.whitelist` | 危险命令审批：硬线/危险表 + 白名单（token 边界匹配） | `tool/ExecGuard.java`、`tool/ApprovalService.java` |
+| `agent.delegate.max.depth` / `agent.delegate.max.children` / `agent.delegate.max.summary.chars` | 子代理委托：深度上限缺省 **2**（0=关掉 delegate_task）、异步并发宽度缺省 **3**、单条子代理回复进父上下文的字符上限缺省 **24000**（0=关掉裁切；超限则头尾各留一段、全文溢出落 `<configDir>/delegate/summaries`，footer 给 `read_file … offset=` 翻页指针） | `delegate/DelegateManager.java`、`delegate/SummaryBudget.java` |
 | `zbot.sandbox` / `agent.state.db` / `zbot.state.db` | 沙箱开关、库路径覆盖 | `BotConfig.java` |
 | `mcp.servers` | MCP server 清单（stdio / HTTP+SSE） | `mcp/` |
 | `skills.*`（`skills.bundled.dir` / `skills.commands.enabled` / `skills.guard.source` / `skills.platform.override`） | 技能装载与命令覆盖 | `skill/` |
@@ -83,6 +84,20 @@ models-cache.json    # 模型目录缓存
 挂在飞书面上等于在验签/token 门**之前**开一条回显口。现在这一面唯一的"把请求内容吐回去"的口是
 `url_verification` 的 `challenge`，它排在 verification-token 门之后；v1 平铺事件的容错只认代码里
 已经读过的那几个键，无出处的 `event.content` 不开读取点（`_doc/acceptance/p30c/EVIDENCE.md`）。
+
+子代理**不会**向人申请确认：`buildChild` 出来的每个子 agent 都声明成"没有可以等的人"
+（`BotAgent.Builder.nonInteractive`），撞上审批闸门的调用当场记 `[auto-denied]` 并把那句拒绝回灌给
+子模型，让它的回合继续走 —— 对标 hermes 的 `_subagent_auto_deny`（`delegate_tool.py:57-85`，
+缺省 deny，放开要显式配置）。修之前子代理照旧抛"待批"，可它那条 `ApprovalService` 队列是
+**私有的**（`build()` 给每个子 agent 现造一个，父的 `/confirm` 结构上读不到），于是 `chat()` 把
+`WAIT_CONFIRM:…` 当最终回复返回、委托被记成一次"看起来成功"的完成，盘上还留一条永远 pending 的申请。
+`nonInteractive` 不放宽任何一道门：硬线在任何模式下都照旧直接拒，要真让子代理放行命令只能改父配置
+`agent.exec.confirm=off` 或白名单。异步委托那口线程池同时从 `static` 改成了实例字段，随
+`agent.shutdown()` 收池；收掉之后再派是当场拒绝并记 `FAILED`，不会留一条占着并发槽位的 QUEUED。
+守卫 `SubagentApprovalDenialTest`（含"交互父代理照旧要问人"那支反向对照）、
+`DelegatePoolLifecycleTest`、`SummaryBudgetTest` + `DelegateSummaryWiringTest`
+（前者量纯函数、后者量 `agent.delegate.max.summary.chars` 真的接在两个朝向父模型的出口上），
+变异检验见 `_doc/acceptance/p27c/LEDGER.tsv`。
 
 ## 命令面只有一份源
 
@@ -132,6 +147,7 @@ P19 8/8 KILLED、P27 21 支 `10 RED-OK / 10 PARTIAL / 1 SURVIVED`、P28 14 支 `
 - **`0.2.0` / `0.3.0` 都没发 Central**，repo1 上只有 `z-bot-core:0.1.0`；P29（抬号 + 发布 + 外部工程真 pull 验证）未开工。
 - 入站的**真凭据握手**仍然零验证：飞书 `{"encrypt": …}` 解密、飞书 **SHA-256** 事件验签、钉钉入站 `sign`+1 小时窗口校验三条 P30 都已实现并具名钉住（`_doc/hermes-roadmap.md` §8.14），但进出站的全部证据仍是"对 127.0.0.1 假端点发出的字节"——本机没有飞书/钉钉凭据。
 - 入站 body 上限 64 KiB（四面共用、门在分配之前）已闭合（`_doc/hermes-roadmap.md` §8.15）；`GET /feishu/event?echostr=` 那条验签门外的回显也已拆掉（§8.16，D-P30-1），v1 平铺容错同时划了边界：无出处的 `event.content` 不是读取点，由一支边界用例钉住（D-P30-2）。仍欠的是**上限本身不是配置项**（改尺寸要重编）与真凭据握手零验证（上一条）。
+- 摘要预算只做**静态那一层**：她的第二把尺 `_parent_summary_char_budget`（`delegate_tool.py:1695-1733`：取父代理剩余 headroom 的 `_SUMMARY_HEADROOM_FRACTION=0.5` 按**一批 N 条**摘要分摊，地板 `_MIN_SUMMARY_CHARS=2000`）没抄 —— 那道尺是为 batch 扇出（一次返回 N 份完整摘要）造的，而 z-bot 的 delegate 面一次只回一条：`delegate_task` 只有单个 `task` 参数，`DelegateManager.java` 里 `tasks`/`batch` 实测 0 命中，没有"分摊"这一步可算。父代理剩余 headroom 的读数本身是有的（`context/CompressorEngine` 的 `contextWindow`），要接先得把批形状造出来。她的 `delegation.subagent_auto_approve`（自动放行）也没抄 —— roadmap 只点名 deny，而自动放行等价于把 `agent.exec.confirm=off` 藏进委托面，那是放宽闸门不是补差距。
 - `POST /api/skill/push` 的语义（推 vs 拉）尚未裁定（D-P28-2）；`POST /api/agent/register` 该返 200 还是 501 未定。
 - 真 tty 下的人机体验（渲染、光标键、中文宽字符）没有自动化验收，只有 pty 探针取证，记 NO-RUN。
 - `z-bot-desktop-packager` 只有 jpackage 配置，本机没打过 .dmg/.exe/.deb。

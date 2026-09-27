@@ -146,12 +146,33 @@ MUTANTS = [
      "`assertEquals(text, trim(text, 0).text)`，接线那条 `assertFalse(delivered.contains(\"[SUMMARY TRUNCATED]\"))`"
      "（第一、二条断言在这一刀下仍成立：裁过后 tail 里确实还有全文）。"),
 
-    ("D3 溢出落盘失败改成上抛", "D-摘要预算", "sb",
+    ("D3 溢出落盘失败改成上抛（写不进去 ⇒ 走 catch 那一支）", "D-摘要预算", "sb",
      "        } catch (Exception e) {\n            return null;\n        } finally {",
      "        } catch (Exception e) {\n            throw new IllegalStateException(\"spill failed\", e);\n        } finally {", 1,
-     [SUM + "spillFailureStillTrimsButSaysSo"], [],
+     [SUM + "spillDirectoryUnwritableStillTrimsButSaysSo"], [],
      "她的 `_spill_summary_to_file` 是 best-effort（:1615-1637）：磁盘不可写不能把裁切本身放弃，"
-     "更不能让一次委托失败。红的断言：这一支整个用例以 IllegalStateException 报错。"),
+     "更不能让一次委托失败。红的断言：这一支整个用例以 IllegalStateException 报错。"
+     "**run1 这一支恒绿过**：当时的 fixture 是「目录位置放一个文件」，那走的是 `mkdirs()` 返回 false"
+     "的早退（catch 之前），所以量的不是同一件事 ⇒ 换 `setWritable(false)` 真造异常，"
+     "另外两条早退各立一支（D5/D6）。"),
+
+    ("D5 目录建不出来改成上抛（mkdirs=false 那一支）", "D-摘要预算", "sb",
+     "            if (!dir.isDirectory() && !dir.mkdirs()) {\n                return null;\n            }",
+     "            if (!dir.isDirectory() && !dir.mkdirs()) {\n"
+     "                throw new Error(\"no spill dir\");\n            }", 1,
+     [SUM + "spillDirectoryUnbuildableStillTrimsButSaysSo"], [],
+     "早退那一支与 catch 那一支是两码事：一条压根不抛异常。红的断言：用例以该 throwable 报错。"
+     "**run2 用 `IllegalStateException` 时恒绿** —— 那一支在 `try` 之内，抛出的 Exception 被同一"
+     "方法的 `catch (Exception e) { return null; }` 吞掉（探针取证：字节码里 marker 有、行为没变，"
+     "见 EVIDENCE §4），换 `Error` 才不被那道 catch 接住，这一刀才量得到'早退不许把失败带上抛'。"),
+
+    ("D6 推不出目录（dir==null）改成上抛", "D-摘要预算", "sb",
+     "        if (dir == null) {\n            return null;\n        }",
+     "        if (dir == null) {\n            throw new IllegalStateException(\"no dir at all\");\n        }", 1,
+     [SUM + "twoArgOverloadHasNoPointer"], [],
+     "`summariesRoot()` 允许推不出来（她的 footer 就为此写「全文没能落盘」），两参重载更是恒无指针。"
+     "红的断言：用例以 IllegalStateException 报错。"),
+
 
     ("D4 footer 里去掉'原文共 L 字符'", "D-摘要预算", "sb",
      "                .append(\" 字符，原文共 \").append(summary.length()).append(\" 字符\")",
@@ -184,7 +205,21 @@ MUTANTS = [
       WIR + "asyncExitIsTrimmedByTheSameCap"], [],
      "红线 1 的形状：写盘位置必须由 profile 推导，不能落到别处。红的断言：`onlySpillFile()`"
      "（cfgDir 下没有那唯一一份）与 `assertEquals(1, summariesDir().listFiles().length)`。"
-     "注入体刻意不回落到 `~/.zbot` —— 杠② 期间一个字节都不许写进真 profile。"),
+     "注入体刻意不回落到 `~/.zbot` —— 杠② 期间一个字节都不许写进真 profile。"
+     "**判为等价（run1 GREEN-BUT-MUTATED，run2 仍注入以留证据）**：`BotAgent.build()` 在 config "
+     "模式下把 childSessions 定成 `<configDir>/delegate/children`，于是 fall-through 之后"
+     "`new File(parentFile, \"summaries\")` 算出的仍是 `<configDir>/delegate/summaries` —— 同一"
+     "个路径，两支在真实接线上不可分。可分的是 config==null 那一支，另立 E4。"),
+
+    ("E4 摘掉 config==null 的那条 fallback 推导", "E-委托出口裁切", "dm",
+     "        if (childSessionDir != null && childSessionDir.getParentFile() != null) {\n"
+     "            return new File(childSessionDir.getParentFile(), \"summaries\");\n        }",
+     "        if (false) {\n"
+     "            return new File(childSessionDir.getParentFile(), \"summaries\");\n        }", 1,
+     [WIR + "noConfigSummariesRootDerivesFromTheChildSessionsParent"], [],
+     "没有 profile 的程序化 agent 是活的形状（`BotAgent.build()` 走 `<sandbox 父目录>/delegate-children`"
+     "那一支）；这一刀之后 `summariesRoot()` 恒 null ⇒ 全文只裁不落。红的断言："
+     "`assertEquals(new File(base, \"summaries\"), bare.summariesRoot())`。"),
 
     ("E3 同步出口整份照回（只留异步那把尺）", "E-委托出口裁切", "dm",
      "            SummaryBudget.Trimmed trimmed = SummaryBudget.trim(reply, summaryCap(), summariesRoot(), live.id);",
@@ -233,6 +268,20 @@ MUTANTS = [
      [POL + "submitAfterShutdownRefusesAndDoesNotLeakASlot"], [],
      "摘掉兜底 ⇒ RejectedExecutionException 从 `submitBackground` 直接冒到调用方，条目留在 QUEUED"
      "永久占着宽度闸门。红的断言：`assertTrue(first.contains(\"异步委托未提交\"))`（这一支以异常报错）。"),
+
+    ("E5 取回时现裁（读路径每次拉取重写一份全文）", "E-委托出口裁切", "dm",
+     "        SummaryBudget.Trimmed r = d.rendered;\n"
+     "        if (r == null) {\n"
+     "            r = d.rendered = SummaryBudget.trim(d.reply, summaryCap(), summariesRoot(), d.id);\n"
+     "        }\n"
+     "        return r;",
+     "        return SummaryBudget.trim(d.reply, summaryCap(), summariesRoot(), d.id);", 1,
+     [WIR + "repeatPullsRenderOnceAndShareOneSpillFile"], [],
+     "杠③ run1 复算时才显形的缺陷：裁切原本挂在 `asyncResult()` 这条**读**路径上，而溢出文件名带"
+     "毫秒戳 ⇒ 同一个委托 id 拉三次就多三个全文文件（她收集时只裁一次）。红的断言："
+     "`assertEquals(1, spills.length)` 那一条（拉三次）；两条指针断言在这一刀下**仍是绿的**"
+     "（每次现裁也各自含一个合法指针），所以点名只有这一支 —— 这一支就是"
+     "\"读路径不许写盘\"这句话的全部覆盖。"),
 
     # ===== G-README/配置缺省对账 =====
     ("G1 BotConfig 摘要缺省 24000 → 24001", "G-缺省值对账", "cfg",

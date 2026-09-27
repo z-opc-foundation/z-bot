@@ -46,7 +46,7 @@ import static org.junit.Assert.assertTrue;
  * 结构上读不到它）。</p>
  *
  * <p>对标：hermes 用 {@code ThreadPoolExecutor(initializer=…)} 给子代理工作线程装非交互
- * 裁决回调，缺省 {@code _subagent_auto_deny}（{@code delegate_tool.py:58-86}）。
+ * 裁决回调，缺省 {@code _subagent_auto_deny}（{@code delegate_tool.py:57-85}，本体 :74-85）。
  * 我们等价物是 {@code BotAgent.Builder.nonInteractive} + {@code emitToolResult} 里的 deny 分支。</p>
  */
 public class SubagentApprovalDenialTest {

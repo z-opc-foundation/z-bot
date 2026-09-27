@@ -119,6 +119,71 @@ public class DelegateSummaryWiringTest {
                 1, summariesDir().listFiles().length);
     }
 
+    /**
+     * 取回是<b>读</b>路径：读一次和读三次，盘上必须只有一个全文文件，且两次拿到的指针是同一个。
+     *
+     * <p>修之前 {@code asyncResult()} 每次调用都现裁一遍 {@code SummaryBudget.trim(...)}，而溢出文件名
+     * 带毫秒戳 ⇒ 运维对着同一个委托 id 拉几次 {@code /background result} 就往 profile 里塞几个全文
+     * （她收集时只裁一次：{@code _trim_summary_with_footer} 由组装父侧结果那一处调用）。
+     * 顺带钉住异步台账那句 {@code task_completed} 里带的就是这一个指针 —— 与同步那条出口对称，
+     * 反查时不用先猜文件在哪个时间戳上。</p>
+     */
+    @Test
+    public void repeatPullsRenderOnceAndShareOneSpillFile() throws Exception {
+        RecordingProvider llm = new RecordingProvider().script(textReply(liney(20)));
+        BotAgent agent = builder(config("agent.delegate.max.summary.chars=300"), llm)
+                .delegateDepth(0).build();
+
+        String submitted = agent.submitBackground("write a lot");
+        String id = submitted.replaceFirst(".*已提交异步委托 (bg[0-9]+-[0-9]+).*", "$1");
+        String first = waitFor(agent, id, 8000);
+        String second = agent.backgroundResult(id);
+        String third = agent.backgroundResult(id);
+
+        File[] spills = summariesDir().listFiles();
+        assertEquals("拉了三次就落三份全文 ⇒ 读路径在写盘: " + Arrays.toString(spills),
+                1, spills == null ? 0 : spills.length);
+        String pointer = "read_file path=\"" + spills[0].getAbsolutePath() + "\"";
+        assertTrue(first, first.contains(pointer));
+        assertTrue(second, second.contains(pointer));
+        assertTrue(third, third.contains(pointer));
+
+        String ledger = ledgerEvents(agent);
+        assertTrue("异步台账没记全文指针:\n" + ledger,
+                ledger.contains("摘要已裁切 全文=" + spills[0].getAbsolutePath()));
+    }
+
+    private String ledgerEvents(BotAgent agent) throws Exception {
+        File root = agent.getDelegation().liveLedger().root();
+        StringBuilder sb = new StringBuilder();
+        File[] scenes = root.isDirectory() ? root.listFiles() : new File[0];
+        if (scenes != null) {
+            for (File scene : scenes) {
+                File events = new File(scene, "events.log");
+                if (events.isFile()) {
+                    sb.append(new String(Files.readAllBytes(events.toPath()), StandardCharsets.UTF_8));
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * {@code config==null} 那一支（程序化起 agent、没有 profile）：{@code BotAgent.build()} 在这种
+     * 形状下把 childSessions 放在 {@code <sandbox 父目录>/delegate-children}，溢出目录只能由它的
+     * 父目录推。config 那一支的两条推导在真实接线上落的是同一个路径（杠② run1 的 E2 判定，
+     * 见 EVIDENCE §4），所以生产里唯一能把"有 fallback"与"只认 configDir"分开的就是这一支。
+     */
+    @Test
+    public void noConfigSummariesRootDerivesFromTheChildSessionsParent() {
+        File base = new File(tmp.getRoot(), "bare-root");
+        File children = new File(base, "delegate-children");
+        DelegateManager bare = new DelegateManager(null, new RecordingProvider(),
+                new Sandbox(sandboxDir.getAbsolutePath()), children, 0, 2);
+        assertEquals("溢出全文要落在委托现场同侧，不是宿主家目录",
+                new File(base, "summaries"), bare.summariesRoot());
+    }
+
     // ===== helpers =====
 
     private File summariesDir() {
