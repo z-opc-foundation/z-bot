@@ -21,7 +21,7 @@ import com.zifang.z.bot.slash.CommandCatalog;
  * <p>支持按键：</p>
  * <ul>
  *   <li>可打印字符 — 加入 buffer，回显</li>
- *   <li>Enter (10 / 13) — 提交</li>
+ *   <li>Enter (10 / 13) — 提交；行尾 {@code \} 则吃掉它换行续读（与 JLine 模式同一条 {@link Continuation}）</li>
  *   <li>Backspace (127) / Ctrl-H (8) — 删除一个字符</li>
  *   <li>Tab (9) — 命令补全（仅 raw mode 有效）</li>
  *   <li>Ctrl-C (3) — 中断</li>
@@ -194,6 +194,11 @@ public final class RawTerminalReader implements AutoCloseable {
             }
             if (c == 10 || c == 13) {
                 System.out.print("\r\n" + TerminalUI.RESET);
+                if (Continuation.endsWithContinuation(sb.toString())) {
+                    sb.setLength(sb.length() - 1);
+                    sb.append('\n');
+                    continue;
+                }
                 sb.append('\n');
                 return sb.toString();
             }

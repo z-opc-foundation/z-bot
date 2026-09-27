@@ -5,7 +5,6 @@ import org.jline.reader.Completer;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.Highlighter;
 import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.ParsedLine;
 import org.jline.reader.UserInterruptException;
 import org.jline.terminal.Terminal;
@@ -28,6 +27,7 @@ import java.util.function.Supplier;
  *   <li>Ctrl-C — 打印 {@code ^C} 后抛 {@code IOException("interrupted")}</li>
  *   <li>Ctrl-D（空行）— 返回 {@code null}（EOF）</li>
  *   <li>返回的行不含末尾换行（JLine 行为）；降级模式与 RawTerminalReader 一致含 {@code \n}，调用方一律 trim</li>
+ *   <li>JLINE 模式额外承担多行输入与粘贴折叠，键位和阈值都在 {@link ZBotLineReader}</li>
  * </ul>
  */
 public final class LineEditor implements AutoCloseable {
@@ -65,19 +65,24 @@ public final class LineEditor implements AutoCloseable {
                 terminal.close();
                 return fallback(commandNames);
             }
-            LineReaderBuilder b = LineReaderBuilder.builder()
-                    .terminal(terminal)
-                    .appName("z-bot")
-                    .completer(new SlashCompleter(commandNames, sessionIds))
-                    .highlighter(new InputHighlighter());
-            if (historyFile != null) {
-                b.variable(LineReader.HISTORY_FILE, historyFile);
-            }
-            return new LineEditor(Mode.JLINE, b.build(), commandNames);
+            ZBotLineReader reader = new ZBotLineReader(terminal, "z-bot", historyVars(historyFile));
+            reader.setHistory(new org.jline.reader.impl.history.DefaultHistory());
+            reader.setCompleter(new SlashCompleter(commandNames, sessionIds));
+            reader.setHighlighter(new InputHighlighter());
+            reader.setOpt(LineReader.Option.BRACKETED_PASTE);
+            return new LineEditor(Mode.JLINE, reader, commandNames);
         } catch (Throwable t) {
             closeQuietly(terminal);
             return fallback(commandNames);
         }
+    }
+
+    private static java.util.Map<String, Object> historyVars(File historyFile) {
+        java.util.Map<String, Object> vars = new java.util.HashMap<>();
+        if (historyFile != null) {
+            vars.put(LineReader.HISTORY_FILE, historyFile);
+        }
+        return vars;
     }
 
     /** 纯降级模式（非 TTY / 测试直接用行模式）。 */

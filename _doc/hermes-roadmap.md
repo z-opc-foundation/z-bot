@@ -277,8 +277,26 @@ v1 每期都盖了 ✅ 并附"实测记录", 但**计划文字里的几条主张
   **产品侧的修法待裁定**，见 §8.17 欠账）。
 
 **P28 前端 parity 收口 (不移植 React)** · 边界 `ui/*.java`, `web/index.html`, `channel/HttpChannel.java`
-- 只做 JLine 侧对等 (多行输入、Ctrl-R 搜索历史、粘贴折叠) 与 web 侧最小可用; **明确不做**她的 Ink 分屏/鼠标选择/滚轮加速 (理由在 §4)。
-- 验收: pty 真跑回归 (沿用 `/tmp/pty_tui.py` 11 条 + 新增)。
+- **承诺集先按 hermes 现测改过一次**（原写"多行输入、Ctrl-R 搜索历史、粘贴折叠"三条里，**第二条在上游不存在**）:
+  - 多行输入 = **真**（三条独立机制）: `ui-tui/src/components/textInput.tsx:1103` 判 `k.return`，`:1110` 只要带
+    shift/ctrl/meta 就 `:1111` 插 `'\n'`，否则 `:1113` 提交；裸 Ctrl+J 只在白名单终端保 newline
+    （`shouldPreserveCtrlJNewline()` `:1108`）。另有与终端无关的续行: 行尾 `\` ⇒ `app/useSubmission.ts:348` 收下当前行、
+    `:354` 用 `join('\n')` 拼缓冲。
+  - Ctrl-R 搜历史 = **假**: `ui-tui/src` 全域 grep `i-search|isearch|reverseSearch|reverse-search|historySearch|searchHistory|history_search|incrementalSearch`
+    **各 0 命中**（阳性对照同一条命令下 `grep -rIn ctrl ui-tui/src` = 249 命中 ⇒ 不是搜不到，是没有）。她只有下标循环
+    `app/useInputHandlers.ts:246` 的 `cycleHistory`；`content/hotkeys.ts` 里 `search` 0 命中。字面 `ctrl+r` 只落在三处无关文件 ——
+    `components/activeSessionSwitcher.tsx:133` 是 **refresh** 热键（`__tests__/activeSessionSwitcher.test.ts:45` 断言原文
+    `Ctrl+R refresh`），另两处是语音键解析测试 `__tests__/platform.test.ts:107/180`。`/history` 是转写查看器不是搜索。
+  - 粘贴折叠 = **真，且是真折叠不是原样插入**: 阈值 5 行 / 2000 字符（`app/uiStore.ts:25-26`，判据 `app/useComposerState.ts:191-195`），
+    未过阈值原样插（`:197-202`），过阈值则 `:204` 生成 `[[ head.. [Nl lines] .. tail ]]` 标记（`lib/text.ts:95-107`，`edgePreview` `:85-93`）
+    插进输入框、`:207` 把原文存进 `pasteSnips`、`:209-220` 再镜像一份到临时文件；**展开只在提交那一刻**
+    （`app/useSubmission.ts:19-28` `expandSnips` + `protocol/paste.ts:1` `/\[\[[^\n]*?\]\]/g`，`:71` 送模型、`:223` 写历史）。
+    括号粘贴模式 `\x1b[?2004h`/`\x1b[?2004l`（`app/useMainApp.ts:63-64`），识别在 `components/textInput.tsx:1250`。
+- **P31（本期 JLine 侧的活）**: 只做上面两条真契约 —— ①多行（提交键 vs 换行键、行尾 `\` 续行）②括号粘贴折叠
+  （阈值 + 标记 + 提交时展开）。**不做 Ctrl-R 反向搜索**（hermes 没有，不自造对标物）; **明确不做**她的 Ink 分屏/鼠标选择/滚轮加速 (理由在 §4)。
+- 验收: pty 真跑回归。**量具必须进仓** —— 旧承诺写的 `/tmp/pty_tui.py`（11 条 A1–A11，现测 101 行，09-25 17:06）此刻虽还在，
+  但 /tmp 会被同机其它会话扫空，且它的 `CFG=/tmp/zbot-pty` 违反"E2E 隔离现场放 `~/.cache`"这条本期纪律；改落
+  `_doc/acceptance/p31/pty_tui.py`，新增判据覆盖多行与折叠两条契约。
 
 ### W6 — 发布
 
