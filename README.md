@@ -9,7 +9,7 @@
 | 坐标 | `io.github.yuku123:z-bot`（聚合）/ `:z-bot-core`（唯一有代码的模块） | `grep -n '<artifactId>' pom.xml` |
 | 当前源码版本 | `0.2.0`（`pom.xml` 的 `<revision>`，唯一真源） | `grep -n '<revision>' pom.xml` |
 | Central 上实际有的版本 | **只有 `z-bot-core:0.1.0`**（`0.2.0` 实测 404 ⇒ 本仓 0.2.0 **没发过**） | `curl -sI https://repo1.maven.org/maven2/io/github/yuku123/z-bot-core/0.2.0/z-bot-core-0.2.0.jar \| head -1` |
-| JDK | Java 8（`maven.compiler.source/target=8`） | `grep -n 'maven.compiler' pom.xml` |
+| JDK | Java 8（`maven.compiler.source/target=8` 由父链 `z-boot-parent:1.0.19` 下发，本仓根 pom 不再重抄） | `grep -rn 'maven.compiler' pom.xml */pom.xml`（仓根那处命中是注释） |
 | 内核 pin | `z-agent-kernel.version=0.2.1` | `grep -n 'z-agent-kernel.version' pom.xml` |
 | 模块 | `z-bot-core`（全部代码与测试）、`z-bot-desktop-packager`（jpackage 桌面包配置，无测试） | `grep -n '<module>' pom.xml` |
 

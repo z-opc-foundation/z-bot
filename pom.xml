@@ -15,6 +15,17 @@
         - 数据持久化走本地 SQLite (jdbc)
     -->
 
+    <!-- 消费入口统一走 z-boot-parent（1.0.19 起全组织口径，试点 z-cache）：它继承第三方地板
+         z-boot-dependencies:1.0.19、import 兄弟仓权威 z-boot-fleet:1.0.0，并下发 Java 8 的
+         pluginManagement。以前这里没有 <parent>，版本属性表全自建。
+         relativePath 必须留空：parent 不在磁盘上，在 repo1。 -->
+    <parent>
+        <groupId>io.github.yuku123</groupId>
+        <artifactId>z-boot-parent</artifactId>
+        <version>1.0.19</version>
+        <relativePath/>
+    </parent>
+
     <groupId>io.github.yuku123</groupId>
     <artifactId>z-bot</artifactId>
     <version>${revision}</version>
@@ -58,33 +69,62 @@
 
     <properties>
         <revision>0.2.0</revision>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!--
-            kernel 版本独立于 z-bot 自身 revision: z-bot 是 kernel 的消费方,
-            必须跟 kernel 的发布线走 (0.1.1 起 kernel-tool 才带 ToolArguments).
+            删掉、改由父链下发的键：maven.compiler.source=8 / maven.compiler.target=8 /
+            project.build.sourceEncoding=UTF-8（父链面值逐字相同，z-boot-parent/pom.xml:56-58）、
+            okhttp.version=4.12.0（地板 okhttp 直接条目同值 4.12.0）。
+
+            留着的三格都是**不能删**：
+            - jackson.version=2.13.5 对地板 2.18.6：刻意的零漂移，靠下面按坐标写的三条直接条目顶住。
+            - z-agent-kernel.version=0.2.1 对 fleet 的 0.1.1：kernel 仓 HEAD 是 0.2.1 但从未发布
+              （repo1 实测 12 件 z-agent-kernel-*:0.2.1 与 0.2.0 全 404，0.1.1 才 200）⇒ 按本仓面值
+              写死，不静默降级到 0.1.1。
+            - jline.version=3.24.1：父链不供这个坐标。
         -->
         <z-agent-kernel.version>0.2.1</z-agent-kernel.version>
         <jline.version>3.24.1</jline.version>
-        <okhttp.version>4.12.0</okhttp.version>
         <jackson.version>2.13.5</jackson.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!-- 自家 3 个 reactor 坐标钉 ${project.version}。继承来的 DM 会改写**传递依赖**的版本，
+                 而 fleet 里 z-bot 那格钉的是 repo1 已发布的 0.1.0（本仓 revision 已是 0.2.0）⇒ 任何
+                 指向自家模块的依赖边都会被反向压成 0.1.0 旧字节码（z-cache 试点实测踩过：shade 把
+                 1.3.5 打进 1.3.6 的包里）。本仓今天还没有 sibling 依赖边（packager 只读 core 的
+                 target 目录），这三条是把面值先钉死。z-bot / z-bot-desktop-packager 是 packaging=pom，
+                 条目必须带 <type>pom</type>（受管项按 g:a:type:classifier 匹配）。 -->
             <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>2.7.18</version>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-bot</artifactId>
+                <version>${project.version}</version>
                 <type>pom</type>
-                <scope>import</scope>
             </dependency>
+            <dependency>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-bot-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-bot-desktop-packager</artifactId>
+                <version>${project.version}</version>
+                <type>pom</type>
+            </dependency>
+
+            <!--
+                spring-boot-dependencies:2.7.18 的 import 删掉：地板 import 的就是同一格 2.7.18
+                （z-boot-dependencies/pom.xml:225-229，${spring-boot.version}），重复 import 只是
+                dm 打架的来源。okhttp 的 managed 条目一并删：地板有直接条目 okhttp=4.12.0，与本仓
+                原面值同值。
+            -->
 
             <!--
                 z-bot 用 kernel 全套 (11 核心包), 因为本地 agent 是"完整 z 体系成员",
                 直接持有 kernel SPI + 默认实现, 不走 z-agent 平台中转.
+                这 12 条是按坐标写的**直接**条目：模块侧这 12 支依赖不写 <version>，删掉条目就静默
+                降回 fleet 的 0.1.1；只留属性名（键在、条目不在）同样顶不住。
             -->
             <dependency>
                 <groupId>io.github.yuku123</groupId>
@@ -157,17 +197,23 @@
             </dependency>
 
             <!--
-                kernel-llm 内部引 okhttp 4.12.0; z-bot 的 BotCenterClient 也直接用 okhttp,
-                显式 pin 同一版本, 避免 spring-boot-dependencies 的 4.9.x 就近覆盖.
+                Jackson 整族留在 2.13.5（地板面值 2.18.6，preflight 现读）：本仓树里的 jackson 只有
+                databind/core/annotations 三件，实测只写 databind 一条时另两件仍落 2.13.5（它们是
+                databind 的传递件），三条都写是按坐标钉死、不靠传递就近（照 z-cache 的 log4j 写法）。
             -->
-            <dependency>
-                <groupId>com.squareup.okhttp3</groupId>
-                <artifactId>okhttp</artifactId>
-                <version>${okhttp.version}</version>
-            </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
                 <version>${jackson.version}</version>
             </dependency>
             <!--
@@ -183,15 +229,10 @@
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.15.0</version>
-                <configuration>
-                    <source>${maven.compiler.source}</source>
-                    <target>${maven.compiler.target}</target>
-                </configuration>
-            </plugin>
+            <!-- maven-compiler-plugin 的声明删掉了：父链 pluginManagement 下发 3.11.0 +
+                 source/target ${maven.compiler.source}/8、${maven.compiler.target}/8 + UTF-8 编码 +
+                 -parameters（与本仓手抄那两条同值；class-file major 52 已复验）。
+                 maven-release-plugin 与下面 central profile 的发布插件族父链不供，照旧。 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-release-plugin</artifactId>
@@ -204,9 +245,18 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>flatten-maven-plugin</artifactId>
                 <version>1.7.2</version>
+                <inherited>true</inherited>
                 <configuration>
                     <updatePomFile>true</updatePomFile>
-                    <flattenMode>resolveCiFriendliesOnly</flattenMode>
+                    <!-- 改 oss：z-boot-parent 那条 flatten 声明是 <inherited>false</inherited>，不下发，
+                         本仓必须自己 flatten，否则发布件带着 org parent。判形状按本仓中央上那一版：
+                         z-bot-0.1.0.pom 的 <parent> 计数是 0（自包含），而 resolveCiFriendliesOnly 在
+                         换 parent 之后会把 z-boot-parent:1.0.19 原样发出去，也不会解析本仓 DM 里新增的
+                         ${project.version}（消费方按它自己的版本去解析，z-boot 那侧实测 404）。oss 两者
+                         都落字面量，叶子件（中央上 z-bot-core-0.1.0.pom 带
+                         <parent>z-bot:0.1.0</parent>）一并变自包含。
+                         常开、不挂 central profile：不带 -P central 的 install 也得入库自包含 pom。 -->
+                    <flattenMode>oss</flattenMode>
                 </configuration>
                 <executions>
                     <execution>

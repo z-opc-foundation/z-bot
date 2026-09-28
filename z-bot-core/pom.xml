@@ -18,11 +18,8 @@
     <name>z-bot-core</name>
     <description>本地 agent 应用: LLM client + Agent runtime + CLI + HTTP server</description>
 
-    <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
+    <!-- maven.compiler.source/target=8 与 project.build.sourceEncoding=UTF-8 由 z-boot-parent
+         下发（面值逐字相同），本模块的 properties 块删掉。 -->
 
     <dependencies>
         <!-- 引入 kernel 9 个核心包, 不引入 spring -->
@@ -106,7 +103,7 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- CLI 命令解析 -->
+        <!-- CLI 命令解析（地板与 fleet 都不管 info.picocli ⇒ 面值 4.7.6 留着） -->
         <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>

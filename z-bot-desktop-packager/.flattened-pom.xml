@@ -1,50 +1,37 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-
-    <parent>
-        <groupId>io.github.yuku123</groupId>
-        <artifactId>z-bot</artifactId>
-        <version>0.2.0</version>
-    </parent>
-
-    <groupId>io.github.yuku123</groupId>
-    <artifactId>z-bot-desktop-packager</artifactId>
-    <version>0.2.0</version>
-    <packaging>pom</packaging>
-
-    <name>z-bot-desktop-packager</name>
-    <description>jpackage 桌面分发包配置: macOS .dmg / Windows .exe / Linux .deb</description>
-
-    <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <jpackage.skip>true</jpackage.skip>
-    </properties>
-
-    <build>
-        <plugins>
-            <!--
-                jpackage-maven-plugin: 把 z-bot-core 的 shade jar 打成 .dmg / .exe / .deb
-                默认 skip, 通过 -Djpackage.skip=false 触发(需要本地装 JDK 14+ jpackage).
-            -->
-            <plugin>
-                <groupId>org.panteleyev</groupId>
-                <artifactId>jpackage-maven-plugin</artifactId>
-                <version>1.5.2</version>
-                <configuration>
-                    <skip>${jpackage.skip}</skip>
-                    <appName>z-bot</appName>
-                    <appVersion>0.2.0</appVersion>
-                    <vendor>z-team</vendor>
-                    <destination>dist</destination>
-                    <input>${project.basedir}/../z-bot-core/target</input>
-                    <mainJar>z-bot-core.jar</mainJar>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
+<project xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.github.yuku123</groupId>
+  <artifactId>z-bot-desktop-packager</artifactId>
+  <version>0.2.0</version>
+  <packaging>pom</packaging>
+  <name>z-bot-desktop-packager</name>
+  <description>jpackage 桌面分发包配置: macOS .dmg / Windows .exe / Linux .deb</description>
+  <url>https://github.com/z-opc-foundation/z-bot/z-bot-desktop-packager</url>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>yuku123</id>
+      <name>yuku123</name>
+      <email>1340947819@qq.com</email>
+      <organization>z-team</organization>
+      <organizationUrl>https://github.com/yuku123</organizationUrl>
+      <roles>
+        <role>owner</role>
+      </roles>
+      <timezone>+08:00</timezone>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:https://github.com/z-opc-foundation/z-bot.git/z-bot-desktop-packager</connection>
+    <developerConnection>scm:ssh:git@github.com/z-opc-foundation/z-bot.git/z-bot-desktop-packager</developerConnection>
+    <url>https://github.com/z-opc-foundation/z-bot/z-bot-desktop-packager</url>
+  </scm>
 </project>

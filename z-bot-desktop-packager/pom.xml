@@ -18,10 +18,9 @@
     <name>z-bot-desktop-packager</name>
     <description>jpackage 桌面分发包配置: macOS .dmg / Windows .exe / Linux .deb</description>
 
+    <!-- maven.compiler.source/target=8 与 project.build.sourceEncoding=UTF-8 由 z-boot-parent 下发
+         （面值逐字相同），这两格删掉。 -->
     <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jpackage.skip>true</jpackage.skip>
     </properties>
 
