@@ -11,6 +11,7 @@ import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.session.SessionManager;
 import com.zifang.z.bot.tool.Sandbox;
+import com.zifang.z.bot.tool.env.ProcessTree;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -248,8 +249,11 @@ public final class P27DelegationDriver {
         public ChatCompletionsResponse chat(ChatCompletionsRequest request) {
             try {
                 Process p = new ProcessBuilder("/bin/sleep", "40").start();
-                GRANDCHILD_PID.set(p.pid());
-                System.out.println("E2E|grandchild_pid=" + p.pid() + "（子代理真 fork 的孙进程，"
+                // {@code Process#pid()} 是 Java 9+：JDK 8 上按本仓口径走 {@link ProcessTree#pidOf}
+                // （反射读 UNIXProcess 的私有 pid 字段），取不到就是 0，不猜。
+                long grandchildPid = ProcessTree.pidOf(p);
+                GRANDCHILD_PID.set(grandchildPid);
+                System.out.println("E2E|grandchild_pid=" + grandchildPid + "（子代理真 fork 的孙进程，"
                         + "委托方被 kill -9 之后它还在不在由量具判）");
                 System.out.flush();
                 p.waitFor(30, TimeUnit.SECONDS);   // 有界，绝不裸 waitFor()

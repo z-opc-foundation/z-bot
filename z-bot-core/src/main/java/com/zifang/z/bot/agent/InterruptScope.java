@@ -1,6 +1,7 @@
 package com.zifang.z.bot.agent;
 
 import com.zifang.z.agent.kernel.agent.InterruptFlag;
+import com.zifang.z.bot.tool.env.ProcessTree;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -154,13 +155,12 @@ public final class InterruptScope {
     /**
      * 连根拔：{@code destroyForcibly()} 只杀 {@code bash} 本身，它名下的 {@code sleep}/{@code mvn}
      * 会孤儿化继续跑 —— 那样「断了」只是假的。先杀后代，再杀自己。
+     *
+     * <p>后代怎么枚举的口径在 {@link ProcessTree}（Java 8 没有 {@code Process#descendants()}，
+     * 那里用一次 {@code ps -eo pid=,ppid=} 快照 + 内存 BFS，深的先杀）。这里不复制一套，
+     * 免得 P12 的看门狗和 P22 的 SPI 收尾两套语义各自退化。</p>
      */
     static void killTree(Process p) {
-        try {
-            p.descendants().forEach(ph -> ph.destroyForcibly());
-        } catch (Exception ignored) {
-            // 进程可能已经退了；下面这句是幂等的
-        }
-        p.destroyForcibly();
+        ProcessTree.killTree(p);
     }
 }

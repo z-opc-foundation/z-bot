@@ -18,9 +18,11 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -38,7 +40,8 @@ import static org.junit.Assert.fail;
 /**
  * P12「工具侧中断」单测：旗子按执行线程定向、工具在飞时真能断、断的时候子进程真没了。
  *
- * <p>判「断了」不看日志、也不只看抛了什么异常 —— 用 {@link ProcessHandle} 直接查进程表：
+ * <p>判「断了」不看日志、也不只看抛了什么异常 —— 直接查 OS 进程表（Java 8 口径：一次
+ * {@code ps -eo pid=,args=} 数行；{@code ProcessHandle} 是 9+ 才有的 API）：
  * 被 {@code exec} 拉起来的那个 {@code sleep}（以及 bash 名下会变孤儿的那个）必须在置位后
  * 从进程表里消失。只杀 bash 不杀后代的话，这一条必红。</p>
  */
@@ -319,15 +322,50 @@ public class ToolSideInterruptTest {
 
     // ===== 量具：直接查进程表，不信日志 =====
 
+    /**
+     * 进程表里命令行含 {@code token} 的条数 —— 判据本身没换（照样是查 OS 进程表、不信日志），
+     * 只是把 9+ 的 {@code ProcessHandle.allProcesses()} 换成 JDK 8 能跑的
+     * {@code ps -eo pid=,args=}：一次快照、逐行取第一列之后的命令行做子串匹配。
+     *
+     * <p>量具读不出来时必须<b>抛</b>，不许"数到 0"：0 正好是"进程表干净"的绿值，
+     * 静默返回 0 会把这条安全边界测成空跑。{@code ps} 的 argv 是常量，token 不进命令行。</p>
+     */
     private static int countProcessesMatching(String token) {
-        final int[] n = {0};
-        ProcessHandle.allProcesses().forEach(p -> {
-            String cmdline = p.info().commandLine().orElse("");
-            if (cmdline.contains(token)) {
-                n[0]++;
+        Process p = null;
+        try {
+            p = new ProcessBuilder("ps", "-eo", "pid=,args=").start();
+            int n = 0;
+            BufferedReader br = new BufferedReader(
+                    new InputStreamReader(p.getInputStream(), "UTF-8"));
+            String line;
+            while ((line = br.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                int sp = trimmed.indexOf(' ');
+                String args = sp < 0 ? "" : trimmed.substring(sp + 1);
+                if (args.contains(token)) {
+                    n++;
+                }
             }
-        });
-        return n[0];
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new IllegalStateException("ps 查进程表 10s 没返回");
+            }
+            if (p.exitValue() != 0) {
+                throw new IllegalStateException("ps 查进程表失败，exit=" + p.exitValue());
+            }
+            return n;
+        } catch (IOException e) {
+            throw new RuntimeException("查进程表失败: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("查进程表被中断", e);
+        } finally {
+            if (p != null) {
+                p.destroyForcibly();
+            }
+        }
     }
 
     /**

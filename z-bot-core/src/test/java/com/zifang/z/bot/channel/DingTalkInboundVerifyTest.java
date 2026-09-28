@@ -16,8 +16,9 @@ import org.junit.rules.TemporaryFolder;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -292,7 +293,8 @@ public class DingTalkInboundVerifyTest {
     public void registryManifestWiresInboundSecretKey() throws Exception {
         File configDir = tmp.newFolder("profile");
         File manifest = new File(configDir, ChannelRegistry.MANIFEST_FILE_NAME);
-        try (FileWriter w = new FileWriter(manifest, StandardCharsets.UTF_8)) {
+        try (OutputStreamWriter w = new OutputStreamWriter(new FileOutputStream(manifest),
+                StandardCharsets.UTF_8)) {
             w.write("channel.dingtalk.enabled=true\n"
                     + "channel.dingtalk.config.webhook-url=http://127.0.0.1:1/robot/send?access_token=stub\n"
                     + "channel.dingtalk.config.secret=" + WEBHOOK_ONLY_SECRET + "\n"

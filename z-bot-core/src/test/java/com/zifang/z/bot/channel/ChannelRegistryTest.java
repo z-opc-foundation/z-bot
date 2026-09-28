@@ -15,8 +15,9 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -167,7 +168,8 @@ public class ChannelRegistryTest {
         int fromExtra = freePort();
         writeManifest("channel.webhook.default-port=" + fromProfile + "\n");
         File extra = new File(configDir, "override.properties");
-        try (FileWriter w = new FileWriter(extra, StandardCharsets.UTF_8)) {
+        try (OutputStreamWriter w = new OutputStreamWriter(new FileOutputStream(extra),
+                StandardCharsets.UTF_8)) {
             w.write("channel.webhook.default-port=" + fromExtra + "\n");
         }
         ChannelRegistry r = ChannelRegistry.load(configDir, extra);
@@ -363,7 +365,8 @@ public class ChannelRegistryTest {
 
     private void writeManifest(String body) throws IOException {
         File f = new File(configDir, ChannelRegistry.MANIFEST_FILE_NAME);
-        try (FileWriter w = new FileWriter(f, StandardCharsets.UTF_8)) {
+        try (OutputStreamWriter w = new OutputStreamWriter(new FileOutputStream(f),
+                StandardCharsets.UTF_8)) {
             w.write(body);
         }
     }
