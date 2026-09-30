@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  本轮杠① 专用的 settings（只给 `mvn -s` 用；不落仓，不改 ~/.m2/settings.xml）。
+
+  问题现场：~/.m2 里那批缓存的 provenance（`_remote.repositories`）分两种 id —
+    org.junit:junit-bom:5.9.3            -> central        (2026-07-28 记的)
+    com.squareup.okhttp3:okhttp:4.10.0   -> maven-central  (更早)
+    io.github.yuku123:z-boot-parent:1.0.21-> maven-central  (09-30 09:56 记的)
+  离线（-o）时 resolver 要求"记在 provenance 里的那个 repo id 当前上下文里也有"，
+  而现在 ~/.m2/settings.xml 只剩 <server id=central>、没有任何 mirror 或额外仓 ⇒
+  两种 id 各自缺另一支：不带 -s 时 z-boot-parent 报 "present, but unavailable"，
+  带 <mirror id=maven-central> 时换 junit-bom / spring-framework-bom 报同一句。
+  在线又不通：repo.maven.apache.org 被本机 TLS 拦下（PKIX path building failed）。
+
+  所以这里不用 mirror（mirror 会把 central 整个改名），而是**追加**一个默认激活的 profile，
+  在上下文里同时挂上 id=maven-central 的仓与插件仓 ⇒ 两种 provenance 都认。
+  三跑全程带 -o，这个文件不产生任何网络访问，只把 provenance 对齐。
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <profiles>
+    <profile>
+      <id>offline-provenance</id>
+      <repositories>
+        <repository>
+          <id>maven-central</id>
+          <url>https://repo.maven.apache.org/maven2/</url>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>maven-central</id>
+          <url>https://repo.maven.apache.org/maven2/</url>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>offline-provenance</activeProfile>
+  </activeProfiles>
+</settings>
