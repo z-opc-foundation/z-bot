@@ -10,7 +10,7 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 **它不是一等 Spring 服务，也不是可嵌入库**：入口是 picocli 的 `main()`，HTTP 面自己起 JDK
 `com.sun.net.httpserver`，数据根是自己独占的 profile 目录（进程形态与并机约束见下文）。
 
-工程口径与逐期实测读数见 [`_doc/hermes-roadmap.md`](_doc/hermes-roadmap.md)。
+工程口径与逐期实测读数见 [`_doc/001_arch/hermes-roadmap.md`](_doc/001_arch/hermes-roadmap.md)。
 
 ---
 
@@ -183,7 +183,7 @@ java -jar z-bot-core/target/z-bot-core.jar gateway --webhook-port 8090   # 多�
 `-Dzbot.home` > 环境变量 `ZBOT_HOME` > `~/.zbot`（`BotConfig.defaultConfigDir()` 是唯一实现，
 `--config-dir <目录>` 是同一件事的显式写法，多 profile / CI / 测试都用它）。
 
-一个填满的 profile 目录是这 8 项（验收基线，见 roadmap §5 与 `_doc/acceptance/*/EVIDENCE.md` 的杠④读数：
+一个填满的 profile 目录是这 8 项（验收基线，见 roadmap §5 与 `_doc/005_testing/acceptance/*/EVIDENCE.md` 的杠④读数：
 `config.properties`、`state.db`、`sessions/`、`memories/`、`cron/`、`workspace/`、`models-cache.json`、
 `.stty.bak`）；此外按用法再长出 `skills/`、`delegate/summaries/`、`channels.properties`、`pairing.json`。
 注意：本机今天**没有** `~/.zbot`（`test -d ~/.zbot` ⇒ 假），那 8 项是跑过之后的形态，不是新装机的既有清单。
@@ -253,7 +253,7 @@ java -jar z-bot-core/target/z-bot-core.jar gateway --webhook-port 8090   # 多�
 
 ## 🔌 HTTP / SSE 路由台账
 
-路由清单是被跟踪的文件 [`_doc/acceptance/p28/ROUTES.tsv`](_doc/acceptance/p28/ROUTES.tsv)：
+路由清单是被跟踪的文件 [`_doc/005_testing/acceptance/p28/ROUTES.tsv`](_doc/005_testing/acceptance/p28/ROUTES.tsv)：
 **26 行（方法粒度）/ 23 条路径（dispatch 字面量口径）**，与代码不同源就红，不用靠人记：
 
 ```bash
@@ -279,7 +279,7 @@ mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.
 （`slash/CommandCatalog.java`，守卫 `CommandSurfaceConsistencyTest`；表声明序 = 终端私有 9 条 + 服务端 20 条）。
 `GET /api/commands` 实测返回 **29 行**（`rows=29`，HTTP 200；与 `CommandCatalog.defs()` 同数）。
 别在这里手抄一份清单 —— P19 之前那种"四个端各抄一份、各自漂"的病就是这么来的，
-台账与分桶对照见 [`_doc/acceptance/p28/WIRING.md`](_doc/acceptance/p28/WIRING.md)。
+台账与分桶对照见 [`_doc/005_testing/acceptance/p28/WIRING.md`](_doc/005_testing/acceptance/p28/WIRING.md)。
 
 ---
 
@@ -290,16 +290,16 @@ rm -rf z-bot-core/target/surefire-reports z-bot-desktop-packager/target/surefire
 mvn -o test          # 全 reactor（packager 无测试），不要加 -pl
 ```
 
-验收口径是四条杠（定义见 roadmap §5，逐期读数进 `_doc/acceptance/pNN/EVIDENCE.md`）：
+验收口径是四条杠（定义见 roadmap §5，逐期读数进 `_doc/005_testing/acceptance/pNN/EVIDENCE.md`）：
 
 1. **杠①** `mvn -o test` 连跑 3 次，每轮 `Failures=Errors=Skipped=0` 且
    `BindException|Connection refused|SocketTimeout` 命中 0；
-2. **杠②** 变异注入：把守卫改坏，必须**具名 testcase** 变红（`_doc/acceptance/p*/p*_mutation.py`，
+2. **杠②** 变异注入：把守卫改坏，必须**具名 testcase** 变红（`_doc/005_testing/acceptance/p*/p*_mutation.py`，
    共享锁 `$(git rev-parse --git-common-dir)/zbot-mutlock`）；
 3. **杠③** 真进程 E2E ≥3 整跑（起真 serve / 真 tty / 真 sqlite，读代码不算证据），量具如 `p28_e2e.py`；
 4. **杠④** 测试与 E2E 一个字都不许动 `~/.zbot/`（一律 `--config-dir` 指临时根）。
 
-**最近一次记录在案的杠① 读数不是当前树的**：`_doc/acceptance/p27c/EVIDENCE.md` §1 记的是最终树 `3d57571`
+**最近一次记录在案的杠① 读数不是当前树的**：`_doc/005_testing/acceptance/p27c/EVIDENCE.md` §1 记的是最终树 `3d57571`
 上 `Tests run: 1223 ×3` 全绿，三把尺对着读 —— surefire 合计 **1223** == 跑后 **115** 份
 `*/target/surefire-reports/*.xml` 的 `tests` 求和 **1223** == 文本 `@Test` **1226** − 注释里的 **3** 处字样；
 杠③ 是 `p27c_e2e.py` 三轮真进程 `CHECKS=42|FAILED=0`。那之后 `z-bot-core/src` 又动了两次
@@ -355,7 +355,7 @@ mvn -o -pl z-bot-desktop-packager -Djpackage.skip=false package   # 再打桌面
   （实测就 `minimax` / `spark` 两个，`BotConfig.java:27-32`），别的代号不写 `providers=<code>` 就进不了表，
   而 `activeProvider()` 在这种形状下不报错：表里还有别人就拿第一个，表空则回落到 `openai` 类型且 `baseUrl=null`
   ⇒ `LlmRouter` 交出用默认域的 `OpenAIProvider`。这不是推的：P26 杠③ 曾因此 8 发全打到
-  `https://api.openai.com/v1/chat/completions` 拿 401（`_doc/acceptance/p26/EVIDENCE.md` §8.0）。
+  `https://api.openai.com/v1/chat/completions` 拿 401（`_doc/005_testing/acceptance/p26/EVIDENCE.md` §8.0）。
   现在 E2E 的 profile 显式写 `providers=stub` 并把"非回环端点"判 NO-RUN；产品侧怎么修（直接 FATAL
   还是允许回落但不许无 baseUrl 出站）**等裁定**。
 - 真 tty 下的人机体验（渲染、光标键、中文宽字符）没有自动化验收，只有 pty 探针取证，记 NO-RUN。
@@ -376,39 +376,39 @@ _Maintained by the z-opc-foundation organization._
 本仓**没有** `001_arch / 002_deploy / 003_script / 004_skill` 这四格（`find _doc -maxdepth 1` 实测：`_doc/` 下只有
 `hermes-roadmap.md` 与 `acceptance/` 两项）；架构口径、roadmap、验收读数都收在那份 roadmap 与 `acceptance/` 里。
 
-- [`_doc/hermes-roadmap.md`](_doc/hermes-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
+- [`_doc/001_arch/hermes-roadmap.md`](_doc/001_arch/hermes-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
   22 面能力矩阵、结构性红线（含红线 1 代码/数据分离、缺省绑回环）、P0→P30 分期与 §8 逐期实测读数。
 
-- [`_doc/acceptance/`](_doc/acceptance/) — 每期验收证据，**24 个期目录**；典型四件套是
+- [`_doc/005_testing/acceptance/`](_doc/005_testing/acceptance/) — 每期验收证据，**24 个期目录**；典型四件套是
   `EVIDENCE.md`（逐字读数 + 产生读数的命令）、`LEDGER.tsv`（杠② 变异台账）、`pNN_e2e.py`（杠③ 真进程量具）、
   `pNN_mutation.py`（杠② 变异注入）。例外如实写：`p11/`、`p15/` **没有** `EVIDENCE.md`/`LEDGER.tsv`（只有脚本与探针）。
 
 | 期 | 主题（取自各自 `EVIDENCE.md` 标题） |
 |---|---|
-| [`p11/`](_doc/acceptance/p11/) | 无 EVIDENCE：`p11_e2e2.py` 与三支变异脚本 |
-| [`p11b/`](_doc/acceptance/p11b/) | [`EVIDENCE.md`](_doc/acceptance/p11b/EVIDENCE.md) — 红线 1（代码/数据分离）真落地 |
-| [`p11c/`](_doc/acceptance/p11c/) | [`EVIDENCE.md`](_doc/acceptance/p11c/EVIDENCE.md) — 通道监听收口（缺省绑回环 + `BindProbe`） |
-| [`p12/`](_doc/acceptance/p12/) | [`EVIDENCE.md`](_doc/acceptance/p12/EVIDENCE.md) — 预算台账 / 中断收口 / steer 排空 / system prompt 快照冻结（`out/` 是量具跑出的采样，已入仓） |
-| [`p14/`](_doc/acceptance/p14/) | [`EVIDENCE.md`](_doc/acceptance/p14/EVIDENCE.md) — 上下文引擎对齐 |
-| [`p15/`](_doc/acceptance/p15/) | 无 EVIDENCE：`AbWriter.java` + e2e/mutation 脚本 |
-| [`p15b/`](_doc/acceptance/p15b/) | [`EVIDENCE.md`](_doc/acceptance/p15b/EVIDENCE.md) — [`sessions_column_alignment.md`](_doc/acceptance/p15b/sessions_column_alignment.md) |
-| [`p16/`](_doc/acceptance/p16/) | [`EVIDENCE.md`](_doc/acceptance/p16/EVIDENCE.md) — 送达台账与 gateway 投递 |
-| [`p17/`](_doc/acceptance/p17/) | [`EVIDENCE.md`](_doc/acceptance/p17/EVIDENCE.md) — cron 投递闭环（`out/lockprobe` 是锁探针） |
-| [`p18/`](_doc/acceptance/p18/) | [`EVIDENCE.md`](_doc/acceptance/p18/EVIDENCE.md) — 通道注册表 SPI + 飞书/钉钉真出站 |
-| [`p19/`](_doc/acceptance/p19/) | [`EVIDENCE.md`](_doc/acceptance/p19/EVIDENCE.md) + [`WIRING.md`](_doc/acceptance/p19/WIRING.md) — 命令收成单一真源 |
-| [`p20b/`](_doc/acceptance/p20b/) | [`EVIDENCE.md`](_doc/acceptance/p20b/EVIDENCE.md) — MCP 工具面与审批（`logs/` 是多轮台账，`mcp_stub_server.py` 是假端点） |
-| [`p21/`](_doc/acceptance/p21/) | [`EVIDENCE.md`](_doc/acceptance/p21/EVIDENCE.md) — MCP 对齐（StreamableHTTP/SSE transport、`tools/list_changed` 真注销、父死 watchdog、反向 `mcp_serve`） |
-| [`p22/`](_doc/acceptance/p22/) | [`EVIDENCE.md`](_doc/acceptance/p22/EVIDENCE.md) — 执行后端 SPI（local / ssh / docker） |
-| [`p23/`](_doc/acceptance/p23/) | [`EVIDENCE.md`](_doc/acceptance/p23/EVIDENCE.md) — 技能体系对齐 |
-| [`p24/`](_doc/acceptance/p24/) | [`EVIDENCE.md`](_doc/acceptance/p24/EVIDENCE.md) + [`WIRING.md`](_doc/acceptance/p24/WIRING.md) — 记忆与身份面 |
-| [`p25/`](_doc/acceptance/p25/) | [`EVIDENCE.md`](_doc/acceptance/p25/EVIDENCE.md) — ACP（IDE 面） |
-| [`p26/`](_doc/acceptance/p26/) | [`EVIDENCE.md`](_doc/acceptance/p26/EVIDENCE.md) — LLM 用量核算与失败恢复（含 §8.0 那次意外出网的归因） |
-| [`p27/`](_doc/acceptance/p27/) | [`EVIDENCE.md`](_doc/acceptance/p27/EVIDENCE.md) + [`WIRING.md`](_doc/acceptance/p27/WIRING.md) — 委托面对齐 |
-| [`p27c/`](_doc/acceptance/p27c/) | [`EVIDENCE.md`](_doc/acceptance/p27c/EVIDENCE.md) — delegate 三条"未做"收口 + 本期撞出的两条；`LEDGER-run1..4.tsv` 是多轮台账 |
-| [`p28/`](_doc/acceptance/p28/) | [`EVIDENCE.md`](_doc/acceptance/p28/EVIDENCE.md) + [`ROUTES.tsv`](_doc/acceptance/p28/ROUTES.tsv) + [`WIRING.md`](_doc/acceptance/p28/WIRING.md) — web 控制台 / HTTP 通道 / 终端 UI 对位面 |
-| [`p30/`](_doc/acceptance/p30/) | [`EVIDENCE.md`](_doc/acceptance/p30/EVIDENCE.md) — 飞书入站（SHA-256 验签 + `{"encrypt":…}` 解密）与钉钉入站验签 |
-| [`p30b/`](_doc/acceptance/p30b/) | [`EVIDENCE.md`](_doc/acceptance/p30b/EVIDENCE.md) — 入站 body 上限：门在分配之前 |
-| [`p30c/`](_doc/acceptance/p30c/) | [`EVIDENCE.md`](_doc/acceptance/p30c/EVIDENCE.md) — 飞书面 GET 门外回显拆掉 + 平铺 v1 容错划边界 |
+| [`p11/`](_doc/005_testing/acceptance/p11/) | 无 EVIDENCE：`p11_e2e2.py` 与三支变异脚本 |
+| [`p11b/`](_doc/005_testing/acceptance/p11b/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p11b/EVIDENCE.md) — 红线 1（代码/数据分离）真落地 |
+| [`p11c/`](_doc/005_testing/acceptance/p11c/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p11c/EVIDENCE.md) — 通道监听收口（缺省绑回环 + `BindProbe`） |
+| [`p12/`](_doc/005_testing/acceptance/p12/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p12/EVIDENCE.md) — 预算台账 / 中断收口 / steer 排空 / system prompt 快照冻结（`out/` 是量具跑出的采样，已入仓） |
+| [`p14/`](_doc/005_testing/acceptance/p14/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p14/EVIDENCE.md) — 上下文引擎对齐 |
+| [`p15/`](_doc/005_testing/acceptance/p15/) | 无 EVIDENCE：`AbWriter.java` + e2e/mutation 脚本 |
+| [`p15b/`](_doc/005_testing/acceptance/p15b/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p15b/EVIDENCE.md) — [`sessions_column_alignment.md`](_doc/005_testing/acceptance/p15b/sessions_column_alignment.md) |
+| [`p16/`](_doc/005_testing/acceptance/p16/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p16/EVIDENCE.md) — 送达台账与 gateway 投递 |
+| [`p17/`](_doc/005_testing/acceptance/p17/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p17/EVIDENCE.md) — cron 投递闭环（`out/lockprobe` 是锁探针） |
+| [`p18/`](_doc/005_testing/acceptance/p18/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p18/EVIDENCE.md) — 通道注册表 SPI + 飞书/钉钉真出站 |
+| [`p19/`](_doc/005_testing/acceptance/p19/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p19/EVIDENCE.md) + [`WIRING.md`](_doc/005_testing/acceptance/p19/WIRING.md) — 命令收成单一真源 |
+| [`p20b/`](_doc/005_testing/acceptance/p20b/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p20b/EVIDENCE.md) — MCP 工具面与审批（`logs/` 是多轮台账，`mcp_stub_server.py` 是假端点） |
+| [`p21/`](_doc/005_testing/acceptance/p21/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p21/EVIDENCE.md) — MCP 对齐（StreamableHTTP/SSE transport、`tools/list_changed` 真注销、父死 watchdog、反向 `mcp_serve`） |
+| [`p22/`](_doc/005_testing/acceptance/p22/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p22/EVIDENCE.md) — 执行后端 SPI（local / ssh / docker） |
+| [`p23/`](_doc/005_testing/acceptance/p23/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p23/EVIDENCE.md) — 技能体系对齐 |
+| [`p24/`](_doc/005_testing/acceptance/p24/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p24/EVIDENCE.md) + [`WIRING.md`](_doc/005_testing/acceptance/p24/WIRING.md) — 记忆与身份面 |
+| [`p25/`](_doc/005_testing/acceptance/p25/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p25/EVIDENCE.md) — ACP（IDE 面） |
+| [`p26/`](_doc/005_testing/acceptance/p26/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p26/EVIDENCE.md) — LLM 用量核算与失败恢复（含 §8.0 那次意外出网的归因） |
+| [`p27/`](_doc/005_testing/acceptance/p27/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p27/EVIDENCE.md) + [`WIRING.md`](_doc/005_testing/acceptance/p27/WIRING.md) — 委托面对齐 |
+| [`p27c/`](_doc/005_testing/acceptance/p27c/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p27c/EVIDENCE.md) — delegate 三条"未做"收口 + 本期撞出的两条；`LEDGER-run1..4.tsv` 是多轮台账 |
+| [`p28/`](_doc/005_testing/acceptance/p28/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p28/EVIDENCE.md) + [`ROUTES.tsv`](_doc/005_testing/acceptance/p28/ROUTES.tsv) + [`WIRING.md`](_doc/005_testing/acceptance/p28/WIRING.md) — web 控制台 / HTTP 通道 / 终端 UI 对位面 |
+| [`p30/`](_doc/005_testing/acceptance/p30/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p30/EVIDENCE.md) — 飞书入站（SHA-256 验签 + `{"encrypt":…}` 解密）与钉钉入站验签 |
+| [`p30b/`](_doc/005_testing/acceptance/p30b/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p30b/EVIDENCE.md) — 入站 body 上限：门在分配之前 |
+| [`p30c/`](_doc/005_testing/acceptance/p30c/) | [`EVIDENCE.md`](_doc/005_testing/acceptance/p30c/EVIDENCE.md) — 飞书面 GET 门外回显拆掉 + 平铺 v1 容错划边界 |
 
 `p12/__pycache__`、`p25/__pycache__` 等目录是量具跑出的字节码缓存，历史上被一并跟踪进了仓（未清理）；
 `*.log` 被 `.gitignore` 排除，所以原始构建日志不入仓，证据以 `EVIDENCE.md` 里逐字贴出的读数为准。
