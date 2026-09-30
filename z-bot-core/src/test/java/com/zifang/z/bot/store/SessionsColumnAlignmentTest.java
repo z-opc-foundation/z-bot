@@ -44,7 +44,7 @@ import static org.junit.Assert.assertTrue;
 public class SessionsColumnAlignmentTest {
 
     /** 相对仓库根的路径。测试的工作目录是 {@code z-bot-core}，所以往上找。 */
-    private static final String DOC_REL = "_doc/acceptance/p15b/sessions_column_alignment.md";
+    private static final String DOC_REL = "_doc/005_testing/acceptance/p15b/sessions_column_alignment.md";
 
     /**
      * 我们 head 里<b>没有 hermes 对位列</b>的两列，逐条给出去向（不是豁免，是记账）：

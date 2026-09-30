@@ -34,18 +34,18 @@ final class RealMcpHarness {
         }
         File cwd = new File(System.getProperty("user.dir", ".")).getAbsoluteFile();
         for (File dir = cwd; dir != null; dir = dir.getParentFile()) {
-            File direct = new File(dir, "_doc/acceptance/p21");
+            File direct = new File(dir, "_doc/005_testing/acceptance/p21");
             if (new File(direct, REF_SERVER).isFile()) {
                 return direct;
             }
-            File under = new File(dir, "z-bot-core/_doc/acceptance/p21");
+            File under = new File(dir, "z-bot-core/_doc/005_testing/acceptance/p21");
             if (new File(under, REF_SERVER).isFile()) {
                 return under;
             }
         }
-        File guess = new File(cwd, "../_doc/acceptance/p21").getAbsoluteFile();
+        File guess = new File(cwd, "../_doc/005_testing/acceptance/p21").getAbsoluteFile();
         if (!new File(guess, REF_SERVER).isFile()) {
-            throw new IllegalStateException("找不到 _doc/acceptance/p21（从 " + cwd + " 往上找了一遍）"
+            throw new IllegalStateException("找不到 _doc/005_testing/acceptance/p21（从 " + cwd + " 往上找了一遍）"
                     + "；可用 -Dzbot.acceptance.dir= 指定");
         }
         return guess;

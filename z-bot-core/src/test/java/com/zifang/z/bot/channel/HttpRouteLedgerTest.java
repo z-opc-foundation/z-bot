@@ -120,7 +120,7 @@ public class HttpRouteLedgerTest {
 
     @Test
     public void routesTsvIsInSyncWithLedger() throws IOException {
-        File committed = repoFileOrMake("_doc/acceptance/p28/ROUTES.tsv");
+        File committed = repoFileOrMake("_doc/005_testing/acceptance/p28/ROUTES.tsv");
         String generated = renderRoutesTsv();
         if (!committed.exists()) {
             fail("ROUTES.tsv 不在盘上；生成命令：mvn -o test -Dtest=HttpRouteLedgerTest"
@@ -131,7 +131,7 @@ public class HttpRouteLedgerTest {
             File out = targetFile("ROUTES.tsv");
             Files.write(out.toPath(), generated.getBytes(StandardCharsets.UTF_8));
             fail("ROUTES.tsv 与 HttpChannel.routes() 不同源了。逐字节差异已写到 " + out
-                    + " —— 用 cp 覆盖 _doc/acceptance/p28/ROUTES.tsv 后重跑");
+                    + " —— 用 cp 覆盖 _doc/005_testing/acceptance/p28/ROUTES.tsv 后重跑");
         }
         // 表里的行数与 E2E 的分母一致（E2E 读的就是这份文件）
         assertEquals("ROUTES.tsv 行数 != 台账行数",
@@ -142,7 +142,7 @@ public class HttpRouteLedgerTest {
     @Test
     public void everyBookedDefectIsNamedInEvidence() throws IOException {
         String evidence = new String(Files.readAllBytes(
-                repoFile("_doc/acceptance/p28/EVIDENCE.md").toPath()), StandardCharsets.UTF_8);
+                repoFile("_doc/005_testing/acceptance/p28/EVIDENCE.md").toPath()), StandardCharsets.UTF_8);
         Set<String> booked = new LinkedHashSet<String>();
         for (HttpChannel.Route r : HttpChannel.routes()) {
             if (!r.defect().isEmpty()) {
@@ -325,7 +325,7 @@ public class HttpRouteLedgerTest {
             return;
         }
         targetWritten++;
-        File committed = repoFileOrMake("_doc/acceptance/p28/ROUTES.tsv");
+        File committed = repoFileOrMake("_doc/005_testing/acceptance/p28/ROUTES.tsv");
         Files.write(committed.toPath(), renderRoutesTsv().getBytes(StandardCharsets.UTF_8));
         System.out.println("[p28] ROUTES.tsv 已按台账重新生成: " + committed);
     }
