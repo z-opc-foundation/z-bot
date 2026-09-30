@@ -14,8 +14,8 @@ p20d 取证探针 —— 只为杠② TK5 的一条断言出读数：
   V0 = 不注入（控制跑，必须全绿）
 
 用法：
-  python3 -u _doc/acceptance/p20b/p20d_tk5_equiv_probe.py            # 三把全跑
-  python3 -u _doc/acceptance/p20b/p20d_tk5_equiv_probe.py --only=V1  # 只跑一把
+  python3 -u _doc/005_testing/acceptance/p20b/p20d_tk5_equiv_probe.py            # 三把全跑
+  python3 -u _doc/005_testing/acceptance/p20b/p20d_tk5_equiv_probe.py --only=V1  # 只跑一把
 产物：logs/p20d_tk5_probe_console.log（由调用方 tee），logs/mut_p20d_tk5_<V>.log（mvn 原文）
 """
 import io

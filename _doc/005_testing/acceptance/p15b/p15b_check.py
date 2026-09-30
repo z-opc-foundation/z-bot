@@ -17,15 +17,15 @@ P15b —— `sessions_column_alignment.md` 的保鲜尺（兼表格生成器）�
   C. 我们侧（消费者）：
      · `判定=要`   ⇒ "消费者"格里的每个 Java 类名必须在 `src/main/java` 下真存在
                      （`git ls-files` 打到同名 .java）；§6 的类名清单必须与表内一致。
-     · `判定=占位` ⇒ 整行必须带 `P\\d+` 期号，且该期号在 `_doc/hermes-roadmap.md` §5 真排了期，
+     · `判定=占位` ⇒ 整行必须带 `P\\d+` 期号，且该期号在 `_doc/001_arch/hermes-roadmap.md` §5 真排了期，
                      禁写"以后再说/待定/TBD"。
      · `判定=不要` ⇒ 理由必须带"实测"串（不许凭印象判"我们真没有"）。
 
 参照仓不在 / HEAD 漂了 / 锚点读数变了 / 任一参照集摘出来是空 ⇒ **FATAL(2)**，绝不"跳过算通过"。
 
 用法：
-    python3 _doc/acceptance/p15b/p15b_check.py              # 只校（杠① 复跑用这个）
-    python3 _doc/acceptance/p15b/p15b_check.py --emit-table # 重生成表格块（幂等，不动散文）
+    python3 _doc/005_testing/acceptance/p15b/p15b_check.py              # 只校（杠① 复跑用这个）
+    python3 _doc/005_testing/acceptance/p15b/p15b_check.py --emit-table # 重生成表格块（幂等，不动散文）
 """
 
 import os
@@ -34,9 +34,9 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 DOC = os.path.join(HERE, "sessions_column_alignment.md")
-ROADMAP = os.path.join(REPO, "_doc", "hermes-roadmap.md")
+ROADMAP = os.path.join(REPO, "_doc", "001_arch", "hermes-roadmap.md")
 SCHEMA_JAVA = os.path.join(REPO, "z-bot-core", "src", "main", "java",
                            "com", "zifang", "z", "bot", "store", "SchemaMigrations.java")
 
@@ -48,7 +48,7 @@ REF_EXPECTED_CREATE_TABLE = 22
 REF_EXPECTED_SESSIONS_START = 872
 REF_EXPECTED_SESSION_COLS = 46
 
-BEGIN = ("<!-- BEGIN TABLE：以下 46 行由 `python3 _doc/acceptance/p15b/p15b_check.py --emit-table` "
+BEGIN = ("<!-- BEGIN TABLE：以下 46 行由 `python3 _doc/005_testing/acceptance/p15b/p15b_check.py --emit-table` "
          "从 hermes_state.py 机械生成，列名勿手改 -->")
 END = "<!-- END TABLE -->"
 

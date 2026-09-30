@@ -142,7 +142,7 @@ public final class DelegateManager {
      * 启动时扫一次的入口（写盘旁路，绝不抛）。台账定不出根目录时返回空串且一行都不打 ——
      * 测试桩里 {@code config == null} 就是这个形状，不许往 stdout/stderr 喷噪声。
      *
-     * <p>接线点见 {@code _doc/acceptance/p27/WIRING.md} 第 1 条（在 {@code BotAgent} 构造器
+     * <p>接线点见 {@code _doc/005_testing/acceptance/p27/WIRING.md} 第 1 条（在 {@code BotAgent} 构造器
      * {@code delegation.attach(this)} 之后；那支文件本棒没权改）。</p>
      */
     public String sweepAtStartup() {

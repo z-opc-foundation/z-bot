@@ -9,7 +9,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * P21 真进程验收的公共夹具：定位 {@code _doc/acceptance/p21} 下的 python 参照 server、
+ * P21 真进程验收的公共夹具：定位 {@code _doc/005_testing/acceptance/p21} 下的 python 参照 server、
  * 起进程、等就绪、数进程。
  *
  * <p>这里的"就绪"一律用<b>文件副作用回读</b>而不是"日志里出现了某行"当扳机 ——

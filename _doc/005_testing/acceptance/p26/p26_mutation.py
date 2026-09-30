@@ -33,7 +33,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+ZBOT = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 LEDGER = os.path.join(HERE, "LEDGER.tsv")
 RAWS = os.path.join(HERE, "mutation_logs")
 RUN_TIMEOUT = 420  # 秒：单支变异（含 mvn）的硬上限，超了记 BROKEN

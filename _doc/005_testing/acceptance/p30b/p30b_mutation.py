@@ -4,7 +4,7 @@
 P30b（入站 body 上限：门在分配之前）变异检验：把 `InboundLimits` 与其四处接线逐条改坏，
 看有没有**具名 testcase** 判红。
 
-口径照 `_doc/acceptance/p30/p30_mutation.py`（同一套四杠纪律），判据一字不动：
+口径照 `_doc/005_testing/acceptance/p30/p30_mutation.py`（同一套四杠纪律），判据一字不动：
   RED-OK   点名全红，且没有 `named ∪ allow_extra` 之外的红
   PARTIAL  点名一部分红 / 红了预期之外的人
   GREEN-BUT-MUTATED  全绿 ⇒ 断言缺口（如实记账，不改判据凑绿）
@@ -44,7 +44,7 @@ run1 的台账留在 `LEDGER-run1.tsv`（6/6 RED-OK，但 B2 那句连带推断�
 `WebhookChannel.java`、`HttpChannel.java` 五个本期写域文件；全程只连 127.0.0.1，
 不碰 `~/.zbot`（红线 1），不读任何真凭据，不给真域名发一个包。
 
-复算: python3 -u _doc/acceptance/p30b/p30b_mutation.py [id 子串...]
+复算: python3 -u _doc/005_testing/acceptance/p30b/p30b_mutation.py [id 子串...]
 锁:   $(git rev-parse --git-common-dir)/zbot-mutlock —— 只 try-lock，抢不到就 rc=4 退出
 """
 import fcntl
@@ -57,7 +57,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 

@@ -51,7 +51,7 @@ import static org.junit.Assert.fail;
  * 光"绿"不算数 —— 一张两边都抄同一处来的表永远绿。所以每个面都用
  * {@code *InjectionIsCaught()} 往<b>观测面</b>注入一条表里没有的命令（或反向少一条），
  * 断言 diff 非空。注入是在字符串上做的、不碰盘上文件，因此不依赖构建顺序，
- * 也不与杠② 的字节级变异重复（那是另一把尺，见 {@code _doc/acceptance/p19/LEDGER.tsv}）。
+ * 也不与杠② 的字节级变异重复（那是另一把尺，见 {@code _doc/005_testing/acceptance/p19/LEDGER.tsv}）。
  *
  * <p><b>空输入一律 FATAL</b>：任何一面解析出 0 条名字都直接红，绝不"没扫到 ⇒ 视为相等"。</p>
  */

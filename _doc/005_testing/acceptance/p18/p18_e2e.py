@@ -19,8 +19,8 @@ P16 DeliveryLedger 语义对账。
   * 假端点 `bind(0)` 拿空闲端口；判 **HTTP 状态码 + 响应形状**（404 对 curl 也是 0）。
   * 收尾 `lsof` 复扫 + `ps -o lstart` 分清进程是不是本次跑的。
 
-复算: python3 -u _doc/acceptance/p18/p18_e2e.py            # 全跑
-      P18_ONLY=A python3 -u _doc/acceptance/p18/p18_e2e.py # 单段
+复算: python3 -u _doc/005_testing/acceptance/p18/p18_e2e.py            # 全跑
+      P18_ONLY=A python3 -u _doc/005_testing/acceptance/p18/p18_e2e.py # 单段
 """
 import base64
 import glob
@@ -42,7 +42,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 LEDGER_SRC = os.path.join(ZBOT, "z-bot-core", "src", "main", "java", "com", "zifang", "z",
                           "bot", "channel", "DeliveryLedger.java")

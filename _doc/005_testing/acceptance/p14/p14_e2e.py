@@ -23,8 +23,8 @@ P14（上下文压缩引擎重做）验收③：**真进程** E2E。读代码不
              正对照 = stub key 必须真出现在产物里，否则"没泄漏"是空跑）
 
 前置: 无（本脚本自己 `mvn -o package -DskipTests -pl z-bot-core` 打 jar；失败就不开跑）
-复算: python3 -u _doc/acceptance/p14/p14_e2e.py --label run1
-       python3 -u _doc/acceptance/p14/p14_e2e.py --label dbg --only lineage
+复算: python3 -u _doc/005_testing/acceptance/p14/p14_e2e.py --label run1
+       python3 -u _doc/005_testing/acceptance/p14/p14_e2e.py --label dbg --only lineage
 临时根: ~/.cache/zbot-p14-lead/e2e/<label>-<scene>/zbot-home（不碰 ~/.zbot 一个字节）
 """
 import argparse
@@ -43,7 +43,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 CACHE_ROOT = os.path.join(os.path.expanduser("~"), ".cache", "zbot-p14-lead")
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")

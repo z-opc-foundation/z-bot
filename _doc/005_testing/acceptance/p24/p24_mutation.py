@@ -42,8 +42,8 @@
 锁：`$(git rev-parse --path-format=absolute --git-common-dir)/zbot-mutlock`。
 抢不到 ⇒ 只退避 3 次 ×10s（**不死等**），然后按设计 rc=4 退出，回头整批重跑。
 
-复算: python3 -u _doc/acceptance/p24/p24_mutation.py            # 全量一轮
-      python3 -u _doc/acceptance/p24/p24_mutation.py --check    # 只验锚点/点名/永挂体检
+复算: python3 -u _doc/005_testing/acceptance/p24/p24_mutation.py            # 全量一轮
+      python3 -u _doc/005_testing/acceptance/p24/p24_mutation.py --check    # 只验锚点/点名/永挂体检
 """
 import atexit
 import fcntl
@@ -59,7 +59,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 MAIN_CLASSES = os.path.join(CORE, "target", "classes")

@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@code dropped} state instead of returning to {@code pending} — otherwise an undeliverable
  * completion replays on every gateway restart forever."</i></p>
  *
- * <p>z-bot 修之前的现状（探针实测，见 {@code _doc/acceptance/p27/EVIDENCE.md} §1）：
+ * <p>z-bot 修之前的现状（探针实测，见 {@code _doc/005_testing/acceptance/p27/EVIDENCE.md} §1）：
  * 异步委托的 {@code DONE} 是子代理<b>自己</b>写的旗子，没有任何一根轴表达"有人接过"；
  * {@code /background result <id>} 拉 12 次返回 12 次，无计数、无上限、无终态；
  * 默认 JSON 会话模式下 {@code StateStore} 为 {@code null}，所以这套旗子还<b>一行都不落盘</b>。

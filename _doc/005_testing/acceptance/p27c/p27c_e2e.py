@@ -42,9 +42,9 @@ P27c 杠③ —— 真 jar / 真子进程 / 真 HTTP 假端点的委托面 E2E�
 `--config-dir` 指它；LLM 假端点只绑 127.0.0.1、端口一律 `bind(0)`；key 写 `stub-key-not-real`，
 真 key 一个字节都不进本脚本（只量长度）；不给真域名发一个包。
 
-复算: python3 -u _doc/acceptance/p27c/p27c_e2e.py
-      P27C_ROUNDS=1 python3 -u _doc/acceptance/p27c/p27c_e2e.py
-      P27C_TEETH_PROBE=1 python3 -u _doc/acceptance/p27c/p27c_e2e.py   # 需要变异锁
+复算: python3 -u _doc/005_testing/acceptance/p27c/p27c_e2e.py
+      P27C_ROUNDS=1 python3 -u _doc/005_testing/acceptance/p27c/p27c_e2e.py
+      P27C_TEETH_PROBE=1 python3 -u _doc/005_testing/acceptance/p27c/p27c_e2e.py   # 需要变异锁
 """
 import fcntl
 import glob
@@ -63,7 +63,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "zbot-p27c")
 E2E = os.path.join(CACHE, "e2e")
 CORE_TARGET = os.path.join(ZBOT, "z-bot-core", "target")
@@ -242,7 +242,7 @@ def config_properties(cfg, extra):
         # activeProvider() 兜底成 "openai + baseUrl=null" (`BotConfig.java:363-372`)，
         # LlmRouter 那一跳就用 kernel 默认域 https://api.openai.com/v1 真发出去
         # (`LlmRouter.java:40`)。真踩过这一刀的是 P26 run1（8 发全 401、本地 stub 一发没收到，
-        # `_doc/acceptance/p26/EVIDENCE.md:583/588`）；本 harness 的日志里该域 0 命中
+        # `_doc/005_testing/acceptance/p26/EVIDENCE.md:583/588`）；本 harness 的日志里该域 0 命中
         # （复算：`grep -rl 'api\.openai\.com' ~/.cache/zbot-p27c-lead/` 无输出）。
         fh.write("llm.provider=stub\nproviders=stub\n"
                  "test.description=P27c e2e 隔离现场（key 是假的）\n"

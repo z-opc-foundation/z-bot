@@ -26,7 +26,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "zbot-p23-lead", "e2e")
 LABEL = sys.argv[1] if len(sys.argv) > 1 else time.strftime("run-%H%M%S")

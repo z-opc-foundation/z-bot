@@ -28,7 +28,7 @@ import sys
 import time
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    os.pardir, os.pardir, os.pardir))
+                                    os.pardir, os.pardir, os.pardir, os.pardir))
 LEAD = os.path.expanduser("~/.cache/zbot-p27-lead")
 E2E = os.path.join(LEAD, "e2e")
 RUN_TAG = sys.argv[1] if len(sys.argv) > 1 else time.strftime("run%H%M%S")

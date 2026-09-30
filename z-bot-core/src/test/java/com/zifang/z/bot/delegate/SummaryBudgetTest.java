@@ -23,7 +23,7 @@ import static org.junit.Assert.assertTrue;
  * footer 里说清"看见多少 / 共多少 / 怎么翻页读中间那段"。
  *
  * <p>出处（权威副本 {@code ~/.hermes/hermes-agent} @ {@code cbc1054e2}，
- * 每条都是本期现量，见 {@code _doc/acceptance/p27c/EVIDENCE.md} §0）：
+ * 每条都是本期现量，见 {@code _doc/005_testing/acceptance/p27c/EVIDENCE.md} §0）：
  * {@code tools/delegate_tool.py:587-590}（"0 disables the ceiling" +
  * {@code DEFAULT_MAX_SUMMARY_CHARS = 24000}）、{@code :1615-1637}
  * {@code _spill_summary_to_file}（best-effort）、{@code :1640-1693}

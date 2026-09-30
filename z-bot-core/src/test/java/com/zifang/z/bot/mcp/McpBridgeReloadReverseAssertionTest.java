@@ -21,7 +21,7 @@ import static org.junit.Assert.assertTrue;
  * <b>都存在</b>的那点 API（构造 / {@code registerAll} / {@code unregisterAll} /
  * {@code registeredNames}），目的是让"修之前先红一次"能被真的跑出来：
  * 把 {@code McpBridge.java} 换回 main 的版本，这个类照样编译，两条断言必须判红
- * （读数在 {@code _doc/acceptance/p20b/logs/redfirst_*.log}）。</p>
+ * （读数在 {@code .cache/p20b/logs/redfirst_*.log}，运行态不入库）。</p>
  *
  * <p>现场同时挂着第二台<b>没被动过</b>的 server：任何"靠重启进程把名字洗掉"的做法都会把
  * 第二台的工具一起弄没，当场判红。</p>

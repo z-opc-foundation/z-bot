@@ -19,7 +19,7 @@ E4 是这条修复的必要性证据：邻居占住回环口时，`--host 0.0.0.
 
 复算:
   mvn -o -pl z-bot-core package -DskipTests
-  python3 _doc/acceptance/p11c/p11c_e2e.py
+  python3 _doc/005_testing/acceptance/p11c/p11c_e2e.py
 """
 import hashlib
 import os
@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")
 

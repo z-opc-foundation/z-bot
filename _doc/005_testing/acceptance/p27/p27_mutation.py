@@ -34,14 +34,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # 量具必须钉在**目标树**上。原先这里硬 `/private/tmp/zbot-wt-p27`（写手树），而那次杠② 之后
 # main 又并了 P19 与控制台三处修复 ⇒ 今天再跑，改的是 09-26 16:57 冻结的那份分支树、
 # LEDGER 也是写回那棵树（tracked 的 LEDGER 第 2 行 `# repo=/private/tmp/…` 就是自证）。
-REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 LEAD = os.path.expanduser("~/.cache/zbot-p27-lead")
 BAK = os.path.join(LEAD, "mutbak")
 OUT = os.path.join(LEAD, "mutation")
 # 默认仍写**受跟踪**的那份（正式台账必须由脚本自写，见 §11.5 的守卫）；
 # 只想验量具自己有牙时把 ZBOT_LEDGER_OUT 指到 ~/.cache —— 整跑会重写台账字节，
 # 而还原步不能靠 `git checkout --`（那会连被测量的其它未提交改动一起抹掉）。
-LEDGER = os.environ.get("ZBOT_LEDGER_OUT") or os.path.join(REPO, "_doc/acceptance/p27/LEDGER.tsv")
+LEDGER = os.environ.get("ZBOT_LEDGER_OUT") or os.path.join(REPO, "_doc/005_testing/acceptance/p27/LEDGER.tsv")
 # 杠④ 的采样对象：真 profile 目录。本脚本对它**只读**，且 key 只量长度、值不读（红线）。
 PROFILE_DIR = os.path.abspath(os.path.expanduser(
     os.environ.get("ZBOT_PROFILE_DIR") or "~/.zbot"))

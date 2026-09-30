@@ -3,7 +3,7 @@
 """
 P30c（飞书面 GET 门外回显拆掉 + 平铺 v1 容错划边界）变异检验。
 
-口径照 `_doc/acceptance/p30b/p30b_mutation.py`（同一套四杠纪律），判据一字不动：
+口径照 `_doc/005_testing/acceptance/p30b/p30b_mutation.py`（同一套四杠纪律），判据一字不动：
   RED-OK   点名全红，且没有 `named ∪ allow_extra` 之外的红
   PARTIAL  点名一部分红 / 红了预期之外的人
   GREEN-BUT-MUTATED  全绿 ⇒ 断言缺口（如实记账，不改判据凑绿）
@@ -39,7 +39,7 @@ P30c（飞书面 GET 门外回显拆掉 + 平铺 v1 容错划边界）变异检�
 安全：注入只动 `channel/FeishuChannel.java` 一个文件；全程只连 127.0.0.1，
 不碰 `~/.zbot`（红线 1），不读任何真凭据，不给真域名发一个包。
 
-复算: python3 -u _doc/acceptance/p30c/p30c_mutation.py [id 子串...]
+复算: python3 -u _doc/005_testing/acceptance/p30c/p30c_mutation.py [id 子串...]
 锁:   $(git rev-parse --git-common-dir)/zbot-mutlock —— 只 try-lock，抢不到就 rc=4 退出
 """
 import fcntl
@@ -52,7 +52,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 

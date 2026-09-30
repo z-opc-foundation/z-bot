@@ -26,7 +26,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * P15b：{@code _doc/acceptance/p15b/sessions_column_alignment.md} 的逐列理由表 ⟷ 我们盘上 schema 的
+ * P15b：{@code _doc/005_testing/acceptance/p15b/sessions_column_alignment.md} 的逐列理由表 ⟷ 我们盘上 schema 的
  * 一致性守卫。工单要求"表能机械复算、不许手敲 46 行"，那张表的**跨仓**方向由
  * {@code p15b_check.py}（需要 hermes 参照仓在场）钉；**本单测只钉不需要参照仓的那一半**，
  * 于是 {@code mvn -o test} 在任何机器上都跑得动。

@@ -14,7 +14,7 @@ import java.util.Set;
  * （{@code ~/.hermes/hermes-agent/pyproject.toml:221}），派发表在其
  * {@code acp/meta.py:3—28}（该文件头两行注明 {@code # Generated from schema/meta.json. Do not
  * edit by hand.} 与 {@code # Schema ref: refs/tags/v0.11.2}）。本表逐条抄自那份 meta.py，
- * 实测过程见 {@code _doc/acceptance/p25/EVIDENCE.md} §0.2。
+ * 实测过程见 {@code _doc/005_testing/acceptance/p25/EVIDENCE.md} §0.2。
  *
  * <h2>两套方向的差别</h2>
  * <ul>

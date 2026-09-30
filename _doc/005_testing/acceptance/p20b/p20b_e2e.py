@@ -14,7 +14,7 @@ P20b 真进程 E2E：起真 JVM + 真 MCP server 子进程，跑三件事并把�
 红线 1：~/.zbot 只读计数与 md5，不读内容；本轮所有配置都指临时目录，
         key 只用 stub-key-not-real，并在<b>同一条</b>判定里反向钉住"stub key 真进了产物"。
 
-复算: python3 -u _doc/acceptance/p20b/p20b_e2e.py [--only=toolsets,cap,mcp]
+复算: python3 -u _doc/005_testing/acceptance/p20b/p20b_e2e.py [--only=toolsets,cap,mcp]
 """
 import hashlib
 import io
@@ -27,8 +27,8 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
-LOGS = os.path.join(HERE, "logs")
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
+LOGS = os.path.join(ZBOT, ".cache", "p20b", "logs")
 DRIVER = os.path.join(HERE, "P20bToolDriver.java")
 SERVER = os.path.join(HERE, "mcp_stub_server.py")
 STUB_KEY = "stub-key-not-real"

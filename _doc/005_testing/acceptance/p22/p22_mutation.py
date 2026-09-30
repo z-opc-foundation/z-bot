@@ -311,7 +311,7 @@ def main():
     # 4) 收尾复扫：现场必须 == HEAD
     dirty = subprocess.check_output(["git", "status", "--porcelain", "--"] + files).decode().strip()
     report["final_git_status"] = dirty
-    ledger = os.path.join(REPO, "_doc/acceptance/p22/LEDGER.tsv")
+    ledger = os.path.join(REPO, "_doc/005_testing/acceptance/p22/LEDGER.tsv")
     with open(ledger, "a", encoding="utf-8") as f:
         for r in rows:
             f.write("\t".join(["p22", ts] + [str(x) for x in r]) + "\n")

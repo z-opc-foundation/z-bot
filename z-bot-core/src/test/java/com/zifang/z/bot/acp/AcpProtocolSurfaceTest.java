@@ -17,7 +17,7 @@ import static org.junit.Assert.assertTrue;
  *
  * <p>方法集的分母不是工单那几个字面量计数，而是 SDK 派发表
  * {@code ~/.hermes/hermes-agent/venv/lib/python3.11/site-packages/acp/meta.py:3—17}
- * 的 13 条 agent 面方法（复算见 {@code _doc/acceptance/p25/EVIDENCE.md} §0.2）。
+ * 的 13 条 agent 面方法（复算见 {@code _doc/005_testing/acceptance/p25/EVIDENCE.md} §0.2）。
  * 本类第一条用例就是把这张表钉在测试里：少一条或多一条都会红。</p>
  */
 public class AcpProtocolSurfaceTest {

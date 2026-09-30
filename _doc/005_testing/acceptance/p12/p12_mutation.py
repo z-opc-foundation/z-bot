@@ -3,7 +3,7 @@
 """
 P12（主循环节律包：中断 / steer / 预算 refund / prompt cache 冻结）变异检验。
 
-骨架与纪律照 _doc/acceptance/p11c/p11c_mutation.py（不 import 它，免得两批结论互相拖累）：
+骨架与纪律照 _doc/005_testing/acceptance/p11c/p11c_mutation.py（不 import 它，免得两批结论互相拖累）：
   * 入口 `if __name__ == "__main__": sys.exit(main())`，import 不执行任何事；
   * 注入前逐条校验锚点出现次数；漂了 FATAL 退出，一个源文件都不碰；
   * **互斥锁在 git 公共目录**（`$(git rev-parse --git-common-dir)/zbot-mutlock`），
@@ -26,10 +26,10 @@ P12（主循环节律包：中断 / steer / 预算 refund / prompt cache 冻结�
   ② **真进程层** p12_e2e.py 的 stop 段也必须变红/变慢（`--with-e2e`，代价是多一次 package）。
 
 复算:
-  python3 -u _doc/acceptance/p12/p12_mutation.py               # 全量
-  python3 -u _doc/acceptance/p12/p12_mutation.py M2 M6         # 按 id 子串选
-  python3 -u _doc/acceptance/p12/p12_mutation.py --with-e2e M6 # 连真进程层一起判
-  python3 -u _doc/acceptance/p12/p12_mutation.py --lock-probe  # 互斥锁双向实测
+  python3 -u _doc/005_testing/acceptance/p12/p12_mutation.py               # 全量
+  python3 -u _doc/005_testing/acceptance/p12/p12_mutation.py M2 M6         # 按 id 子串选
+  python3 -u _doc/005_testing/acceptance/p12/p12_mutation.py --with-e2e M6 # 连真进程层一起判
+  python3 -u _doc/005_testing/acceptance/p12/p12_mutation.py --lock-probe  # 互斥锁双向实测
 """
 import fcntl
 import hashlib
@@ -41,10 +41,10 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
-LOGS = os.path.join(HERE, "logs")
+LOGS = os.path.join(ZBOT, ".cache", "p12", "logs")
 LEDGER = os.path.join(HERE, "LEDGER.tsv")
 E2E = os.path.join(HERE, "p12_e2e.py")
 # 双向锁探针允许"等邻居松手"的上限（秒）：探针对象是这把锁互斥不互斥，不是这一刻有没有人用
@@ -403,7 +403,7 @@ def run_e2e_stop_section(tag, section="stop"):
     section="cache" 用在 M12（冻结摘掉 ⇒ 同一会话两轮的 system prompt 哈希必须变，
     这一半是 P24 交接件要的**阳性对照**，只拿单测层的不算）。
     """
-    jsonpath = os.path.join(HERE, "out", "mutation-%s.json" % tag)
+    jsonpath = os.path.join(ZBOT, ".cache", "p12", "out", "mutation-%s.json" % tag)
     proc = subprocess.run([sys.executable, "-u", E2E, "--only", section, "--json", jsonpath],
                           cwd=ZBOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     text = proc.stdout.decode("utf-8", "replace")

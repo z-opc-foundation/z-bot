@@ -417,8 +417,9 @@ _Maintained by the z-opc-foundation organization._
 
 ## 文档目录
 
-本仓**没有** `001_arch / 002_deploy / 003_script / 004_skill` 这四格（`find _doc -maxdepth 1` 实测：`_doc/` 下只有
-`hermes-roadmap.md` 与 `acceptance/` 两项）；架构口径、roadmap、验收读数都收在那份 roadmap 与 `acceptance/` 里。
+本仓 `_doc/` 下只有两格（`find _doc -maxdepth 1 -type d` 实测）：`001_arch`（1 份）与
+`005_testing`（验收证据）。`002_deploy` / `003_script` / `004_skill` / `006_release` /
+`007_backlog` / `008_troubleshooting` 六个槽位**按需不建** —— 本仓没有对应内容，不留空目录。
 
 - [`_doc/001_arch/hermes-roadmap.md`](_doc/001_arch/hermes-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
   22 面能力矩阵、结构性红线（含红线 1 代码/数据分离、缺省绑回环）、P0→P30 分期与 §8 逐期实测读数。
@@ -426,6 +427,10 @@ _Maintained by the z-opc-foundation organization._
 - [`_doc/005_testing/acceptance/`](_doc/005_testing/acceptance/) — 每期验收证据，**24 个期目录**；典型四件套是
   `EVIDENCE.md`（逐字读数 + 产生读数的命令）、`LEDGER.tsv`（杠② 变异台账）、`pNN_e2e.py`（杠③ 真进程量具）、
   `pNN_mutation.py`（杠② 变异注入）。例外如实写：`p11/`、`p15/` **没有** `EVIDENCE.md`/`LEDGER.tsv`（只有脚本与探针）。
+
+  ⚠ 驱动脚本的**运行态**（profile 快照、`state.db`、`*.lock`、`redfirst_*.log`、`__pycache__`）一律写到
+  仓根 `.cache/<pNN>/`（已 `.gitignore`）或系统临时目录，不再落在 `acceptance/` 里 —— 那些是下一次跑就覆盖的东西，
+  入库就等于把"某台机器某一次的现场"当成了证据。`EVIDENCE.md` 与 `LEDGER*.tsv` 这类被点名的读数照旧留桶内。
 
 | 期 | 主题（取自各自 `EVIDENCE.md` 标题） |
 |---|---|

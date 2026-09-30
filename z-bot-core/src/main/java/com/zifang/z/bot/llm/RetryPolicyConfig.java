@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
  * P26：重试/退避/看门狗的策略配置（不可变值对象）。
  *
  * <p>为什么不进 {@code config/BotConfig.java}：另有两支写手在改 BotConfig，
- * 本棒的键先在自家落地，等主线并网后再统一收口（见 _doc/acceptance/p26/EVIDENCE.md §11）。</p>
+ * 本棒的键先在自家落地，等主线并网后再统一收口（见 _doc/005_testing/acceptance/p26/EVIDENCE.md §11）。</p>
  *
  * <p>读取顺序：显式 {@link Properties} &gt; {@code <configDir>/config.properties} &gt;
  * {@link BotConfig} 既有 getter（{@code retry.max.attempts} / {@code retry.backoff.ms} 复用，不抄第二份）&gt; 内置默认。</p>

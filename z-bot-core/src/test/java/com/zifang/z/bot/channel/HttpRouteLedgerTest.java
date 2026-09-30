@@ -40,7 +40,7 @@ import static org.junit.Assert.fail;
  * <ol>
  *   <li>表 ⇄ {@code dispatch()} 源码里的 {@code "<path>".equals(path)} 字面量（从源码机械复算，
  *       与工单 §0.2 那条 awk 同口径）；</li>
- *   <li>表 ⇄ {@code _doc/acceptance/p28/ROUTES.tsv}（真进程 E2E 的分母就取自这份文件）；</li>
+ *   <li>表 ⇄ {@code _doc/005_testing/acceptance/p28/ROUTES.tsv}（真进程 E2E 的分母就取自这份文件）；</li>
  *   <li>表自身的一致性：方法粒度不重复、鉴权/绑址两列不许有人偷偷改口、
  *       记了缺陷号的路由必须在 EVIDENCE.md 里点名。</li>
  * </ol>

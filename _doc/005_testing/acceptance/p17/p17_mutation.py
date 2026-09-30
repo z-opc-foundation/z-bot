@@ -3,7 +3,7 @@
 """
 P17（cron 投递闭环）变异检验：把本期新加的每一条守卫逐条改坏，看有没有**具名测试**判红。
 
-纪律照抄 _doc/acceptance/p11b/p11b_mutation.py：
+纪律照抄 _doc/005_testing/acceptance/p11b/p11b_mutation.py：
   * 注入前逐条校验锚点出现次数（锚点漂了 = 量具坏了，不是代码坏了，直接 FATAL 不收读数）；
   * 每个变异体跑完按内存里的原文逐字节还原，收尾再核对全量 md5；
   * 判定只认 surefire XML 里的 testcase 名：点名的那条红了才算 RED-OK；
@@ -14,9 +14,9 @@ P17（cron 投递闭环）变异检验：把本期新加的每一条守卫逐条
 点名集为空、预期就是 GREEN-BUT-MUTATED 的两条（M8/M9）：跨进程 flock 的等待上限
 和 gateway 那条装配线，都要**真两个进程 / 真通道**才显形，进程内单测造不出那个现场 ——
 它们的证据在 p17_e2e.py，不在这里。
-  * M8 的那份证据已实测（2026-09-26）：`python3 _doc/acceptance/p17/p17_mutation.py` 的
+  * M8 的那份证据已实测（2026-09-26）：`python3 _doc/005_testing/acceptance/p17/p17_mutation.py` 的
     注入串原样打进 `JOBS_LOCK_TIMEOUT_MILLIS`、重打 jar 后单跑 E 段
-    （`P17_ONLY=E python3 _doc/acceptance/p17/p17_e2e.py`）⇒ **E2 FAIL**（邻居正攥着
+    （`P17_ONLY=E python3 _doc/005_testing/acceptance/p17/p17_e2e.py`）⇒ **E2 FAIL**（邻居正攥着
     `.jobs.lock`，写请求却当场落盘：`盘上=['E-free','E-held','E-seed']`）+ **E4 FAIL**
     （日志出现"等 .jobs.lock 的跨进程锁超过 0ms … 降级为只用进程内锁"），其余 5 条仍绿；
     还原后（md5 与基线逐字节相同）重跑 E 段 7/7 全绿。两跑日志见 logs/。
@@ -27,7 +27,7 @@ P17（cron 投递闭环）变异检验：把本期新加的每一条守卫逐条
     "投给拉模式控制台"被记成静默成功）。还原后重跑 32/32 全绿。日志 logs/e2e_full_M9.log。
     ⇒ M9 在本表里同样记 GREEN-BUT-MUTATED：单测层看不见装配，**但 E2E 层杀得死**。
 
-复算: python3 _doc/acceptance/p17/p17_mutation.py [id 子串...]
+复算: python3 _doc/005_testing/acceptance/p17/p17_mutation.py [id 子串...]
 """
 import hashlib
 import io
@@ -38,7 +38,7 @@ import time
 import xml.etree.ElementTree as ET
 
 ZBOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    os.pardir, os.pardir, os.pardir))
+                                    os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 TESTS = "CronClaimTest,CronDeliveryTest,CronScheduleTest,CronSchedulerTest"

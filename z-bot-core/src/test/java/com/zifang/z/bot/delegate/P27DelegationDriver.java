@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
- * P27 杠③ 真进程 E2E 驱动（**不是单测**，由 {@code _doc/acceptance/p27/p27_e2e.py} 以
+ * P27 杠③ 真进程 E2E 驱动（**不是单测**，由 {@code _doc/005_testing/acceptance/p27/p27_e2e.py} 以
  * {@code java -cp <真 jar + target/classes ...>} 起真子进程跑，本进程本身会被 {@code kill -9}）。
  *
  * <p>三种模式：

@@ -17,7 +17,7 @@ REPO = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                       cwd=os.path.dirname(os.path.abspath(__file__)),
                       capture_output=True, text=True).stdout.strip()
 SKILL = "z-bot-core/src/main/java/com/zifang/z/bot/skill"
-OUT_DIR = os.path.join(REPO, "_doc", "acceptance", "p23")
+OUT_DIR = os.path.join(REPO, "_doc", "005_testing", "acceptance", "p23")
 LEDGER = os.path.join(OUT_DIR, "LEDGER.tsv")
 RAW = os.path.join(OUT_DIR, "mutation-raw")
 

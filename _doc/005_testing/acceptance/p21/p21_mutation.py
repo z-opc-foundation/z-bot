@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """P21（MCP 对齐）杠② —— 变异检验：把本期每一条守卫逐条改坏，看有没有**具名 testcase** 判红。
 
-结构照 `_doc/acceptance/p18/p18_mutation.py` 的口径（工单 p21c §3-C 明写），纪律：
+结构照 `_doc/005_testing/acceptance/p18/p18_mutation.py` 的口径（工单 p21c §3-C 明写），纪律：
 
   * **预期红集先写死在本文件里**，跑之前随脚本一起提交 ⇒ 不许事后凑；
   * 注入前逐条校验锚点出现次数（锚点漂了 = 量具坏了，直接 FATAL，不收读数）；
@@ -25,8 +25,8 @@
 不碰 `channel/**`、`agent/**`、内核仓。本脚本不读 `~/.zbot` 任何凭据，
 不发外网包（`McpRealStdioServerTest` 那一族只起本机官方 SDK server）。
 
-复算: python3 -u _doc/acceptance/p21/p21_mutation.py            # 全量一轮
-      python3 -u _doc/acceptance/p21/p21_mutation.py --check    # 只验锚点与点名，不跑 mvn
+复算: python3 -u _doc/005_testing/acceptance/p21/p21_mutation.py            # 全量一轮
+      python3 -u _doc/005_testing/acceptance/p21/p21_mutation.py --check    # 只验锚点与点名，不跑 mvn
 锁:   $(git rev-parse --git-common-dir)/zbot-mutlock —— 抢不到就退避重试（同机别人在跑），
       重试到上限仍拿不到 ⇒ rc=4（**这不是失败**，是"现在不该由我占着 target/"）
 """
@@ -40,7 +40,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 TEST_SRC = os.path.join(CORE, "src", "test", "java", "com", "zifang", "z", "bot", "mcp")

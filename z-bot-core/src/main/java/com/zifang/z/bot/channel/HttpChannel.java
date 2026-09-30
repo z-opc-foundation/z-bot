@@ -155,7 +155,7 @@ public final class HttpChannel {
      * <ol>
      *   <li>{@link #dispatch} 里的 {@code "<path>".equals(path)} 字面量 ⇄ {@link #paths()}
      *       —— 由 {@code HttpRouteLedgerTest#ledgerPathsMatchDispatchLiterals()} 从<b>源码</b>机械复算；</li>
-     *   <li>本表 ⇄ {@code _doc/acceptance/p28/ROUTES.tsv}
+     *   <li>本表 ⇄ {@code _doc/005_testing/acceptance/p28/ROUTES.tsv}
      *       —— 由 {@code HttpRouteLedgerTest#routesTsvIsInSyncWithLedger()} 逐字节对账；</li>
      *   <li>{@code ROUTES.tsv} ⇄ 真进程 E2E 的分母 —— {@code p28_e2e.py} 逐行打，缺一行即红。</li>
      * </ol>

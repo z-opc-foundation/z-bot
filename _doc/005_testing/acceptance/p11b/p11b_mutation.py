@@ -4,7 +4,7 @@
 P11b（红线 1 profile 隔离）变异检验：把"缺省值跟着 profile 走"这条守卫逐条改坏，
 看有没有**具名测试**判红。
 
-纪律沿用 _doc/acceptance/p15/p15_mutation.py：
+纪律沿用 _doc/005_testing/acceptance/p15/p15_mutation.py：
   * 注入前校验锚点出现次数（锚点漂了说明量具坏了，不是代码坏了）；
   * 每个变异体跑完按内存里的原文还原，收尾核对全量 md5；
   * 判定只认 surefire XML 里的 testcase 名 —— 点名那条红了才算 RED-OK，
@@ -13,7 +13,7 @@ P11b（红线 1 profile 隔离）变异检验：把"缺省值跟着 profile 走"
 M1（ZBOT_HOME 被忽略）与 M12（stty 备份回到 ~/.zbot）**预期就是 GREEN-BUT-MUTATED**：
 前者要真进程的 env，后者要真 pty，进程内都造不出来 —— 这两条的证据在 p11b_e2e.py，不在这里。
 
-复算: python3 _doc/acceptance/p11b/p11b_mutation.py [id 子串...]
+复算: python3 _doc/005_testing/acceptance/p11b/p11b_mutation.py [id 子串...]
 """
 import hashlib
 import os
@@ -22,7 +22,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 ZBOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    os.pardir, os.pardir, os.pardir))
+                                    os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 TESTS = "ProfileIsolationTest"

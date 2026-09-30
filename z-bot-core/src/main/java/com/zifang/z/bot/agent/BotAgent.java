@@ -2136,7 +2136,7 @@ public class BotAgent {
         CACHE_READ.set(0L);
         CACHE_WRITE.set(0L);
         // CompressorEngine 的 compressCount 没有对外重置口（context/ 归 w6-p14），
-        // 这里只能把"换模型 ⇒ 旧压缩账作废"记进日志；接口需求见 _doc/acceptance/p26/EVIDENCE.md §11。
+        // 这里只能把"换模型 ⇒ 旧压缩账作废"记进日志；接口需求见 _doc/005_testing/acceptance/p26/EVIDENCE.md §11。
         LOG.warn("[BotAgent] 换模型 {} -> {}：本侧字符估算已清零；压缩计数重置待 context/ 提供 reset 接口",
                 fromModel, toModel);
     }

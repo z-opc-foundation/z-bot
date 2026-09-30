@@ -32,3 +32,5 @@ target/
 # 仓内发布凭据（Sonatype User Token + GPG passphrase），由 004_重要秘钥 口径落到这里
 .env
 .env.bak
+
+# 运行态与编译产物（由 2026-10-08 lead 同步并入；与上方上游块取并集，不覆盖上游新增的凭据排除）

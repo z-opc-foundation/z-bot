@@ -28,7 +28,7 @@ import sys
 # 量具钉在目标树。原先硬 `/private/tmp/zbot-wt-p25`：那棵树还留在盘上、冻结在 443f5f6，
 # 今天照原样跑会静默改那棵树的 src/main 并把 LEDGER 写回去（tracked 那份就是它的自证）。
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    os.pardir, os.pardir, os.pardir))
+                                    os.pardir, os.pardir, os.pardir, os.pardir))
 LEAD = os.path.expanduser("~/.cache/zbot-p25-lead")
 
 
@@ -41,7 +41,7 @@ RUN_ID = sys.argv[1] if len(sys.argv) > 1 else time_stamp()
 
 REF = os.path.join(LEAD, "mutref", RUN_ID)
 LOGS = os.path.join(LEAD, "mutlogs", RUN_ID)
-LEDGER = os.path.join(REPO, "_doc", "acceptance", "p25", "LEDGER.tsv")
+LEDGER = os.path.join(REPO, "_doc", "005_testing", "acceptance", "p25", "LEDGER.tsv")
 CORE = os.path.join(REPO, "z-bot-core")
 CLASSES = os.path.join(CORE, "target", "classes", "com", "zifang", "z", "bot")
 
@@ -274,7 +274,7 @@ def run_mvn_test(catcher, tag):
 def run_e2e_all(tokens, tag):
     """真进程 E2E 当捕获者：判词是 `CHECK|<token> PASS|FAIL` 那一行。"""
     log = os.path.join(LOGS, tag + ".e2e.log")
-    rc, out = sh(["python3", "_doc/acceptance/p25/p25_e2e.py", RUN_ID + "_" + tag], timeout=1500)
+    rc, out = sh(["python3", "_doc/005_testing/acceptance/p25/p25_e2e.py", RUN_ID + "_" + tag], timeout=1500)
     with open(log, "w") as f:
         f.write(out)
     green = {}

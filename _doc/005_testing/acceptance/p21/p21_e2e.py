@@ -38,7 +38,7 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent            # _doc/acceptance/p21
+HERE = Path(__file__).resolve().parent            # _doc/005_testing/acceptance/p21
 REPO = HERE.parents[2]                            # 仓库根
 CACHE = Path.home() / ".cache" / "zbot-p21"
 REF_SERVER = HERE / "p21_ref_mcp_server.py"

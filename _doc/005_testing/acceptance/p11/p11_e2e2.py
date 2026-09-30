@@ -23,8 +23,8 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# 上溯三级 = 仓根（_doc/acceptance/p11 → z-bot）；复算命令不依赖任何人的绝对路径
-ZBOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, os.pardir))
+# 上溯四级 = 仓根（_doc/005_testing/acceptance/p11 → z-bot）；复算命令不依赖任何人的绝对路径
+ZBOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core/target/z-bot-core.jar")
 ROOT = "/tmp/zbot-e2e-p11b"
 CFG = os.path.join(ROOT, "cfg")

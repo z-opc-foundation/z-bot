@@ -17,7 +17,7 @@ import java.util.List;
  * <p>这里<b>没有</b>第二套审批、第二套会话存储、第二套中断旗子：全部方法都是一行转发到
  * BotAgent 既有公开口（{@code chat}/{@code pendingApprovals}/{@code confirmTool}/
  * {@code stop}/{@code currentSessionId}/{@code listSessions}），行号见
- * {@code _doc/acceptance/p25/EVIDENCE.md} §0.5。</p>
+ * {@code _doc/005_testing/acceptance/p25/EVIDENCE.md} §0.5。</p>
  */
 public final class BotAgentAcpTarget implements AcpTurnTarget {
 

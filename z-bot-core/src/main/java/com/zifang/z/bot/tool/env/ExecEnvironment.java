@@ -7,7 +7,7 @@ import java.io.IOException;
  * 执行后端 SPI（P22）。
  *
  * <p>抽这一层之前，仓里「跑外部进程」这件事至少三套各写各的（复算见
- * {@code _doc/acceptance/p22/EVIDENCE.md} §0.3：{@code tool/BuiltinTools.java:455}、
+ * {@code _doc/005_testing/acceptance/p22/EVIDENCE.md} §0.3：{@code tool/BuiltinTools.java:455}、
  * {@code checkpoint/CheckpointManager.java:226}、{@code channel/DeliveryLedger.java:298}，
  * 外加工单没列的第四套 {@code ui/RawTerminalReader.java:238/:252}），
  * 各自的超时/取输出/杀进程口径都不一样。</p>

@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
  * 安装期安全扫描 —— hermes {@code tools/skills_guard.py}（1153 行 / ~110 条 pattern）的
  * <b>规则子集</b>：pattern_id、severity、category 全部沿用她的命名，只做了 12 条正则 +
  * 1 条不可见字符 + 1 条结构性检查。做了哪几条 / 不做哪几条见
- * {@code _doc/acceptance/p23/EVIDENCE.md} §4，两条表都是硬交付。
+ * {@code _doc/005_testing/acceptance/p23/EVIDENCE.md} §4，两条表都是硬交付。
  *
  * <p>判定与她的 {@code VERDICT_INDEX}/{@code INSTALL_POLICY} 同构：
  * 出现 critical ⇒ {@code dangerous}；只有 high/medium ⇒ {@code caution}；否则 {@code safe}。

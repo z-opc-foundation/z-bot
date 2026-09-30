@@ -37,8 +37,8 @@ import sys
 import threading
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))          # <repo>/_doc/acceptance/p28
-REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))   # 仓库根
+HERE = os.path.dirname(os.path.abspath(__file__))          # <repo>/_doc/005_testing/acceptance/p28
+REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))   # 仓库根
 LEAD = os.path.expanduser("~/.cache/zbot-p28-lead")
 RUN_TAG = re.sub(r"[^A-Za-z0-9_.-]", "_", sys.argv[1] if len(sys.argv) > 1
                  else time.strftime("run%H%M%S"))

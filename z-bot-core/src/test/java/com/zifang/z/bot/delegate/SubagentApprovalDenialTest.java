@@ -36,7 +36,7 @@ import static org.junit.Assert.assertTrue;
  * P27c 第一条：子代理的审批缝必须<b>当场</b>裁决，不能把"等人来批"这件事留给一个
  * 没有人在等的队列。
  *
- * <p>修之前的形状（一次性取证，见 {@code _doc/acceptance/p27c/EVIDENCE.md}）：
+ * <p>修之前的形状（一次性取证，见 {@code _doc/005_testing/acceptance/p27c/EVIDENCE.md}）：
  * 子代理的 exec 撞上 {@code Confirmations.isRequired} ⇒ {@code emitToolResult} 照旧抛
  * {@link com.zifang.z.bot.agent.ToolConfirmationNeeded}，{@code chat()} 把它揉成
  * {@code WAIT_CONFIRM:tool|args|reason} <b>当最终回复返回</b>，

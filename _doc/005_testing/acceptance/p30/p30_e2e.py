@@ -7,7 +7,7 @@ P30 真进程 E2E（杠③）：起**真 JVM** gateway，用真 HTTP 打飞书/�
 
 为什么不能只靠单测（同一份代码里已经有的 21+13 支）：
   1. 单测的签名/密文是**测试自己算的**。P18 就是这么把 SHA-1 当正确答案签了 12 支绿测试，
-     连 `_doc/acceptance/p18/p18_e2e.py` 的 `feishu_inbound()` 也照着实现写成了 sha1 ——
+     连 `_doc/005_testing/acceptance/p18/p18_e2e.py` 的 `feishu_inbound()` 也照着实现写成了 sha1 ——
      替身把实现的错误复制了一遍，量具就再也看不见它。这里签名与密文一律由
      **python hashlib + openssl** 现场算（两个独立实现），Java 侧只做"认/不认"。
   2. 装配层：manifest 的 `encrypt-key` / `inbound-secret` 到底有没有流进构造器，只有
@@ -33,8 +33,8 @@ P30 真进程 E2E（杠③）：起**真 JVM** gateway，用真 HTTP 打飞书/�
 `ZBOT_HOME` 与 `--config-dir` 都指它；LLM 是进程内假端点，key 写 `stub-key-not-real`，
 真 key 一个字节都不进本脚本；出站只指 127.0.0.1，真域名一个包都不发；端口一律 `bind(0)`。
 
-复算: python3 -u _doc/acceptance/p30/p30_e2e.py            # 3 轮
-      P30_ROUNDS=1 python3 -u _doc/acceptance/p30/p30_e2e.py
+复算: python3 -u _doc/005_testing/acceptance/p30/p30_e2e.py            # 3 轮
+      P30_ROUNDS=1 python3 -u _doc/005_testing/acceptance/p30/p30_e2e.py
 """
 import base64
 import hashlib
@@ -53,7 +53,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "zbot-p30")
 OUT = os.path.join(CACHE, "e2e")

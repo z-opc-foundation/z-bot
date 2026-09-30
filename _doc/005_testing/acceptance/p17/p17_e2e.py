@@ -18,7 +18,7 @@ P17（cron 投递闭环）验收③：真进程 E2E。
 任何情况下不进临时目录、不出现在任何输出里（收尾会 grep 一遍所有产物）。
 
 前置: mvn -o -pl z-bot-core package -DskipTests
-复算: python3 _doc/acceptance/p17/p17_e2e.py
+复算: python3 _doc/005_testing/acceptance/p17/p17_e2e.py
 """
 import fcntl
 import hashlib
@@ -34,11 +34,11 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")
 REAL_CRON = os.path.join(REAL_HOME, "cron")
-OUT = os.path.join(HERE, "out")
+OUT = os.path.join(ZBOT, ".cache", "p17", "out")
 STUB_KEY = "stub-key-not-real"
 
 RESULTS = []

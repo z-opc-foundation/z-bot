@@ -31,8 +31,8 @@ P12（主循环节律包）验收③：**真进程** E2E。读代码不算证据
 写入时刻精确到 us（R2 要从"写 /stop 那一刻"起算），也免掉 `script` 那层缓冲与时序差。
 
 前置: 无（本脚本自己打包；打包失败就不开跑，不拿旧 jar 顶包）
-复算: python3 -u _doc/acceptance/p12/p12_e2e.py
-       python3 -u _doc/acceptance/p12/p12_e2e.py --only stop
+复算: python3 -u _doc/005_testing/acceptance/p12/p12_e2e.py
+       python3 -u _doc/005_testing/acceptance/p12/p12_e2e.py --only stop
 """
 import argparse
 import hashlib
@@ -52,10 +52,10 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
-OUT = os.path.join(HERE, "out")
-LOGS = os.path.join(HERE, "logs")
+OUT = os.path.join(ZBOT, ".cache", "p12", "out")
+LOGS = os.path.join(ZBOT, ".cache", "p12", "logs")
 REQ_DIR = os.path.join(OUT, "llm-requests")
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")
 STUB_KEY = "stub-key-not-real"

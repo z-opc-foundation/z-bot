@@ -16,9 +16,9 @@
     出现 `/Users/.../.zbot` 真路径即红。
 
 用法：
-    python3 -u _doc/acceptance/p24/p24_e2e.py --label r1     # 整跑一轮，现场目录 ROOT/r1/<scene>
-    python3 -u _doc/acceptance/p24/p24_e2e.py --only s5      # 只跑名字含该子串的场景（S0 闸门必跑）
-    python3 -u _doc/acceptance/p24/p24_e2e.py --build        # 先 mvn -o package -DskipTests 再跑
+    python3 -u _doc/005_testing/acceptance/p24/p24_e2e.py --label r1     # 整跑一轮，现场目录 ROOT/r1/<scene>
+    python3 -u _doc/005_testing/acceptance/p24/p24_e2e.py --only s5      # 只跑名字含该子串的场景（S0 闸门必跑）
+    python3 -u _doc/005_testing/acceptance/p24/p24_e2e.py --build        # 先 mvn -o package -DskipTests 再跑
 
 退出码：0 全绿 / 1 有判词红 / 2 现场或前置缺失 / 3 驱动编译不过 / 4 阳性对照进不来 / 5 jar 比源码旧
 """
@@ -31,7 +31,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(REPO, "z-bot-core", "target", "z-bot-core.jar")
 MAIN_SRC = os.path.join(REPO, "z-bot-core", "src", "main")
 DRIVER_SRC = os.path.join(REPO, "z-bot-core", "src", "test", "java", "com", "zifang", "z",

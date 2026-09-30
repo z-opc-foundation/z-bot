@@ -4,7 +4,7 @@
 P11c（通道监听收口）变异检验：把"缺省只绑回环 / 通配要显式 opt-in / 横幅印真地址"
 三条守卫逐个改坏，看有没有**具名测试**判红。
 
-纪律沿用 _doc/acceptance/p11b/p11b_mutation.py（不 import 它，免得两批结论互相拖累）：
+纪律沿用 _doc/005_testing/acceptance/p11b/p11b_mutation.py（不 import 它，免得两批结论互相拖累）：
   * 注入前先校验锚点出现次数（锚点漂了是量具坏了，不是代码坏了）；
   * 每个变异体跑完按内存里的原文还原，收尾核对 md5；
   * 判定只认 surefire XML 里的 testcase 名：点名那条红了才算 RED-OK，
@@ -16,7 +16,7 @@ P11c（通道监听收口）变异检验：把"缺省只绑回环 / 通配要显
   M6 把 resolve() 钉成"永远回环" ⇒ opt-in 那 2 条必红。
   只有 M6 能证明"显式 0.0.0.0 真能绑到通配"这层断言不是空跑。
 
-复算: python3 _doc/acceptance/p11c/p11c_mutation.py [id 子串...]
+复算: python3 _doc/005_testing/acceptance/p11c/p11c_mutation.py [id 子串...]
 """
 import hashlib
 import os
@@ -25,7 +25,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 TESTS = "ChannelBindTest,ProfileIsolationTest"

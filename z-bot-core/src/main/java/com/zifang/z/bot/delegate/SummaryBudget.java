@@ -29,7 +29,7 @@ import java.util.Date;
  * 那道尺是为 batch 扇出造的（一次返回 N 份完整摘要），而 z-bot 的 delegate 面一次只回一条
  * —— {@code delegate_task} 只有单个 {@code task} 参数，"分摊"这一步没有形状可算。
  * 父代理剩余 headroom 的读数是有的（{@code context/CompressorEngine} 的 {@code contextWindow}），
- * 要接先得把批形状造出来；这条已记进 {@code _doc/hermes-roadmap.md} 的欠账，不留在这里当幽灵功能。</p>
+ * 要接先得把批形状造出来；这条已记进 {@code _doc/001_arch/hermes-roadmap.md} 的欠账，不留在这里当幽灵功能。</p>
  */
 public final class SummaryBudget {
 

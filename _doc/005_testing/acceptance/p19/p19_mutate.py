@@ -25,10 +25,10 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "zbot-p19-lead")
 os.makedirs(CACHE, exist_ok=True)
-OUT_TSV = os.path.join(REPO, "_doc", "acceptance", "p19", "LEDGER.tsv")
+OUT_TSV = os.path.join(REPO, "_doc", "005_testing", "acceptance", "p19", "LEDGER.tsv")
 RAW_LOG = os.path.join(CACHE, "mutate_raw.jsonl")
 
 TEST_ROOT = "z-bot-core/src/test/java"
@@ -294,7 +294,7 @@ def main():
     # 收尾把所有还原后的字节重新编译一遍，别把变异的 class 留在 target 里
     compile_all()
     header = "# 杠② P19 命令表单源守卫 · 具名变异台账 —— 由 p19_mutate.py 机器生成，别手敲\n" \
-             "# 再生成: python3 _doc/acceptance/p19/p19_mutate.py   (需抢 zbot-mutlock，抢不到 rc=4)\n" \
+             "# 再生成: python3 _doc/005_testing/acceptance/p19/p19_mutate.py   (需抢 zbot-mutlock，抢不到 rc=4)\n" \
              "# 判据: KILLED=被点名的那条测试红且字节已变; RED-OK=红了但归因不到那条; " \
              "SURVIVED=漂移没被抓到; PARTIAL=对照不成立; INJECTION_NOT_APPLIED=字节没进\n"
     cols = ["id", "marker", "guard_test", "target_file",

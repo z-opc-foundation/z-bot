@@ -4,7 +4,7 @@
 P20b（工具真注册表 / toolset 声明层 / 探测 TTL 与宽限窗 / 结果上限与溢出落盘 / MCP 桥级注销）
 变异检验：把本期新增的每条守卫的**判据**逐个改坏，看有没有**具名测试**判红。
 
-骨架照 _doc/acceptance/p11c/p11c_mutation.py，纪律照本单工单：
+骨架照 _doc/005_testing/acceptance/p11c/p11c_mutation.py，纪律照本单工单：
   * 入口 `if __name__ == "__main__": sys.exit(main())`，import 不执行；
   * 注入前先校验锚点出现次数 + 盘上原文与 `git show <BASE>:<path>` 逐字节一致，
     漂了 FATAL 退出，一个源文件都不碰；
@@ -26,10 +26,10 @@ P20b（工具真注册表 / toolset 声明层 / 探测 TTL 与宽限窗 / 结果
 / BROKEN（编译不过，必须换成能编译的等价旧写法重做）。
 
 复算:
-  python3 -u _doc/acceptance/p20b/p20b_mutation.py --check          # 只做锚点/漂移/期望名存在性预检
-  python3 -u _doc/acceptance/p20b/p20b_mutation.py                  # 全量注入
-  python3 -u _doc/acceptance/p20b/p20b_mutation.py TS1 MB3          # 只跑 id 子串
-  python3 -u _doc/acceptance/p20b/p20b_mutation.py --hold-lock 25   # 攥锁探针（双向实测的一侧）
+  python3 -u _doc/005_testing/acceptance/p20b/p20b_mutation.py --check          # 只做锚点/漂移/期望名存在性预检
+  python3 -u _doc/005_testing/acceptance/p20b/p20b_mutation.py                  # 全量注入
+  python3 -u _doc/005_testing/acceptance/p20b/p20b_mutation.py TS1 MB3          # 只跑 id 子串
+  python3 -u _doc/005_testing/acceptance/p20b/p20b_mutation.py --hold-lock 25   # 攥锁探针（双向实测的一侧）
 """
 import fcntl
 import glob
@@ -42,8 +42,8 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
-LOGS = os.path.join(HERE, "logs")
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
+LOGS = os.path.join(ZBOT, ".cache", "p20b", "logs")
 LEDGER = os.path.join(HERE, "LEDGER.tsv")
 RESTORE_TSV = os.path.join(HERE, "LEDGER_RESTORE.tsv")
 

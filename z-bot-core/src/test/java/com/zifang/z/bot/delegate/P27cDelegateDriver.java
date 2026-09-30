@@ -18,7 +18,7 @@ import java.util.List;
 
 /**
  * P27c 杠③ 真进程 E2E 驱动（**不是单测**：名字不以 {@code Test} 结尾 ⇒ surefire 不收它，
- * 由 {@code _doc/acceptance/p27c/p27c_e2e.py} 以 {@code java -cp <真 jar + target/classes>}
+ * 由 {@code _doc/005_testing/acceptance/p27c/p27c_e2e.py} 以 {@code java -cp <真 jar + target/classes>}
  * 起真子进程跑）。
  *
  * <p>与单测那一层的分工：{@code SubagentApprovalDenialTest} / {@code DelegateSummaryWiringTest}

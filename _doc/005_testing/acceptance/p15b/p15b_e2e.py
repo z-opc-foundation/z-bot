@@ -15,7 +15,7 @@ P15b 杠③ —— 真进程 E2E：**老库升级不丢行 + 判定=要 的新�
   C. 红线 1：key 一律 `stub-key-not-real`，且在同一条里反向钉住这个 stub 真进了产物
      （否则是空跑）；`~/.zbot` 只在跑前跑后各数一次项数与两个 md5 前缀，全程不读其内容。
 
-复算: mvn -o -pl z-bot-core package -DskipTests && python3 -u _doc/acceptance/p15b/p15b_e2e.py
+复算: mvn -o -pl z-bot-core package -DskipTests && python3 -u _doc/005_testing/acceptance/p15b/p15b_e2e.py
 退出码 0 = 全过；任何一条 FAIL 直接非 0；jar 缺失 = 2（FATAL，不算过）。
 """
 import hashlib
@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 WORK = "/private/tmp/zbot-p15b-e2e"
 CFG = os.path.join(WORK, "cfg")

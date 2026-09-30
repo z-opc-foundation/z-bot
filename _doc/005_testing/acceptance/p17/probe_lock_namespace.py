@@ -17,7 +17,7 @@ CPython 3.14 / APFS）**测不出**邻居在 0 字节文件上的记录锁，等
 （与被测代码 CronScheduler.acquireJobsLock 用的是同一个请求形状）。
 所以这里的邻居探针一律用 **JVM**，不用 Python lockf。
 
-复算: python3 _doc/acceptance/p17/probe_lock_namespace.py
+复算: python3 _doc/005_testing/acceptance/p17/probe_lock_namespace.py
 退出码 0 = 双向都证到 ⇒ p17_e2e.py 的 E 段有效；非 0 = 探针不成立，E 段读数一律不采信。
 """
 import os

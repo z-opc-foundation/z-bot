@@ -4,12 +4,12 @@
 P16（送达台账 / 死目标 / turn lease / 监管者）变异自证：把本期新加的每一条守卫逐条改坏，
 看有没有**具名测试**判红。
 
-格式与纪律照抄 _doc/acceptance/p11b/p11b_mutation.py 与 _doc/acceptance/p17/p17_mutation.py：
+格式与纪律照抄 _doc/005_testing/acceptance/p11b/p11b_mutation.py 与 _doc/005_testing/acceptance/p17/p17_mutation.py：
 
   * 入口 `if __name__ == "__main__": sys.exit(main())` —— 不许 import 即执行；
   * 注入前逐条校验锚点出现次数（锚点漂了 = 量具坏了，不是代码坏了 ⇒ FATAL，一个字节都不改）；
   * **同一时刻只允许一支注入脚本在飞**：跨编队互斥锁落在 `git rev-parse --git-common-dir`
-    下的 zbot-mutlock（各 worktree 的 _doc/acceptance/ 是各自独立的目录，锁放那儿跨不了编队）。
+    下的 zbot-mutlock（各 worktree 的 _doc/005_testing/acceptance/ 是各自独立的目录，锁放那儿跨不了编队）。
     实现只用 fcntl.flock(LOCK_EX|LOCK_NB)：**不用 fcntl.lockf** —— 主编 2026-09-26 本机实测，
     真 JVM 正攥着同一文件的 tryLock 时 python 的 lockf 一律回 ACQUIRED（见 p17/probe_lock_namespace.py），
     拿 lockf 当互斥就是空跑。拿不到锁 ⇒ 直接退出，一个源文件都不碰；
@@ -32,11 +32,11 @@ P16（送达台账 / 死目标 / turn lease / 监管者）变异自证：把本�
   ⑧ 活实例锁拒双启 + 干净退出删自己的锁 M10 M22 M23 M24
 另外三条是台账侧的防护（双实例不烧双份预算 / 发不出去的别认领 / 预算烧完就弃）：M11 M12 M15 M16。
 
-复算: python3 -u _doc/acceptance/p16/p16_mutation.py [M号子串...]
-      python3 -u _doc/acceptance/p16/p16_mutation.py --all-tests M07   # 把某条注入放到**全量**
+复算: python3 -u _doc/005_testing/acceptance/p16/p16_mutation.py [M号子串...]
+      python3 -u _doc/005_testing/acceptance/p16/p16_mutation.py --all-tests M07   # 把某条注入放到**全量**
                                                                        # 测试类上验覆盖，只写
                                                                        # logs/FULLSUITE.tsv
-      python3 -u _doc/acceptance/p16/p16_mutation.py --hold-lock 90   # 只攥锁，不注入（互斥实测用）
+      python3 -u _doc/005_testing/acceptance/p16/p16_mutation.py --hold-lock 90   # 只攥锁，不注入（互斥实测用）
 """
 import fcntl
 import hashlib
@@ -48,7 +48,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 

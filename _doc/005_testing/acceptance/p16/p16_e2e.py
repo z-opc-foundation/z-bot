@@ -24,7 +24,7 @@ P16（送达台账 / 死目标 / turn lease / 监管者）验收③：真进程 
 不读写 ~/.zbot 的内容（杠④/D 段只算摘要），真 key 的值不进任何产物、不打印。
 
 前置: mvn -o -pl z-bot-core package -DskipTests
-复算: python3 -u _doc/acceptance/p16/p16_e2e.py
+复算: python3 -u _doc/005_testing/acceptance/p16/p16_e2e.py
 """
 import hashlib
 import io
@@ -42,13 +42,13 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 LEDGER_SRC = os.path.join(ZBOT, "z-bot-core", "src", "main", "java", "com", "zifang", "z",
                           "bot", "channel", "DeliveryLedger.java")
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")
-OUT = os.path.join(HERE, "out")
-LOGS = os.path.join(HERE, "logs")
+OUT = os.path.join(ZBOT, ".cache", "p16", "out")
+LOGS = os.path.join(ZBOT, ".cache", "p16", "logs")
 STUB_KEY = "stub-key-not-real"
 
 RESULTS = []

@@ -4,7 +4,7 @@
 P30（入站鉴真：飞书 SHA-256 验签 + `{"encrypt":…}` AES-256-CBC 解密；钉钉入站 sign + 时间窗）
 变异检验：把本期每一条守卫逐条改坏，看有没有**具名 testcase** 判红。
 
-口径照 `_doc/acceptance/p18/p18_mutation.py`（同一套四杠纪律），两点不同：
+口径照 `_doc/005_testing/acceptance/p18/p18_mutation.py`（同一套四杠纪律），两点不同：
   * 每支变异体分「点名杀手」`named`（必须红的机制级 testcase）与「连带红」`allow_extra`
     （机制一改就必然跟着红的其余用例，**跑前一并写死**）。判据：
       RED-OK   点名全红，且没有 `named ∪ allow_extra` 之外的红
@@ -37,7 +37,7 @@ P30（入站鉴真：飞书 SHA-256 验签 + `{"encrypt":…}` AES-256-CBC 解�
 `channel/ChannelRegistry.java` 三个本期写域文件；全程进程内，不碰 `~/.zbot`（红线 1），
 不读任何真凭据，不给真域名发一个包。
 
-复算: python3 -u _doc/acceptance/p30/p30_mutation.py [id 子串...]
+复算: python3 -u _doc/005_testing/acceptance/p30/p30_mutation.py [id 子串...]
 锁:   $(git rev-parse --git-common-dir)/zbot-mutlock —— 只 try-lock，抢不到就 rc=4 退出
 """
 import fcntl
@@ -50,7 +50,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 

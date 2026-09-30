@@ -3,13 +3,13 @@
 """
 P15 变异检验：往生产代码里注入"守卫被拿掉"，看有没有**具名测试**判红。
 
-纪律（沿用 _doc/acceptance/p11/p11_mutation.py）：
+纪律（沿用 _doc/005_testing/acceptance/p11/p11_mutation.py）：
   * 注入前校验锚点在文件里出现的次数（锚点漂了就是量具坏了，不是代码坏了）；
   * 每个变异体跑完立刻按 md5 还原，收尾再全量核对一次；
   * 判定只认 surefire XML 里的 testcase 名字 —— "某个测试红了"不算证据，
     点名期望的那条红了才算 RED-OK；红了但是姊妹测试算 PARTIAL；全绿记 GREEN-BUT-MUTATED。
 
-复算: python3 _doc/acceptance/p15/p15_mutation.py
+复算: python3 _doc/005_testing/acceptance/p15/p15_mutation.py
 """
 import hashlib
 import os
@@ -18,7 +18,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 ZBOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    os.pardir, os.pardir, os.pardir))
+                                    os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 

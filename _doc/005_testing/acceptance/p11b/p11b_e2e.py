@@ -12,7 +12,7 @@ P11b（红线 1 profile 隔离）验收③：真进程 E2E。
 
 复算:
   mvn -o -pl z-bot-core package -DskipTests
-  python3 _doc/acceptance/p11b/p11b_e2e.py
+  python3 _doc/005_testing/acceptance/p11b/p11b_e2e.py
 """
 import hashlib
 import os
@@ -25,7 +25,7 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 REAL_HOME = os.path.join(os.path.expanduser("~"), ".zbot")
 

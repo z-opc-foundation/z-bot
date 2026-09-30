@@ -3,7 +3,7 @@
 """
 P15 验收③：真进程 E2E（真 jar、真 CLI、真两个 JVM 对撞、真坏库），不许用读代码代替。
 
-复算: mvn -o -pl z-bot-core package -DskipTests && python3 _doc/acceptance/p15/p15_e2e.py
+复算: mvn -o -pl z-bot-core package -DskipTests && python3 _doc/005_testing/acceptance/p15/p15_e2e.py
 
 红线 1：全程 --config-dir/--db 都指向临时目录，绝不碰 ~/.zbot；收尾核对 ~/.zbot 项数与两个 md5。
 key 一律 stub-key-not-real，真 key 不进任何临时目录。
@@ -19,7 +19,7 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 
 RESULTS = []

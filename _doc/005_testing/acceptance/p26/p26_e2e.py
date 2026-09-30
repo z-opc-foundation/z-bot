@@ -10,10 +10,10 @@
   * 每条读数都直接印在 stdout（决定性读数原样贴进被跟踪的 EVIDENCE.md）。
 
 用法：
-    python3 _doc/acceptance/p26/p26_e2e.py                     # 跑 S0 闸门 + 9 个场景
-    python3 _doc/acceptance/p26/p26_e2e.py --label r2           # 现场目录 ROOT/r2/<scene>（整跑要互不相同的 label）
-    python3 _doc/acceptance/p26/p26_e2e.py --only s1            # 只跑 label 含该子串的场景（S0 闸门必跑）
-    python3 _doc/acceptance/p26/p26_e2e.py --only s0-positive-control   # 最小阳性对照：stub 收不收得到
+    python3 _doc/005_testing/acceptance/p26/p26_e2e.py                     # 跑 S0 闸门 + 9 个场景
+    python3 _doc/005_testing/acceptance/p26/p26_e2e.py --label r2           # 现场目录 ROOT/r2/<scene>（整跑要互不相同的 label）
+    python3 _doc/005_testing/acceptance/p26/p26_e2e.py --only s1            # 只跑 label 含该子串的场景（S0 闸门必跑）
+    python3 _doc/005_testing/acceptance/p26/p26_e2e.py --only s0-positive-control   # 最小阳性对照：stub 收不收得到
 内部模式：
     python3 p26_e2e.py --proxy 127.0.0.1:PORT PORTFILE   # 中转子进程（可被 SIGSTOP/SIGKILL）
 
@@ -42,9 +42,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    os.pardir, os.pardir, os.pardir))
+                                    os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(REPO, "z-bot-core/target/z-bot-core.jar")
-DRIVER_SRC = os.path.join(REPO, "_doc/acceptance/p26/P26E2eDriver.java")
+DRIVER_SRC = os.path.join(REPO, "_doc/005_testing/acceptance/p26/P26E2eDriver.java")
 ROOT = os.path.expanduser("~/.cache/zbot-p26-lead/e2e")
 CLASSES = os.path.join(ROOT, "classes")
 STUB_KEY = "stub-key-not-real"

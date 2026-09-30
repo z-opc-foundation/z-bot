@@ -23,12 +23,12 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "zbot-p28-mutation")
 os.makedirs(CACHE, exist_ok=True)
 RTR = "z-bot-core/src/main/java/com/zifang/z/bot/ui/RawTerminalReader.java"
 HTC = "z-bot-core/src/main/java/com/zifang/z/bot/channel/HttpChannel.java"
-TSV = "_doc/acceptance/p28/ROUTES.tsv"
+TSV = "_doc/005_testing/acceptance/p28/ROUTES.tsv"
 CLS_RTR = "z-bot-core/target/classes/com/zifang/z/bot/ui/RawTerminalReader.class"
 CLS_HTC = "z-bot-core/target/classes/com/zifang/z/bot/channel/HttpChannel.class"
 TERM = "z-bot-core/src/main/java/com/zifang/z/bot/channel/TerminalChannel.java"
@@ -38,7 +38,7 @@ CLS_WEB = "z-bot-core/target/classes/web/index.html"
 README = "README.md"
 ZBOT = "z-bot-core/src/main/java/com/zifang/z/bot/ZBot.java"
 CLS_ZBOT = "z-bot-core/target/classes/com/zifang/z/bot/ZBot.class"
-LEDGER = os.path.join(REPO, "_doc/acceptance/p28/LEDGER.tsv")
+LEDGER = os.path.join(REPO, "_doc/005_testing/acceptance/p28/LEDGER.tsv")
 BAK = os.path.join(CACHE, "mutbak")
 JARLESS_CP = os.path.join(REPO, "z-bot-core/target/test-classes") + ":" + os.path.join(REPO, "z-bot-core/target/classes")
 PROBE = "com.zifang.z.bot.ui.RawTerminalVerdictProbe"

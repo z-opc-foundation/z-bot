@@ -28,7 +28,7 @@
 这一支把"不是同一把尺"从 mtime 推断升级成 git 字节证据。
 
 复算：
-    cd /private/tmp/zbot-wt-p12 && python3 -u _doc/acceptance/p12/p12_k2_probe.py   # rc=0 ⇒ 双向全符合期望
+    cd /private/tmp/zbot-wt-p12 && python3 -u _doc/005_testing/acceptance/p12/p12_k2_probe.py   # rc=0 ⇒ 双向全符合期望
 """
 import importlib.util
 import os

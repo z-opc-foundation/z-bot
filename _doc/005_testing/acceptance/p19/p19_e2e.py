@@ -35,7 +35,7 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
+REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 CACHE = os.path.join(os.path.expanduser("~"), ".cache", "zbot-p19-lead")
 os.makedirs(CACHE, exist_ok=True)
 CP_MAIN = os.path.join(REPO, "z-bot-core", "target", "classes")

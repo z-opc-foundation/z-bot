@@ -30,8 +30,8 @@ P30b 真进程 E2E（杠③）：起**真 JVM** gateway，用真 HTTP 打四个�
 真 key 一个字节都不进本脚本；出站只指 127.0.0.1，真域名一个包都不发；端口一律 `bind(0)`。
 本脚本**不 import 别的战役脚本**（量具之间不许互相借读数），只用标准库。
 
-复算: python3 -u _doc/acceptance/p30b/p30b_e2e.py
-      P30B_ROUNDS=1 python3 -u _doc/acceptance/p30b/p30b_e2e.py
+复算: python3 -u _doc/005_testing/acceptance/p30b/p30b_e2e.py
+      P30B_ROUNDS=1 python3 -u _doc/005_testing/acceptance/p30b/p30b_e2e.py
 """
 import hashlib
 import hmac
@@ -50,7 +50,7 @@ from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 JAR = os.path.join(ZBOT, "z-bot-core", "target", "z-bot-core.jar")
 LIMITS_SRC = os.path.join(ZBOT, "z-bot-core", "src", "main", "java", "com", "zifang", "z",
                           "bot", "channel", "InboundLimits.java")

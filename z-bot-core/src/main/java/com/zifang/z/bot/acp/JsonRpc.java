@@ -17,7 +17,7 @@ import java.util.Map;
  * {@code ~/.hermes/hermes-agent/venv/lib/python3.11/site-packages/acp/connection.py:62}
  * {@code """Minimal JSON-RPC 2.0 connection over newline-delimited JSON frames."""}，
  * 读侧 {@code acp/stdio.py:56} 用 {@code sys.stdin.buffer.readline()}。
- * 对拍见 {@code _doc/acceptance/p25/EVIDENCE.md} §0.4。</p>
+ * 对拍见 {@code _doc/005_testing/acceptance/p25/EVIDENCE.md} §0.4。</p>
  *
  * <p>错误码用 JSON-RPC 标准码：{@code -32700} parse、{@code -32600} invalid request、
  * {@code -32601} method not found、{@code -32602} invalid params、{@code -32603} internal。

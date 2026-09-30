@@ -4,7 +4,7 @@
 P18（通道注册表 SPI + 飞书/钉钉真出站）变异检验：把本期每一条守卫逐条改坏，
 看有没有**具名 testcase**（`Class#method`）判红。
 
-纪律（照 _doc/acceptance/p17/p17_mutation.py 的口径，工单 p18b §杠② 的六族要求）：
+纪律（照 _doc/005_testing/acceptance/p17/p17_mutation.py 的口径，工单 p18b §杠② 的六族要求）：
   * **预期红集先写死在本文件里**，跑之前随脚本一起 commit ⇒ 不许事后凑；
   * 注入前逐条校验锚点出现次数（锚点漂了 = 量具坏了，直接 FATAL，不收读数）；
   * 每支变异体只点名它自己的 testcase（`-Dtest=Class#m1+m2`），不跑全量；
@@ -23,7 +23,7 @@ P18（通道注册表 SPI + 飞书/钉钉真出站）变异检验：把本期每
 不动 `HttpChannel.java`/`BotConfig.java`/`agent`/`tool`；出站一律指向进程内假端点
 （`FakeImEndpoint`，`bind(0)`），全程不对真域名发包；本脚本不读 `~/.zbot` 任何凭据。
 
-复算: python3 -u _doc/acceptance/p18/p18_mutation.py [id 子串...]
+复算: python3 -u _doc/005_testing/acceptance/p18/p18_mutation.py [id 子串...]
 锁:   $(git rev-parse --git-common-dir)/zbot-mutlock  —— 只 try-lock，抢不到就退出
 """
 import fcntl
@@ -36,7 +36,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 def measure_suite_total():

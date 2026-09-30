@@ -17,8 +17,8 @@ P14（上下文压缩引擎对齐）变异检验 —— 杠②。
 三个位点各摘一个、防抖计数、失败冷却入库、DB 抢锁换成恒为 true、派号、血统回溯去重。
 
 复算:
-  python3 -u _doc/acceptance/p14/p14_mutation.py            # 全量 9 支
-  python3 -u _doc/acceptance/p14/p14_mutation.py M3 M7      # 按 id 选
+  python3 -u _doc/005_testing/acceptance/p14/p14_mutation.py            # 全量 9 支
+  python3 -u _doc/005_testing/acceptance/p14/p14_mutation.py M3 M7      # 按 id 选
 """
 import fcntl
 import hashlib
@@ -29,10 +29,10 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
-LOGS = os.path.join(HERE, "logs")
+LOGS = os.path.join(ZBOT, ".cache", "p14", "logs")
 LEDGER = os.path.join(HERE, "LEDGER.tsv")
 BASELINE = os.environ.get("P14_MUT_BASE", "HEAD")
 

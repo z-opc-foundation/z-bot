@@ -738,7 +738,7 @@ public final class FeishuChannel implements Channel {
      * （commit {@code 0b9e6e48b74bb4b34462fc67b7e738b27e73e697}，{@code _verify_sign} 那一支：
      * {@code bs = (timestamp + nonce + encrypt_key).encode(UTF_8) + request.body}）与飞书"签名校验"文档。
      * <b>不是 SHA-1</b>：P18 那版写成 SHA-1，而单测用同一个 helper 复算签名 ⇒ 本地全绿、
-     * 真飞书每一条入站都会 401（口径订正见 {@code _doc/hermes-roadmap.md} §8.14）。</p>
+     * 真飞书每一条入站都会 401（口径订正见 {@code _doc/001_arch/hermes-roadmap.md} §8.14）。</p>
      *
      * <p>比对走 {@link MessageDigest#isEqual}（定长时间），摘要与签名都是 hex ⇒ 只归一大小写
      * （文档明说大小写不敏感）。未配 encrypt-key 时返回 {@code true}（= 校验关闭），

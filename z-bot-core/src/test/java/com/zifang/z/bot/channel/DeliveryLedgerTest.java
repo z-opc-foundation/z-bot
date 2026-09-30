@@ -31,7 +31,7 @@ import static org.junit.Assert.assertTrue;
  *
  * <p>「归属进程已死」这件事在单测里造不出来（不能让测试真去杀一个进程），所以
  * {@link DeliveryLedger.ProcessLiveness} 是注入点；真 pid + 真 kill -9 的现场在
- * {@code _doc/acceptance/p16/p16_e2e.py}。</p>
+ * {@code _doc/005_testing/acceptance/p16/p16_e2e.py}。</p>
  */
 public class DeliveryLedgerTest {
 

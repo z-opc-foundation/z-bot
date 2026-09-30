@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <h2>方法集从哪来（不是工单那几个字面量计数）</h2>
  * 权威出处 = hermes 依赖的 SDK 派发表 {@code acp/meta.py:3—17}（13 条 agent 面方法），
- * 复算过程与逐行出处见 {@code _doc/acceptance/p25/EVIDENCE.md} §0.2。本期：
+ * 复算过程与逐行出处见 {@code _doc/005_testing/acceptance/p25/EVIDENCE.md} §0.2。本期：
  * <ul>
  *   <li><b>12 条真实现</b>：{@code initialize}、{@code authenticate}、{@code session/new}、
  *       {@code session/load}、{@code session/resume}、{@code session/list}、

@@ -22,7 +22,7 @@ import static org.junit.Assert.assertTrue;
  * {@code AcpCommand.class} 那一行摘掉，全套 ACP 测试仍然全绿 —— 那叫"测了个不存在的东西"。</p>
  *
  * <p>本类的三条断言都只读<b>生产</b>命令表（反射注解 + 真 {@link CommandLine} 规格），
- * 摘掉注册那一行必红（实测过程与读数见 {@code _doc/acceptance/p25/EVIDENCE.md} 杠② M1）。</p>
+ * 摘掉注册那一行必红（实测过程与读数见 {@code _doc/005_testing/acceptance/p25/EVIDENCE.md} 杠② M1）。</p>
  */
 public class AcpProductionRegistrationTest {
 

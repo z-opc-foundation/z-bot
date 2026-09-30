@@ -9,7 +9,7 @@ P15b 变异检验（杠②）—— 把"逐列理由表 ⟷ 我们 schema"的守
   (b) 新守卫单测 `SessionsColumnAlignmentTest`（把表钉在 head 声明上）。
 所以注入面是**被守卫的那两样东西**：理由表的 markdown，和 `SchemaMigrations` 的列声明。
 
-纪律沿用 `_doc/acceptance/p11c/p11c_mutation.py`（不 import 它，免得两批结论互相拖累）：
+纪律沿用 `_doc/005_testing/acceptance/p11c/p11c_mutation.py`（不 import 它，免得两批结论互相拖累）：
   * 注入前预检锚点出现次数（锚点漂了是量具坏了，不是代码坏了）；
   * 每个变异体跑完按内存里的原文**逐字节**还原，收尾核对 md5；
   * 判定只认 surefire XML 里的 testcase 名：点名那条红了才算 RED-OK，
@@ -23,7 +23,7 @@ P15b 变异检验（杠②）—— 把"逐列理由表 ⟷ 我们 schema"的守
   ACQUIRED ⇒ 空跑。拿不到锁时每 60s 重试，累计 30 分钟仍拿不到 ⇒ 打
   "杠②未跑完：锁被占"并以 rc=3 退出，**绝不伪造读数**。
 
-复算: python3 _doc/acceptance/p15b/p15b_mutation.py [id 子串...]
+复算: python3 _doc/005_testing/acceptance/p15b/p15b_mutation.py [id 子串...]
 """
 import errno
 import fcntl
@@ -35,7 +35,7 @@ import time
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+ZBOT = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir, os.pardir))
 CORE = os.path.join(ZBOT, "z-bot-core")
 REPORTS = os.path.join(CORE, "target", "surefire-reports")
 TESTS = "SessionsColumnAlignmentTest"
@@ -44,7 +44,7 @@ LOCK_NAME = "zbot-mutlock"
 LOCK_RETRY_SECONDS = 60
 LOCK_GIVEUP_SECONDS = 30 * 60
 
-DOC_REL = "_doc/acceptance/p15b/sessions_column_alignment.md"
+DOC_REL = "_doc/005_testing/acceptance/p15b/sessions_column_alignment.md"
 SM_REL = "z-bot-core/src/main/java/com/zifang/z/bot/store/SchemaMigrations.java"
 SRC = {"doc": DOC_REL, "sm": SM_REL}
 
