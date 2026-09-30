@@ -1,0 +1,13 @@
+# 旧路径的运行捕获：整只 `p*/` 不入版本库。
+#
+# 为什么这里还有东西：`367dc70` 把验收**文档**收进 `_doc/005_testing/acceptance/`（那才是被跟踪的口径，
+# 每期四件套 + 每期自带的 `.gitignore`），但**产物**留在原地没搬 —— `p12/p16/p17/p20b` 四坨，
+# 实测 496 个文件（410 `.json`、11 `.db` + 7 `.db-shm` + 7 `.db-wal` + 8 `.lock`、40 `.log` 已被根
+# `.gitignore` 的 `*.log` 挡住），另有两只 checkpoint 自带的 `.git`（`p12/out/profile-{repl,main}/
+# checkpoints/store/.git`）—— 那些一旦 add 就变成 gitlink，正是 z-env 刚拆掉的那种嵌套仓。
+#
+# 口径与 `_doc/005_testing/acceptance/p16/.gitignore` 一致：结论依赖的读数全部粘进各期 `EVIDENCE.md`
+# 原文，所以这些丢了也能照 EVIDENCE 里的命令复算；留盘只为下一棒直接对拍方便。
+#
+# 故意只写 `/p*/` 而不是 `*`：真往这只目录里放了**人写的文档**，`git status` 必须还能看见它。
+/p*/
