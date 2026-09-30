@@ -123,8 +123,25 @@ public class MemoryWriteGateTest {
                 entries(e1("第一条"), e1("第二条")), 0));
     }
 
-    // ===== 预算 =====
+    /** 报错文案承诺的是"正文里的一段唯一子串"，匹配的就必须是正文，不是整行。 */
+    @Test
+    public void oldTextMatchesBodyNotTimestamp() throws Exception {
+        List<String> page = entries(MemoryDriftGuard.entryLine("2026-09-26T10:00:00Z", "偏好 A"));
+        try {
+            MemoryWriteGate.locate(MemoryOp.Kind.REMOVE, "2026-09-26T10:00:00Z", page, 0);
+            fail("old_text 只在时间戳里 ⇒ 正文压根没这段，整行匹配会把这条静默端走");
+        } catch (MemoryWriteRejectedException e) {
+            assertEquals(MemoryWriteRejectedException.NO_MATCH, e.code());
+        }
+        assertEquals("阳性对照：正文子串照样定位得到", 0,
+                MemoryWriteGate.locate(MemoryOp.Kind.REMOVE, "偏好 A", page, 0));
+        assertEquals("同正文、不同时间戳 = 同一件事 ⇒ 取第一条，不许报歧义", 0,
+                MemoryWriteGate.locate(MemoryOp.Kind.REMOVE, "同一件事", entries(
+                        MemoryDriftGuard.entryLine("2026-09-26T10:00:00Z", "同一件事"),
+                        MemoryDriftGuard.entryLine("2026-09-27T08:00:00Z", "同一件事")), 0));
+    }
 
+    // ===== 预算 =====
     @Test
     public void budgetJudgedOnFinalRenderedPageAgainstCallersLimit() {
         List<String> page = entries(e1(repeat('x', 40)));

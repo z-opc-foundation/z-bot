@@ -122,8 +122,8 @@ z-bot/
 └── _doc/                          # 见文末「文档目录」
 ```
 
-实测体量（今日工作树）：主源码 `z-bot-core/src/main/java` **144 个 `.java` / 42,309 行**；
-测试 `src/test` **129 个 `.java` / 38,016 行**（其中 `*Test.java` 116 支，其余 13 支是驱动/探针）。
+实测体量（今日工作树）：主源码 `z-bot-core/src/main/java` **144 个 `.java` / 42,341 行**；
+测试 `src/test` **129 个 `.java` / 38,036 行**（其中 `*Test.java` 116 支，其余 13 支是驱动/探针）。
 复算：`find z-bot-core/src/main/java -name '*.java' | wc -l`。
 
 仓里**没有** `Dockerfile`、`docker-compose*.yml`、`deploy/`、`k8s/`、`Makefile`（`find . -maxdepth 2` 实测无命中），
@@ -299,32 +299,32 @@ mvn -o test          # 全 reactor（packager 无测试），不要加 -pl
 3. **杠③** 真进程 E2E ≥3 整跑（起真 serve / 真 tty / 真 sqlite，读代码不算证据），量具如 `p28_e2e.py`；
 4. **杠④** 测试与 E2E 一个字都不许动 `~/.zbot/`（一律 `--config-dir` 指临时根）。
 
-**当前树 `f687f20` 的杠① 已经真跑过，读数是红的** —— 逐跑读数、红集 sha 与根因取证见
-`_doc/005_testing/acceptance/recheck-0930/EVIDENCE.md` §1（同机串行，跨批复跑读数同值）。
-每跑 `Tests run: 1236`，红集恒为 `Failures=4, Errors=0, Skipped: 0`（§1 的第 2 跑多一支间歇红 = 5），`socket_hits=0`。
-三把尺对着读 —— surefire 聚合 **1236** == 跑后 **116** 份 `*/target/surefire-reports/*.xml` 的 `tests` 求和 **1236**
-== 文本 `@Test` **1239** − 注释里的 **3** 处字样（逐条点名：`ui/RawTerminalVerdictProbe.java:7`、
-`llm/P26RetryPolicyTest.java:37`、`memory/MemoryE2eDriver.java:16`）。分母从上一版的 1223 涨到 1236
-**全部来自一支新文件** `ui/PasteFolderTest.java`（13 处 `@Test`，`3d57571` 那版根本还没有它），
-其余 117 份测试文件在 `3d57571..HEAD` 区间计数一字未变（复算：两版各跑
-`git grep -c '@Test' <rev> -- z-bot-core/src/test` 排序后 diff，只有那一行）。
+**当前树的杠① 是全绿的** —— 逐跑读数、三把尺与环境身份见
+`_doc/005_testing/acceptance/recheck-0930/EVIDENCE.md` §8.3（同机串行，跑在哪一棵树由同页 `identity.txt` 现读；
+§1–§7 记的是这批修复之前、红着的时候）。每跑 `Tests run: 1237, Failures: 0, Errors: 0, Skipped: 0`、
+`socket_hits=0`、`fail_or_err_lines=0`。三把尺对着读 —— surefire 聚合 **1237** == 跑后 **116** 份
+`*/target/surefire-reports/*.xml` 的 `tests` 求和 **1237** == 文本 `@Test` **1240** − 注释里的 **3** 处字样
+（逐条点名：`ui/RawTerminalVerdictProbe.java:7`、`llm/P26RetryPolicyTest.java:37`、`memory/MemoryE2eDriver.java:16`）。
+分母从上一版的 1236 涨到 1237 **只来自一支新测试**
+`memory/MemoryWriteGateTest.oldTextMatchesBodyNotTimestamp` —— 它长在已有文件里，所以 `test_files` 仍 129、`xml_files` 仍 116。
 
-红集是**四支常红 + 一支间歇红**，其中三处属**产品面**、改动等点头：`ProcessTree.pidOf()` 在 JDK 9+ 上恒返 0 ⇒
-超时/中断收尾每次退化成"只端根"，一轮跑泄漏一个约 27 年才自杀的孤儿进程（`5985a10` 的 JDK 8 回移把活路换成死路）；
-`PasteFolder` 少了 hermes 在数行之前那一步剥尾换行 ⇒ 行数与折叠阈值一起偏；`MemoryWriteGate.locate()` 在含时间戳的
-整行上匹配子串 ⇒ 删条目会静默删错。`PasteFolderTest` 那两支里有一支是**测试期望写错**（预览头 hermes 定 16 字，测试写 14）。
-间歇那支是 `MemoryStoreContractTest.replaceAndRemoveHitExactlyOneEntry` —— 它在整页文本上找子串，而每行都带墙钟时间戳，
-独立量具单跑率量到 0.5%，reactor 逐跑里只出现过一次（机制、复现命令与逐跑分布见同一份 EVIDENCE §4/§1.4）。
+这一版绿是**修出来的**：§1 那批的 `Failures=4` 是四支常红，根因三处在产品面、一处在测试面，本期按
+hermes（`~/.hermes/hermes-agent` @ `cbc1054e2`）口径改掉，且每处都有**具名变异**兜住（摘掉哪处就红哪一支，
+名单与那支作废重做的假变异见 §8.2）：`ProcessTree.pidOf()` 的反射句柄由 `p.getClass()` 换成 `Process.class`
+—— 实际对象是未导出模块里的 final `ProcessImpl`，旧写法在 JDK 9+ 上恒返 0，超时/中断收尾每轮静默退化成"只端根"，
+一轮泄漏一个约 27 年才自杀的孤儿进程（`5985a10` 的 JDK 8 回移把活路换成死路）；`PasteFolder` 补上 hermes 在数行
+之前那一步剥尾换行（`lib/text.ts:189`）⇒ 折叠阈值与标记里的行数一起回到 hermes 口径；`MemoryWriteGate.locate()`
+改为在**正文**上匹配 `old_text`，不再拿含 `[时间戳]` 的整行比 —— 旧写法要么永远命中不到，要么把不该删的条目静默端走。
+`PasteFolderTest` 预览头那支是**测试期望写错**（hermes `lib/text.ts:85` 定 head=16，测试写了 14），改的是测试。
+至于 §1.4 那支间歇红 `MemoryStoreContractTest.replaceAndRemoveHitExactlyOneEntry`：它在整页文本上找子串，而每行都带
+墙钟时间戳，独立量具单跑率量到 0.5%；这批绿系列里它一次没出现，**这只算观察不算判愈**（样本量撑不起"消失了"，
+机制与复现命令见 §4/§1.4）。
 
-**"最近一次记录在案的全绿杠①"仍然不是当前树的**：`p27c/EVIDENCE.md` §1 记 `3d57571` 上 `Tests run: 1223 ×3` 全绿，
-更早的 `p30c/EVIDENCE.md` §1 记 `6f26621` 上 `1195 ×3`；两个 SHA 都是 HEAD 的祖先
-（`git merge-base --is-ancestor` rc=0），`3d57571` 之后 `z-bot-core/src` 又动了 **3** 笔
-（`dc1d31a` 工作树收口、`5985a10` JDK 8 回移、`f687f20` fixture 改道）。⇒ 引"全绿"必须连树身份一起引；
-当前树上"绿"这个字**不成立**。
-
-**杠②③ 的最近记录同样不在当前树上，且本期没补**：`p30c/EVIDENCE.md` 的杠②（5 支具名变异，`RED-OK=5`）与
-杠③（真进程 3 轮，`PASS=30 FAIL=0`）跑在 `6f26621`；`recheck-0930` 只补了杠① 与根因取证，
-所以当前树**没有一根杠是四杠齐全的**，别把本页读成"已收口"。
+**但四杠仍不齐全，别把本页读成"已收口"**：`p30c/EVIDENCE.md` 的杠②（5 支具名变异，`RED-OK=5`）与
+杠③（真进程 3 轮，`PASS=30 FAIL=0`）跑在 `6f26621`，本期 §8.2 只补了上面那四处修复自己的变异牙口，
+杠③ 在改完之后一个字节都没重跑 ⇒ 当前树**没有一根杠是四杠齐全的**。历史"全绿"读数一律要连树身份一起引
+（`p27c/EVIDENCE.md` §1 记 `3d57571` 上 `1223 ×3`、`p30c/EVIDENCE.md` §1 记 `6f26621` 上 `1195 ×3`，
+两者都是 HEAD 的祖先，`git merge-base --is-ancestor` rc=0）。
 
 还有一支专门量 README 自己的守卫：`z-bot-core/src/test/java/com/zifang/z/bot/ReadmeClaimsTest.java`
 把本文的定量主张（版本、内核 pin、路由行数/路径数、`/api/commands` 行数、子命令支数与名单、

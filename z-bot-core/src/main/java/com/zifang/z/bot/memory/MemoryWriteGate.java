@@ -68,7 +68,9 @@ public final class MemoryWriteGate {
         }
         List<Integer> hits = new ArrayList<Integer>();
         for (int i = 0; i < entries.size(); i++) {
-            if (entries.get(i).contains(oldText)) {
+            // 匹配的必须是"正文"：整行里有 [时间戳]，old_text 一旦沾到时间就永远命中不到，
+            // 反过来 —— 正文里没有那段时，命中别条的时间戳也会把不该删的条目端走。
+            if (MemoryDriftGuard.entryBody(entries.get(i)).contains(oldText)) {
                 hits.add(i);
             }
         }
@@ -78,7 +80,7 @@ public final class MemoryWriteGate {
         }
         Set<String> distinct = new LinkedHashSet<String>();
         for (Integer i : hits) {
-            distinct.add(entries.get(i));
+            distinct.add(MemoryDriftGuard.entryBody(entries.get(i)));
         }
         if (distinct.size() > 1) {
             StringBuilder sb = new StringBuilder();

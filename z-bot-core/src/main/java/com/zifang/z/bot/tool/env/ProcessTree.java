@@ -177,9 +177,10 @@ public final class ProcessTree {
         if (p == null) {
             return 0L;
         }
-        // 9+ 的 JVM：走公开的 Process#pid()
+        // 9+ 的 JVM：走公开的 Process#pid()。反射句柄必须取 Process.class 而不是 p.getClass() ——
+        // 实际对象是 java.lang.ProcessImpl（final、模块未导出），从它拿 "public" pid() 照样抛 IllegalAccessException。
         try {
-            Long viaMethod = (Long) p.getClass().getMethod("pid").invoke(p);
+            Long viaMethod = (Long) Process.class.getMethod("pid").invoke(p);
             if (viaMethod != null) {
                 return viaMethod.longValue();
             }

@@ -16,7 +16,10 @@ public class PasteFolderTest {
     public void foldsAtFiveLines() {
         assertTrue(PasteFolder.shouldFold(SIX_LINES));
         assertFalse(PasteFolder.shouldFold("a\nb\nc\nd"));
-        assertTrue("结尾换行也算一行空尾（JS split 同形）", PasteFolder.shouldFold("a\nb\nc\nd\n"));
+        // hermes 在粘贴入口先剥结尾换行（useComposerState.ts:144 + :191），所以这份只有 4 行、不折
+        assertFalse("结尾换行不额外撑出一行去够阈值（剥尾换行后才数行数）", PasteFolder.shouldFold("a\nb\nc\nd\n"));
+        assertTrue("满 5 行才折", PasteFolder.shouldFold("a\nb\nc\nd\ne\n"));
+        assertFalse("纯换行的粘贴整体不当作正文", PasteFolder.shouldFold("\n\n\n\n\n"));
     }
 
     @Test
@@ -65,7 +68,7 @@ public class PasteFolderTest {
         }
         sb.append("TAILTAILTAILTAIL");
         String preview = PasteFolder.edgePreview(sb.toString());
-        assertTrue(preview, preview.startsWith("0123456789abcd.. "));
+        assertTrue(preview, preview.startsWith("0123456789abcdef.. "));
         assertTrue(preview, preview.endsWith("TAILTAILTAILTAIL"));
     }
 

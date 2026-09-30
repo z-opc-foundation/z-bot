@@ -37,7 +37,35 @@ public final class PasteFolder {
         if (text == null || text.isEmpty()) {
             return false;
         }
-        return lineCount(text) >= COLLAPSE_LINES || text.length() >= COLLAPSE_CHARS;
+        String cleaned = stripTrailingNewlines(text);
+        if (cleaned.isEmpty() || !hasNonNewline(cleaned)) {
+            return false;
+        }
+        return lineCount(cleaned) >= COLLAPSE_LINES || cleaned.length() >= COLLAPSE_CHARS;
+    }
+
+    /**
+     * 剥掉结尾的连续换行 —— hermes 在粘贴入口做的第一步（{@code lib/text.ts:189}
+     * {@code stripTrailingPasteNewlines}），纯换行的粘贴原样留着。阈值和标记里的行数都数这份。
+     */
+    static String stripTrailingNewlines(String text) {
+        if (text == null || text.isEmpty() || !hasNonNewline(text)) {
+            return text;
+        }
+        int end = text.length();
+        while (end > 0 && text.charAt(end - 1) == '\n') {
+            end--;
+        }
+        return text.substring(0, end);
+    }
+
+    private static boolean hasNonNewline(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) != '\n') {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 与 JS {@code split('\n').length} 同形：结尾换行也算出一行空尾。 */
@@ -52,7 +80,8 @@ public final class PasteFolder {
     }
 
     public static String token(String text) {
-        return token(text, lineCount(text));
+        String cleaned = stripTrailingNewlines(text);
+        return token(cleaned, lineCount(cleaned));
     }
 
     static String token(String text, int lines) {

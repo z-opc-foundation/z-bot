@@ -478,9 +478,11 @@ FlakeMechanism.java:15/30/40/54:  Files.createTempDirectory("zbot-mem-probe{,2,3
 ## §7 本期仍然欠的（别读成"已收口"）
 
 1. **杠②③ 一期没跑**。本期只补了杠① + 根因取证 ⇒ 这不构成四杠收口；`p30`/`p30b`/`p30c` 那几族的杠② 台账量的也不是 `f687f20`。
+   → §8.2 只补了**那四处修复自己**的变异牙口（四支具名红、一支作废重做），不是全量杠② 台账；杠③ 在 §8 之后仍 0 跑。
 2. **四支常红 + 一支间歇红没修**，因为三处是**产品面**（`ProcessTree.pidOf`、`stripTrailingPasteNewlines`、
    `MemoryWriteGate.locate` 在整行上匹配），一处是**测试面**（`PasteFolderTest:68` 的 14 字前缀）。
    改产品代码等点头；改测试期望也要点头 —— 因为它是"哪一侧才是契约"的裁定，不是笔误。
+   → §8.1：22:43 后按用户口径放行，四处已改、三把尺同值全绿；**间歇那支仍只是"四跑没出现"，不是判了消失**。
 3. **`bar1.sh` 的判据本身不含"红集必须为 0"**：它只打印 rc/socket_hits/合计行，红集清点靠 `census.py`。
    下期要么把两者并成一个尺，要么把"红集非空即 FATAL"写进脚本 —— 现在这十二跑 `rc=1` 是**脚本没退化、树确实坏**。
    本期已修的是那条"**尺瞎**"（v1 只认 `[INFO]` 前缀 ⇒ §1 那批四跑全打 `reactor=None`，看着像没跑到），v2 现读 `reactor=1236`；
@@ -520,3 +522,157 @@ FlakeMechanism.java:15/30/40/54:  Files.createTempDirectory("zbot-mem-probe{,2,3
    `settings-offline.xml` 全文 43 行只有 `<id>/<url>/<profile>`，无 `<server>`、无口令。
    **这条负向读数的阳性对照**是同三条正则打在 `~/.m2/settings.xml` = 1 行命中（`<password>` 那行）、
    打在 `z-bot-core/src/test/…/skill/SkillGuardTest.java` = 1 行命中（`:74` 的示例串）⇒ 尺看得见这两类形状。
+
+---
+
+## §8 补写：§7.2 那四处改掉，杠① 第一次在当前树上全绿（22:43–22:5x）
+
+§1–§7 记的是"红着的时候"，原文一字不改；§7.2 写的"改动等点头"在 22:43 之后按用户口径放行（"push 啊，你怎么老是问我，
+你觉得正确就改一下啊"），本节把**改动形状、变异牙口、四跑读数**接在同一份页里。跑前跑后的树身份由 `identity.txt` 现读，
+不靠本节标题。
+
+### §8.1 动了五个文件，逐处点名
+
+`git diff --numstat`（`+`/`-` 逐文件，合计 61 加 / 9 删）：
+
+```
+4  2  z-bot-core/src/main/java/com/zifang/z/bot/memory/MemoryWriteGate.java
+3  2  z-bot-core/src/main/java/com/zifang/z/bot/tool/env/ProcessTree.java
+31 2  z-bot-core/src/main/java/com/zifang/z/bot/ui/PasteFolder.java
+18 1  z-bot-core/src/test/java/com/zifang/z/bot/memory/MemoryWriteGateTest.java
+5  2  z-bot-core/src/test/java/com/zifang/z/bot/ui/PasteFolderTest.java
+```
+
+三处产品面，全部按 §3 认定的**契约来源**（hermes `~/.hermes/hermes-agent` @ `cbc1054e2`）改：
+
+1. `ProcessTree.pidOf()`：反射句柄从 `p.getClass().getMethod("pid")` 换成 `Process.class.getMethod("pid")`。
+   理由是实际对象是 `java.lang.ProcessImpl`（final、模块未导出），从它的类上取"public" `pid()` 照样抛
+   `IllegalAccessException` ⇒ 旧写法在 JDK 9+ 上**恒返 0**，超时/中断收尾每轮静默退化成"只端根"。
+   JDK 8 没有 `Process#pid()`，那条路径落 `NoSuchMethodException` 后仍走向下兼容的字段路径，两支都留着。
+2. `PasteFolder`：补 hermes 在数行之前那一步 —— `lib/text.ts:189 stripTrailingPasteNewlines`。
+   新增包内 `stripTrailingNewlines(String)` + `hasNonNewline(String)`，`shouldFold()` 与 `token(String)`
+   都改在这份**清洗后**的文本上算 ⇒ 折叠阈值与标记里的行数一起回到 hermes 口径；纯换行的粘贴原样留着不折。
+   生产调用面只有两处（`ZBotLineReader.java:87 shouldFold` / `:90 token`，现读命令
+   `grep -rn "PasteFolder\.\(shouldFold\|token\)" --include='*.java' z-bot-core/src/main`），
+   与 hermes 的 `handleResolvedPaste` 同一个边界 —— 阳性对照：同语法下 `grep -c "PasteFolder\."` 在 `src/main` = 4 处。
+3. `MemoryWriteGate.locate()`：匹配对象由整行换成 `MemoryDriftGuard.entryBody(...)`（`:120`），
+   `distinct` 集合同样换成正文。旧写法在两件事上都违返自己报错文案的承诺：`old_text` 一旦沾到时间就永远命中不到，
+   而正文里没有那段时**命中别条的时间戳会把不该删的条目静默端走**。
+
+一处测试面（§7.2 说的那处 `PasteFolderTest:68`）：预览头期望由 14 字改回 **16 字**（hermes `lib/text.ts:85
+edgePreview(s, head = 16, tail = 28)`）—— 这是"测试写错、代码没错"，红的是那一侧。
+`foldsAtFiveLines` 里原先钉着"结尾换行也算一行空尾（JS split 同形）"的那条断言随之翻向（剥尾换行后才数行数），
+并补了两条边界：满 5 行才折、纯换行不折。测试面还**新增一支** `MemoryWriteGateTest.oldTextMatchesBodyNotTimestamp`
+（3 条判定：时间戳子串必须 `NO_MATCH`；正文子串必须定位到 0 —— 这条是同测试内的阳性对照；
+同正文不同时间戳的两条取第一条、不许报歧义）。
+
+### §8.2 变异腿：五支，四支具名红、一支作废重做
+
+恢复一律从 `~/.cache/zbot-fix-0930/fixed/` 的 `cp` 副本回灌，回灌后与盘上字节逐文件同 md5
+（`RESTORE_OK ProcessTree f22d71024a910cc25b4bdafeeca5a6e2`、`RESTORE_OK PasteFolder 13606f3f98dffeefcd3c5b1e44a5afac`、
+`RESTORE_OK MemoryWriteGate 49fc5e68ddb8a59f352143f60f24fc50`）：
+
+```
+mut-A.log  ProcessTree 换回 p.getClass()             → 2 支具名红：
+           ToolSideInterruptTest.execAbortsInFlightAndTakesTheWholeProcessTreeDown
+           ExecEnvironmentSpiTest.localExec_timeoutTakesTheWholeProcessTreeDown
+mut-B.log  PREVIEW_HEAD 16→14                        → 1 支：previewKeepsHeadAndTailAcrossLongText
+mut-C.log  （作废，见下）                             → COMPILATION ERROR，无测试合计行
+mut-C2.log locate() 换回整行匹配                     → 1 支：oldTextMatchesBodyNotTimestamp
+mut-D.log  摘掉 stripTrailingNewlines 那一步         → 2 支：tokenCarriesLineCountAndMatchesItsOwnPattern
+                                                       foldsAtFiveLines
+```
+
+**C 这支是我造的假变异，不是红**：`perl` 把匹配换成一个不存在的 `MemoryWriteGate.probeWholeLine(String)`，
+`mut-C.log:33` 是 `COMPILATION ERROR`、`:36` `cannot find symbol`（`MemoryWriteGate.java:[73,32]`），
+整份日志里**没有** `Tests run` 合计行 —— 编译都没过，谈不上"守卫变红"。按"变异必须先能编译"重做成 C2
+（把匹配整段换回改动前的真字节 `entries.get(i).contains(oldText)`），C2 才给出那 1 支具名红。
+这条记进页里是因为**它是我这一期自己踩的**：`rc=1` 有两种成因（尺没退化 vs 变异不合法），只看退出码会把它当牙。
+
+改完之后、正式四跑之前有一刀定向复核（`targeted.log`，`-Dtest=PasteFolderTest,MemoryWriteGateTest,
+ToolSideInterruptTest,ExecEnvironmentSpiTest`，surefire 2.22.2 用逗号分隔）：
+`Tests run: 50, Failures: 0, Errors: 0, Skipped: 0`（13+12+7+18），`BUILD SUCCESS`，22:45:04。
+
+### §8.3 杠①：串行四跑全绿，三把尺同值
+
+量具 = 本期同一条 `bar1.sh`（v2，字节未动，副本 `~/.cache/zbot-fix-0930/bar1.sh`），
+`OUT` 换到 `~/.cache/zbot-fix-0930` 以便与 §1/§1.4 那两批的红读数分开存。
+环境是本期现读的（不靠回忆）：`Apache Maven 3.9.14`、`openjdk 25.0.2`、
+`-s ~/.cache/zbot-fix-0930/settings-offline.xml`（md5 `682dc214ac03258d2c0bb28f765a86eb`）、
+`P21_PYTHON=/usr/local/bin/python3.14`。
+
+**为什么不动共享的 `~/.m2/settings.xml`**：`~/.m2/repository/io/github/yuku123/z-boot-parent/1.0.21/_remote.repositories`
+记的来源 id 是 `maven-central`，而共享 settings.xml 只定义了 `central` ⇒ 离线报
+`Non-resolvable parent POM … (present, but unavailable)`；走在线又被 MITM 掐死（`PKIX path building failed`）。
+共享那份里有一个 `<server id="central">` 明文口令，为跑一次测试去改别人也在用的文件不是成本对价的做法 ——
+沿用本期 §0 已记录的仓内旁路 `recheck-0930/settings-offline.xml`（两个 id 都登记）。
+
+逐跑（`driver.log` 原样，一次 clean 预跑 + 三次正式，同机串行）：
+
+```
+tag=0 head=bb94d114b30ea92565426fef960bde623f0a2968  22:46:46→22:47:55  rc=0  Tests run: 1237, Failures: 0, Errors: 0, Skipped: 0  BUILD SUCCESS  01:08
+tag=1 同上 head                                       22:47:55→22:49:02  rc=0  1237 / 0 / 0 / 0  BUILD SUCCESS  01:06
+tag=2 同上 head                                       22:49:02→22:50:12  rc=0  1237 / 0 / 0 / 0  BUILD SUCCESS  01:09
+tag=3 同上 head                                       22:50:12→22:51:19  rc=0  1237 / 0 / 0 / 0  BUILD SUCCESS  01:05
+ALL_DONE|2026-09-30 22:51:19+0800
+```
+
+三把尺四跑同值（每跑各自现读，非抄第一次）：
+
+```
+RULER|tag=N reactor=1237 test_files=129 xml_files=116 xml_sum=1237 xml_skipped=0
+RULER|text_at_test=1240 comment_lines=3 minus=1237 main_src_hits=0
+RULER|comment_hits=ui/RawTerminalVerdictProbe.java:7, llm/P26RetryPolicyTest.java:37, memory/MemoryE2eDriver.java:16
+```
+
+`socket_hits=0`、`fail_or_err_lines=0` 四跑同值。与 §1 那批红读数的差**只有两处**，都能被 §8.1 解释：
+合计 1236→1237 来自新增的 `oldTextMatchesBodyNotTimestamp`（`text_at_test` 1239→1240、注释字样仍是 3、
+`xml_files` 仍是 116 —— 新测试长在已有的 `MemoryWriteGateTest` 里，没多出文件），红集 4→0。
+
+§1.4 那支间歇红（`MemoryStoreContractTest.replaceAndRemoveHitExactlyOneEntry`）在这四跑里 **0 次出现**。
+**这不构成"它好了"**：4 个样本、单跑率量到 0.5% 的东西，要判消失得按 §4 的独立量具重测，本节只记观察。
+
+### §8.4 杠④ 复采（写本节之前现采，不是抄 §6）
+
+```
+BAR4|2026-09-30 22:56:50+0800|entries=8|cfg=2dadaed05e0cefe7a53f48baba3c403a|state=690ddbc0e0e35f3a9dc183302f1d5182
+```
+
+与 §6 三条 RESAMPLE 及 `p30c/EVIDENCE.md` §4 基线逐字同。§6 末段那条口径限制（基线是从仓内文档读来的、
+不是跑前采的）本节不重复声称已解 —— 本期跑前那一刀仍然漏了。
+
+### §8.5 把本页与 README 一起算进去的字节，另有一跑同值读数
+
+§8.3 那四跑测的是"五份代码已改、两份文档未改"的字节。README 是**测试会打开的文件**
+（`grep -rn "README.md" z-bot-core/src/test --include='*.java'` 只点到 `ReadmeClaimsTest.java:211/223/262`），
+所以按 §7.4 那条纪律不能靠"再补一跑"往 README 里预填任何东西 —— 做法是先改完 README，再拿同一把尺重跑一遍。
+
+改完之后的七文件（`README.md`、本页、三份 main、两份 test —— `IDENTITY|status_lines=7`）字节，
+23:00:42→23:05:10 同机串行四跑，`OUT` 换到 `~/.cache/zbot-fix-0930-confirm`（脚本与 §8.3 那份逐字节同，
+只差 `OUT` 一行；`diff` 后回灌比对 = `SCRIPT_IDENTICAL_APART_FROM_OUT`）：
+
+```
+tag=0 23:00:42→23:01:51 rc=0  Tests run: 1237, Failures: 0, Errors: 0, Skipped: 0  socket_hits=0 fail_or_err_lines=0
+tag=1 23:01:51→23:02:57 rc=0  同上
+tag=2 23:02:57→23:04:04 rc=0  同上
+tag=3 23:04:04→23:05:10 rc=0  同上
+RULER|tag=N reactor=1237 test_files=129 xml_files=116 xml_sum=1237 xml_skipped=0        （四跑同值）
+RULER|text_at_test=1240 comment_lines=3 minus=1237 main_src_hits=0                       （四跑同值）
+环境同 §8.3：head=bb94d11…、Maven 3.9.14、openjdk 25.0.2、settings-offline md5 682dc214ac03258d2c0bb28f765a86eb
+```
+
+⇒ 与 §8.3 **同值**，README 那九条被 `ReadmeClaimsTest` 钉住的定量主张在新文字下仍然逐条成立
+（这四点跑的就是含新 README 的字节，不是"我以为它成立"）。杠④ 在这批之后再采一次，仍与基线逐字同：
+
+```
+BAR4|2026-09-30 23:05:29+0800|entries=8|cfg=2dadaed05e0cefe7a53f48baba3c403a|state=690ddbc0e0e35f3a9dc183302f1d5182
+```
+
+**本节自己也在被测量的字节之外**：§8.5 这段文字是在四跑跑完之后才写进本页的，所以它描述的那次运行不含它本人。
+这在本期是可接受的，因为**没有任何测试打开本页**（同语法下 `grep -rn "recheck-0930" z-bot-core/src/test --include='*.java'` = 0 命中，
+阳性对照 `p28` 同命令 56 处命中）⇒ 改本页改不动任何读数。README 不适用这条豁免，所以它先改后跑。
+
+推前扫过凭证形状（窄集 `ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|<password>[^<]{3,}</password>|apiKey`
+打在 `README.md` 与本页）：命中 2 处，都在本页 `:509`/`:521` 抄回的 AWS 文档示例串 `AKIAIOSFODNN7EXAMPLE`
+（§7.6 已裁定它是 `SkillGuardTest.java:74` 守卫用例自己的猎物，不是泄漏）；README 唯一像样的"secret"字样是
+`:229` 的**配置键名** `app-secret`，不带值。阳性对照：同窄集打 `~/.m2/settings.xml` = 1 行、打 `SkillGuardTest.java` = 1 行。
