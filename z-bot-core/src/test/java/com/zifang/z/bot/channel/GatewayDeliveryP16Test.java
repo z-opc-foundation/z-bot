@@ -507,6 +507,10 @@ public class GatewayDeliveryP16Test {
     public void statusExposesTheSelfHealingReadings() throws Exception {
         gw.bus().deliver(new ChannelMessage("chanA", "c-1", "alice", "hello"));
         waitFor(() -> chan.sent.size() >= 1, 5000);
+        // 上一行等的是 send 内部翻的计数，而 DELIVERED 由 ChannelBus 在 send 返回之后才落账，
+        // 中间还夹着 dead.clear() 的一次 SQLite 写 —— 等 A 断言 B 在慢盘上稳定读成 attempting
+        // （250 实测 8/8 红）。先按本文件 waitForState 的写法等台账收敛，再看 status 有没有如实报。
+        waitForState(DeliveryLedger.DELIVERED, 1);
         Map<String, Object> st = gw.status();
         assertNotNull("status 必须报台账各态计数", st.get("deliveryObligations"));
         assertNotNull(st.get("deliveryRows"));
