@@ -1,6 +1,7 @@
 package com.zifang.z.bot.cli;
 
 import com.zifang.z.agent.kernel.message.Msg;
+import com.zifang.z.bot.BuildInfo;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.mcp.ZBotMcpServe;
 import com.zifang.z.bot.store.StateStore;
@@ -94,8 +95,7 @@ public class McpCommand {
 
         /** 版本号只有一个来源：jar manifest；跑在 target/classes 下时才是 dev 串。 */
         private static String implementedVersion() {
-            String v = McpCommand.class.getPackage().getImplementationVersion();
-            return v == null || v.isEmpty() ? "0.2.0-dev" : v;
+            return BuildInfo.fromManifestOrDev(McpCommand.class);
         }
     }
 

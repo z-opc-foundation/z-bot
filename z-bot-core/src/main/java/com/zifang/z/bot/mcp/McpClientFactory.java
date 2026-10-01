@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zifang.z.agent.kernel.mcp.McpClient;
 import com.zifang.z.agent.kernel.mcp.McpTransport;
 import com.zifang.z.agent.kernel.mcp.StdioMcpTransport;
+import com.zifang.z.bot.BuildInfo;
 import com.zifang.z.bot.config.BotConfig;
 
 import java.util.ArrayList;
@@ -92,10 +93,9 @@ public final class McpClientFactory {
                 + "' 的 transport 不认识: " + t + "（可用值: stdio / http）");
     }
 
-    /** 自报版本：跟 jar 走，不再像内核那样把 "0.2.0" 焊死在源码里。 */
+    /** 自报版本：跟 jar manifest 走；跑在 target/classes 下才落 {@link BuildInfo#DEV}。 */
     static String clientVersion() {
-        String v = McpClientFactory.class.getPackage().getImplementationVersion();
-        return v == null || v.isEmpty() ? "0.2.0-dev" : v;
+        return BuildInfo.fromManifestOrDev(McpClientFactory.class);
     }
 
     /**

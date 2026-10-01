@@ -2,6 +2,7 @@ package com.zifang.z.bot.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.zifang.z.agent.kernel.mcp.McpTransport;
+import com.zifang.z.bot.BuildInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,8 +42,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li><b>30s deadline 不成立</b>：{@code while (now < deadline) { readLine(); }} 里
  *       {@code readLine()} 本身是阻塞的，deadline 只在两次往返之间被检查一次。
  *       这里用常驻读线程 + {@link CompletableFuture#get(long, TimeUnit)} ⇒ 超时是真的。</li>
- *   <li><b>握手自报版本写死 {@code "0.2.0"}</b>：抬版没带走 ⇒ 对端读到的版本线是假的。
- *       这里版本由 {@link Options#clientVersion} 显式传入，且校验对端回显的
+ *   <li><b>握手自报版本写死在源码里</b>：抬版没带走 ⇒ 对端读到的版本线是假的。
+ *       这里版本由 {@link Options#clientVersion} 显式传入（默认值取
+ *       {@link com.zifang.z.bot.BuildInfo#REVISION}，面值不落在本文件），且校验对端回显的
  *       {@code protocolVersion}。</li>
  * </ol>
  *
@@ -81,7 +83,7 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         long handshakeTimeoutMillis = DEFAULT_HANDSHAKE_TIMEOUT_MILLIS;
         boolean parentWatchdog = true;
         String clientName = "z-bot";
-        String clientVersion = "0.2.0";
+        String clientVersion = BuildInfo.REVISION;
 
         public Options serverName(String v) {
             this.serverName = v;

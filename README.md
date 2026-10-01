@@ -20,9 +20,9 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 |---|---|---|
 | 仓库 | `z-bot`（本地 agent 应用；`z-bot-core` 是唯一有代码的模块） | `ls -d */` |
 | Maven 坐标 | `io.github.yuku123:z-bot`（聚合 `pom`）/ `:z-bot-core`（`jar`，shade 件）/ `:z-bot-desktop-packager`（`pom`） | `grep -n '<artifactId>\|<packaging>' pom.xml */pom.xml` |
-| 当前源码版本 | `0.2.0`（根 POM `<revision>`，唯一真源；CI-friendly versions + `flatten-maven-plugin` 1.7.2 `flattenMode=oss`） | `grep -n '<revision>' pom.xml` |
+| 当前源码版本 | `0.2.1`（根 POM `<revision>`，唯一真源；CI-friendly versions + `flatten-maven-plugin` 1.7.2 `flattenMode=oss`。源码侧的自报版本面值集中在 `z-bot-core/src/main/java/com/zifang/z/bot/BuildInfo.java` 的 `REVISION` 一格，其余各处一律从它派生；两处没对齐由 `BuildInfoDriftTest` 判红，三支具名变异验过牙） | `grep -n '<revision>' pom.xml` |
 | 父项目 | `io.github.yuku123:z-boot-parent:1.0.21`（`<relativePath/>` 留空，parent 在 repo1 不在磁盘；它自己的 `<parent>` 是 `z-boot-dependencies:1.0.20`） | `grep -n -A4 '<parent>' pom.xml` |
-| Central 实测状态 | **`0.2.0` 三件全部在架**：`z-bot:0.2.0.pom` / `z-bot-core:0.2.0.pom` / `z-bot-core:0.2.0.jar` / `:sources.jar` / `:javadoc.jar` / `z-bot-desktop-packager:0.2.0.pom` 均 200；`maven-metadata.xml` 的 `latest`/`release` 都是 `0.2.0`（`lastUpdated=20260929022811`）。`0.1.0` 同样在架；没有 `0.3.0` | `curl -s https://repo1.maven.org/maven2/io/github/yuku123/z-bot-core/maven-metadata.xml` |
+| Central 实测状态 | **对外可见的仍是 `0.2.0`**：`z-bot:0.2.0.pom` / `z-bot-core:0.2.0.pom` / `z-bot-core:0.2.0.jar` / `:sources.jar` / `:javadoc.jar` / `z-bot-desktop-packager:0.2.0.pom` 均 200（6/6）；三个坐标的 `maven-metadata.xml` 的 `latest`/`release` 都是 `0.2.0`，`versions` 各为 `[0.1.0, 0.2.0]`，`lastUpdated` = `20260929022811`（z-bot-core）/`20260929022812`（另两坐标）。`0.1.0` 同样在架；没有 `0.3.0`。**`0.2.1` 已抬号但还没 deploy**（2026-10-01 19:4x 现读：3 个 reactor 坐标下的 `z-bot-0.2.1.pom` / `z-bot-core-0.2.1.pom` / `z-bot-core-0.2.1.jar` / `z-bot-desktop-packager-0.2.1.pom` 全 404 ⇒ 0/4，同一次运行里 `0.2.0` 侧读到 6/6=200 作阳性对照） | `curl -s https://repo1.maven.org/maven2/io/github/yuku123/z-bot-core/maven-metadata.xml` |
 | 内核 pin | `z-agent-kernel.version=0.2.1`（本仓按坐标写 12 条直接 DM 顶住 fleet 的 0.1.1；repo1 实测 12 件 `0.2.1` 全部 200 ⇒ 已可解析） | `grep -n 'z-agent-kernel.version' pom.xml` |
 | 默认端口 | http 控制台 `8080` · webhook `8090` · 飞书 `9101` · 钉钉 `9102`；**缺省只绑 `127.0.0.1`** | `cat z-bot-core/src/main/resources/com/zifang/z/bot/channel/channels.builtin.properties` |
 | 运行口径 | Java 8（`maven.compiler.source/target=8` 由 `z-boot-parent:1.0.21` 下发，本仓不重抄）· **不引 Spring** | `curl -s https://repo1.maven.org/maven2/io/github/yuku123/z-boot-parent/1.0.21/z-boot-parent-1.0.21.pom \| grep maven.compiler` |
@@ -80,7 +80,8 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 
 ⇒ 并机方案只能按"**一个 z-bot = 一个独立进程 + 一个独立 profile 数据根**"来排：
 `java -jar z-bot-core.jar gateway`，宿主侧要接它只能走它对外说的那两面（HTTP/SSE，或 MCP/ACP over stdio）。
-另外 `z-boot-fleet` 里 `z-bot.version` 那格实测仍是 `0.1.0`（滞后于已发布的 `0.2.0`），所以任何引 z-bot 的工程
+另外 `z-boot-fleet` 里 `z-bot.version` 那格滞后（2026-10-01 19:1x 现读：`z-boot-parent:1.0.21` 导入
+`z-boot-fleet:1.0.1`，其中 `z-bot.version=0.2.0`，而本仓已抬到 `0.2.1` ⇒ 对外发布后仍滞后一格），所以任何引 z-bot 的工程
 都得像本仓一样按坐标把面值写死，否则会被 fleet 反向压成旧字节码。
 
 ---
@@ -89,7 +90,7 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 
 ```
 z-bot/
-├── pom.xml                        # 聚合 POM：z-boot-parent:1.0.21 + <revision>0.2.0</revision> + 12 条 kernel 直接 DM
+├── pom.xml                        # 聚合 POM：z-boot-parent:1.0.21 + <revision>0.2.1</revision> + 12 条 kernel 直接 DM
 ├── LICENSE                        # MIT
 ├── z-bot-core/                    # 唯一有代码的模块（jar / shade）
 │   ├── pom.xml                    # finalName=z-bot-core，shade 3.6.0，mainClass=com.zifang.z.bot.ZBot
@@ -174,7 +175,8 @@ java -jar z-bot-core/target/z-bot-core.jar gateway --webhook-port 8090   # 多�
 顶层子命令共 10 支：`chat`、`repl`（别名 `interactive`）、`serve`、`gateway`、`status`、
 `sessions`、`send`、`pair`、`mcp`、`acp`。名单以 `ZBot.java` 的 `subcommands` 为准，
 复算：`sed -n '39,42p' z-bot-core/src/main/java/com/zifang/z/bot/ZBot.java`。
-`--help` / `--version` 由 picocli 的 `mixinStandardHelpOptions` 提供（`--version` 打的是 `z-bot 0.2.0`）。
+`--help` / `--version` 由 picocli 的 `mixinStandardHelpOptions` 提供（`--version` 打的是 `z-bot 0.2.1`，
+面值不在 `ZBot.java` 里手写，取自 `BuildInfo.CLI_VERSION`；与 `<revision>` 的绑定由 `BuildInfoDriftTest` 钉住）。
 `sessions` 还有二级动词：`list` / `search` / `export`（JSONL）/ `stats` / `prune` / `version` / `lineage` / `end` / `archive`。
 
 ### profile 与数据根（结构性红线 1）

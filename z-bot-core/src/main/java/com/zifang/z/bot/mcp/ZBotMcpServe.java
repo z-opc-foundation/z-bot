@@ -2,6 +2,7 @@ package com.zifang.z.bot.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.z.bot.BuildInfo;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -70,7 +71,7 @@ public final class ZBotMcpServe {
     /** server 配置。不可变。 */
     public static final class Options {
         String serverName = "z-bot";
-        String serverVersion = "0.2.0-dev";
+        String serverVersion = BuildInfo.DEV;
         long maxRequests = 1_000_000L;
         int defaultLimit = 50;
         int maxLimit = 500;

@@ -12,6 +12,7 @@ import com.zifang.z.agent.kernel.llm.LlmProvider;
 import com.zifang.z.agent.kernel.message.Msg;
 import com.zifang.z.agent.kernel.message.ToolCall;
 import com.zifang.z.agent.kernel.tool.ToolResult;
+import com.zifang.z.bot.BuildInfo;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.center.BotCenterClient;
 import com.zifang.z.bot.center.BotLifecycle;
@@ -80,7 +81,8 @@ public class BotAgent {
 
     private static final Logger LOG = LoggerFactory.getLogger(BotAgent.class);
 
-    public static final String BOT_VERSION = "z-bot/0.2.0";
+    /** 上报版本串：面值只在 {@link BuildInfo#REVISION} 一处，这里跟着 pom 的 {@code <revision>} 走。 */
+    public static final String BOT_VERSION = BuildInfo.BOT_VERSION;
 
     /** 需要人工确认时 {@link #chat} 的返回值前缀，后接 {@code tool|args|reason}。 */
     public static final String WAIT_CONFIRM_PREFIX = "WAIT_CONFIRM:";
@@ -132,7 +134,8 @@ public class BotAgent {
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     /**
-     * kernel 0.2.0 的显式运行状态：预算 / 中断 / steer 队列都在这里。
+     * kernel 0.2.1（根 pom 的 {@code z-agent-kernel.version} 面值）的显式运行状态：
+     * 预算 / 中断 / steer 队列都在这里。
      * 中断是协作式的 — 迭代与工具边界经 {@code checkpoint()} 生效，
      * 工具内部（exec 读输出循环 / 文件读写 / mvn_build / delegate 子循环）经
      * {@link InterruptScope} 按<b>执行线程</b>找回本次会话的旗子后同样生效。

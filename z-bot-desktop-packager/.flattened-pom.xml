@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.yuku123</groupId>
   <artifactId>z-bot-desktop-packager</artifactId>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
   <packaging>pom</packaging>
   <name>z-bot-desktop-packager</name>
   <description>jpackage 桌面分发包配置: macOS .dmg / Windows .exe / Linux .deb</description>

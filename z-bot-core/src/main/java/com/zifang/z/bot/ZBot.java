@@ -36,7 +36,7 @@ import java.util.concurrent.Callable;
  * <p>模型 / key 默认取<b>当前 profile</b>（{@code -Dzbot.home} &gt; {@code ZBOT_HOME} &gt;
  * {@code ~/.zbot}）下的 {@code config.properties}，命令行选项只做覆盖。</p>
  */
-@Command(name = "z-bot", mixinStandardHelpOptions = true, version = "z-bot 0.2.0",
+@Command(name = "z-bot", mixinStandardHelpOptions = true, version = BuildInfo.CLI_VERSION,
         subcommands = {ChatCommand.class, ReplCommand.class, ServeCommand.class, GatewayCommand.class,
                 StatusCommand.class, SessionsCommand.class, SendCommand.class, PairCommand.class,
                 McpCommand.class, com.zifang.z.bot.cli.AcpCommand.class},

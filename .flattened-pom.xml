@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.yuku123</groupId>
   <artifactId>z-bot</artifactId>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
   <packaging>pom</packaging>
   <name>z-bot (Local Agent App, cc/Hermes style)</name>
   <description>本地 agent 应用: CLI + HTTP 双通道 + sandbox + 内置 z-agent-kernel runtime</description>

@@ -2,6 +2,7 @@ package com.zifang.z.bot.mcp;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.zifang.z.agent.kernel.mcp.McpTransport;
+import com.zifang.z.bot.BuildInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,7 +69,7 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
         long timeoutMillis = DEFAULT_TIMEOUT_MILLIS;
         boolean notificationStream = true;
         String clientName = "z-bot";
-        String clientVersion = "0.2.0";
+        String clientVersion = BuildInfo.REVISION;
 
         public Options serverName(String v) {
             this.serverName = v;
