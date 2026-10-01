@@ -132,12 +132,52 @@ cd ~/builds/zbot_021_mut && P21_PYTHON=~/.cache/zbot_release_1001/mcpvenv/bin/py
 | surefire XML 求和 | 117 份 `TEST-*.xml`，`tests=1240 failures=0 errors=0 skipped=0` | `python3 - <副本>/z-bot-core/target/surefire-reports`（`ET.parse` 取根元素四个属性求和，0 份判 FATAL） |
 | 源码结构计数 | 行首 `@Test` 注解 1240 条 | `git grep -h -E '^[[:space:]]*@Test' HEAD -- "z-bot-core/src/test/**/*.java" \| wc -l` |
 
-`recheck-0930` 那批的基线是 **1237**（`EVIDENCE.md:613-616`，head `bb94d114` 四跑同值），XML 份数 116。
-1240 − 1237 = 3 = `BuildInfoDriftTest` 的 3 条，117 − 116 = 1 = 多出的那个测试类 —— 两处增量互相咬合。
-**但我不在这里写"1237 + 3 = 1240"这种算式**：区间 `bb94d114..HEAD` 还夹着 `1227299`
-（它把 `MemoryWriteGateTest` 从 11 条 `@Test` 加到 12 条），而三把尺里 grep 口径本身还分"行首注解 / 含提及的行 /
-剥注释"几种（`bb94d114` 上行首注解 1236、含提及行 1239，`HEAD` 上分别是 1240 / 1243）。
-上面这张表说的是"此刻这份字节上三把尺各读到什么"，不是"从 1237 推 1240"。
+**上一版在这里拒绝写"1237 + 3 = 1240"，理由是区间里还夹着 `1227299`、而 grep 口径分几种。
+现在两处都用同一把尺在 `git archive` 解出的三棵树上量完了，算式可以写，但写的不是那个：**
+
+| 树（`git archive <sha> \| tar -x`，只读副本） | 行首 `@Test` | 逐行 `count('@Test')` 原始 | 注释行里的字样 | 有注解的文件 |
+|---|---|---|---|---|
+| `bb94d114`（recheck-0930 那个头） | **1236** | 1239 | 3 | 118 |
+| `1227299` | **1237** | 1240 | 3 | 118 |
+| `b3e32a2`（发布字节） | **1240** | 1243 | 3 | 119 |
+
+逐文件差集（尺 `~/.cache/zbot_release_1001/test_count_three_rulers.py`，两两全枚举，不是抽样）：
+`bb94d114 → 1227299` 只有 `memory/MemoryWriteGateTest.java` 从 `(11,11)` 到 `(12,12)`；
+`1227299 → b3e32a2` 只有多出的 `BuildInfoDriftTest.java` `(—,3)`。所以真实的增量链是
+**1236 + 1（`MemoryWriteGateTest`，`1227299`）+ 3（`BuildInfoDriftTest`，`b3e32a2`）= 1240**，
+每一格都点到具体文件，`+3` 那种把两段增量混成一段的写法是错的。
+
+⇒ **基线不是 1237**。`recheck-0930/EVIDENCE.md:613-616` 印的是 `head=bb94d114b30ea…  Tests run: 1237`、
+`:623-624` 印的是 `reactor=1237 text_at_test=1240 minus=1237`，而 `bb94d114` 这棵**提交树**上是
+1236/1239 —— 那一跑读的是**当时的工作树**，里面已经带着后来才进仓的第 12 条 `@Test`。
+三条独立证据同向：`git log -S oldTextMatchesBodyNotTimestamp -- z-bot-core/src/test/java/com/zifang/z/bot/memory/MemoryWriteGateTest.java`
+只点名 `1227299`；`git show --stat bb94d114` 动了 9 个文件、没有一个测试源码；
+`bb94d114` 的提交标题自己写的就是"1236 例"，与它正文里的 1237 不同。
+这是记忆里那条"`report()` 读盘上字节非提交树"的形状在**我自己的台账里**现形，不是别人埋的雷。
+旧正文已推、不 amend；这里记正。
+
+复算（三棵树各自解出后跑同一支脚本，0 命中判 FATAL）：
+
+```
+for s in bb94d114 1227299 b3e32a2; do git archive $s | tar -x -C <空目录>/$s; done
+python3 ~/.cache/zbot_release_1001/test_count_three_rulers.py <空目录>/bb94d114 <空目录>/1227299 <空目录>/b3e32a2
+```
+
+口径对齐说明（行号一律 `awk 'NR>=56 && NR<=76'` 现取，不是记忆）：`bar1.sh:63` 的 `text_at_test` 是
+`line.count('@Test')` 逐行累加（原始值，含注释里的字样），`bar1.sh:68-69` 把以 `*` / `//` / `/*` 开头的行
+记成 `comment_hits`，`bar1.sh:76` 的 `minus` 就是 `text_hits - len(comment_hits)`。
+**"原始 − 注释"与我这张表的"行首 `@Test`"是两把不同的尺，它们的相等是量出来的、不是结构保证的**：
+三棵树逐树相等（1239−3=1236、1240−3=1237、1243−3=1240），意味着这批源码里没有"一行两条注解"或
+"`@Test` 不排行首"的形状；真出现那种形状时这两把尺会分家，届时以 reactor 那把为准。
+`1240` 那格里 1243 − 3 = 1240，与 §1 的 reactor 1240 和上一张表"源码结构计数"那行的行首 1240 三者同值。
+两把尺的作用域也是对得上的：发布树里带行首 `@Test` 的 117 个文件**全部**在 `z-bot-core/src` 下
+（`grep -rlE '^[[:space:]]*@Test' <树> --include='*.java' | cut -d/ -f1 | sort | uniq -c` 只出一行 `117 z-bot-core`），
+而 `bar1.sh:58` 的 glob 本来就限定 `z-bot-core/src/test/java/**/*.java` —— 所以"我这把全树走的尺"
+与"它那把只走 core 的尺"读的是同一批文件，差值不是作用域造成的。
+上面那张三尺表说的是"此刻这份字节上三把尺各读到什么"，现在它还与"从 `bb94d114` 逐级推到 1240"接上了。
+
+这一小节的现读时刻（`/bin/date` 各一次，不是推的）：**2026-10-01 20:58:55 +0800** 在解三棵树之前，
+**21:05:07 +0800** 在写完上面这张表与逐文件差集之后。
 
 ## §6 对外可见到哪一版（20:4x 现读 repo1）
 
