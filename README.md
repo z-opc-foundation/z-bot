@@ -292,6 +292,30 @@ rm -rf z-bot-core/target/surefire-reports z-bot-desktop-packager/target/surefire
 mvn -o test          # 全 reactor（packager 无测试），不要加 -pl
 ```
 
+### ⚠️ 先决条件：9 支 MCP 用例需要官方 SDK（本机没装时它们会红）
+
+`McpParentWatchdogTest`（4 支）+ `McpRealStdioServerTest`（5 支）要拉起真 stdio server，
+`RealMcpHarness.requireOfficialSdk()` 直接 `import mcp.server.fastmcp` 做前置检查。
+**这 9 支是刻意 fail 而不 skip 的**（skip 会把这一杠糊成满分），所以缺依赖时就是红，
+不是环境问题、也不该改成跳过：
+
+```bash
+python3 -m venv ~/.cache/zbot_mcpvenv
+~/.cache/zbot_mcpvenv/bin/pip install "mcp<2"        # ← 版本上限是硬的
+export P21_PYTHON=~/.cache/zbot_mcpvenv/bin/python  # ← 硬前提，不设则退回系统 python3
+mvn -o test
+```
+
+**为什么必须 `<2`**：`mcp.server.fastmcp` 是 v1 API。2.x 已把 `FastMCP` 更名为 `MCPServer`，
+装最新版会得到
+
+    ModuleNotFoundError: No module named 'mcp.server.fastmcp'. This is mcp 2.x, where
+    FastMCP was renamed to MCPServer (from mcp.server.mcpserver import MCPServer) ...
+
+而这条信息**不会**告诉你"你装错大版本了"——它看起来像 SDK 没装。
+实测装 `mcp<2`（拿到 1.30.0）后这 9 支 `Tests run: 9, Failures: 0, Errors: 0, Skipped: 0`。
+不设 `P21_PYTHON` 时 `RealMcpHarness.python()` 会退回系统 `python3`，多数机器上那里没有 `mcp`。
+
 验收口径是四条杠（定义见 roadmap §5，逐期读数进 `_doc/005_testing/acceptance/pNN/EVIDENCE.md`）：
 
 1. **杠①** `mvn -o test` 连跑 3 次，每轮 `Failures=Errors=Skipped=0` 且
