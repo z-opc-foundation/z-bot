@@ -28,3 +28,7 @@ target/
 
 # macOS
 .DS_Store
+
+# 仓内发布凭据（Sonatype User Token + GPG passphrase），由 004_重要秘钥 口径落到这里
+.env
+.env.bak
