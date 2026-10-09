@@ -34,3 +34,7 @@ target/
 .env.bak
 
 # 运行态与编译产物（由 2026-10-08 lead 同步并入；与上方上游块取并集，不覆盖上游新增的凭据排除）
+
+# 前端 node_modules / dist
+_frontend/**/node_modules/
+_frontend/**/dist/
