@@ -13,7 +13,7 @@ export const menuItems = [
     { key: '/z-bot/console', label: '能力地图', icon: <RobotOutlined /> },
 ]
 
-export const routeTable = [
+export const routes = [
     { path: '/z-bot/home', Component: HomePage },
     { path: '/z-bot/console', Component: Console },
 ]

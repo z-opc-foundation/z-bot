@@ -1,2 +1,2 @@
-export {menuItems, routeTable, Console} from './pages-manifest.jsx'
+export {menuItems, routes, Console} from './pages-manifest.jsx'
 export {configureBot} from './services/api.js'
