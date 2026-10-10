@@ -16,7 +16,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.1",
-    "@yuku123/z-bot-component": "file:../z-bot-component"
+    "@yuku123/z-bot-component": "^0.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",
