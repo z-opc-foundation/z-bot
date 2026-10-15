@@ -1,13 +1,11 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.model.JsonArray;
+import com.zifang.util.json.model.JsonObject;
 
-import java.util.Iterator;
-import java.util.Map;
+import java.util.Set;
 
 /**
  * 极简 JSON-RPC 2.0 报文编解码（ACP 传输层用）。
@@ -34,26 +32,32 @@ public final class JsonRpc {
 
     /** 协议自己定义的错误码没进本类：ACP schema 只规定了 JSON-RPC 标准码 + 业务消息文案。 */
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
     private JsonRpc() {
     }
 
-    public static ObjectMapper mapper() {
-        return MAPPER;
+    /**
+     * 「去 Jackson」第 1 档后 src/main 已不再用 Jackson。这一格只为**尚未迁移的 src/test**
+     * 留着（acp 包 4 个测试类仍按 Jackson 树断言报文形态）；它们迁完就把本方法连同
+     * z-bot-core 的 jackson-databind 一起退场。
+     */
+    public static com.fasterxml.jackson.databind.ObjectMapper mapper() {
+        return LEGACY_JACKSON;
     }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper LEGACY_JACKSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 
     /** 一条已解析的报文（请求 / 通知 / 响应三态合一，按字段是否有值区分）。 */
     public static final class Message {
 
-        private final JsonNode id;
+        private final Object id;
         private final String method;
-        private final JsonNode params;
-        private final JsonNode result;
-        private final JsonNode error;
+        private final Object params;
+        private final Object result;
+        private final Object error;
         private final boolean responseShaped;
 
-        Message(JsonNode id, String method, JsonNode params, JsonNode result, JsonNode error,
+        Message(Object id, String method, Object params, Object result, Object error,
                 boolean responseShaped) {
             this.id = id;
             this.method = method;
@@ -65,11 +69,12 @@ public final class JsonRpc {
 
         /** 有 id 且有 method ⇒ 需要回包；只有 method ⇒ 通知（不回包）。 */
         public boolean isRequest() {
-            return !responseShaped && method != null && id != null && !id.isNull();
+            return !responseShaped && method != null && id != null && !JsonCursor.of(id).isNull();
         }
 
         public boolean isNotification() {
-            return !responseShaped && method != null && (id == null || id.isNull());
+            return !responseShaped && method != null
+                    && (id == null || JsonCursor.of(id).isNull());
         }
 
         /** 对端回来的响应（对应我们发出的 {@code session/request_permission} 等）。 */
@@ -77,28 +82,28 @@ public final class JsonRpc {
             return responseShaped;
         }
 
-        public JsonNode id() {
+        public Object id() {
             return id;
         }
 
         /** id 的字符串形态：数字 id 与字符串 id 都归一化成文本，用于 pending 表键。 */
         public String idText() {
-            return id == null || id.isNull() ? null : (id.isTextual() ? id.textValue() : id.toString());
+            return id == null || JsonCursor.of(id).isNull() ? null : JsonCursor.of(id).asText();
         }
 
         public String method() {
             return method;
         }
 
-        public JsonNode params() {
-            return params == null ? MAPPER.createObjectNode() : params;
+        public Object params() {
+            return params == null ? new JsonObject() : params;
         }
 
-        public JsonNode result() {
+        public Object result() {
             return result;
         }
 
-        public JsonNode error() {
+        public Object error() {
             return error;
         }
 
@@ -107,8 +112,8 @@ public final class JsonRpc {
             if (error == null) {
                 return null;
             }
-            JsonNode m = error.get("message");
-            return m == null ? null : m.asText();
+            JsonCursor m = JsonCursor.of(error).path("message");
+            return m.isMissing() ? null : m.asText();
         }
     }
 
@@ -119,46 +124,49 @@ public final class JsonRpc {
      *                               （{@link #INVALID_REQUEST}）
      */
     public static Message parse(String line) {
-        JsonNode node;
+        Object node;
         try {
-            node = MAPPER.readTree(line);
-        } catch (JsonProcessingException e) {
-            throw new AcpProtocolException(PARSE_ERROR, "Parse error: " + e.getOriginalMessage(), null, e);
-        } catch (java.io.IOException e) {
+            node = JsonUtil.parse(line);
+        } catch (RuntimeException e) {
+            // JsonUtil 抛的是非受检异常（JsonParseException 继承 RuntimeException），
+            // Jackson 侧原来是 IOException + JsonProcessingException 两支，这里合成一支。
             throw new AcpProtocolException(PARSE_ERROR, "Parse error: " + e.getMessage(), null, e);
         }
-        if (node == null || !node.isObject()) {
+        JsonCursor root = JsonCursor.of(node);
+        if (!root.isObject()) {
             throw new AcpProtocolException(INVALID_REQUEST, "Invalid request: not a JSON object", null, null);
         }
-        JsonNode id = node.get("id");
-        JsonNode method = node.get("method");
-        JsonNode params = node.get("params");
-        JsonNode result = node.get("result");
-        JsonNode error = node.get("error");
-        boolean responseShaped = result != null || error != null;
-        if (!responseShaped && (method == null || !method.isTextual())) {
+        Object id = root.path("id").value();
+        JsonCursor methodCur = root.path("method");
+        Object method = methodCur.value();
+        Object params = root.path("params").value();
+        Object result = root.path("result").value();
+        Object error = root.path("error").value();
+        // 「有没有 result / error 成员」判的是**键在不在**，不是值是不是 null：
+        // {"result":null} 也是响应形状，与 Jackson 的 get() 返回 NullNode（仍非 null）同语义。
+        boolean responseShaped = root.has("result") || root.has("error");
+        if (!responseShaped && !(method instanceof String)) {
             throw new AcpProtocolException(INVALID_REQUEST,
                     "Invalid request: missing string member \"method\"", null, null, id);
         }
-        return new Message(id, method == null ? null : method.textValue(), params, result, error,
-                responseShaped);
+        return new Message(id, (String) method, params, result, error, responseShaped);
     }
 
-    public static String request(String id, String method, JsonNode params) {
-        ObjectNode node = base(method, params);
+    public static String request(String id, String method, Object params) {
+        JsonObject node = base(method, params);
         node.put("id", id);
         return write(node);
     }
 
-    public static String notification(String method, JsonNode params) {
+    public static String notification(String method, Object params) {
         return write(base(method, params));
     }
 
-    public static String response(JsonNode id, JsonNode result) {
-        ObjectNode node = MAPPER.createObjectNode();
+    public static String response(Object id, Object result) {
+        JsonObject node = new JsonObject();
         node.put("jsonrpc", "2.0");
-        node.set("id", id == null ? MAPPER.nullNode() : id);
-        node.set("result", result == null ? MAPPER.createObjectNode() : result);
+        node.put("id", id);
+        node.put("result", result == null ? new JsonObject() : result);
         return write(node);
     }
 
@@ -166,31 +174,31 @@ public final class JsonRpc {
      * 错误响应。{@code data} 可为 null —— 未知方法那类"大声失败"会把已知方法表塞进 data，
      * 让客户端一眼看到自己拼错了哪个名字，而不是只收到一个裸 {@code -32601}。
      */
-    public static String error(JsonNode id, int code, String message, JsonNode data) {
-        ObjectNode node = MAPPER.createObjectNode();
+    public static String error(Object id, int code, String message, Object data) {
+        JsonObject node = new JsonObject();
         node.put("jsonrpc", "2.0");
-        node.set("id", id == null ? MAPPER.nullNode() : id);
-        ObjectNode err = MAPPER.createObjectNode();
+        node.put("id", id);
+        JsonObject err = new JsonObject();
         err.put("code", code);
         err.put("message", message);
         if (data != null) {
-            err.set("data", data);
+            err.put("data", data);
         }
-        node.set("error", err);
+        node.put("error", err);
         return write(node);
     }
 
-    public static ObjectNode object() {
-        return MAPPER.createObjectNode();
+    public static JsonObject object() {
+        return new JsonObject();
     }
 
-    public static ArrayNode array() {
-        return MAPPER.createArrayNode();
+    public static JsonArray array() {
+        return new JsonArray();
     }
 
-    /** 把 {@code {"k":"v",…}} 的字符串表按插入序写成 ObjectNode（少写一处 try/catch 样板）。 */
-    public static ObjectNode fields(String... keyValues) {
-        ObjectNode node = MAPPER.createObjectNode();
+    /** 把 {@code {"k":"v",…}} 的字符串表按插入序写成 JsonObject（少写一处样板）。 */
+    public static JsonObject fields(String... keyValues) {
+        JsonObject node = new JsonObject();
         if (keyValues == null) {
             return node;
         }
@@ -203,50 +211,53 @@ public final class JsonRpc {
     }
 
     /** 响应里的 {@code result} 允许是 null（SDK 的可选响应就是这么发的）。 */
-    public static String responseNullable(JsonNode id, JsonNode result) {
+    public static String responseNullable(Object id, Object result) {
         return response(id, result);
     }
 
-    private static ObjectNode base(String method, JsonNode params) {
-        ObjectNode node = MAPPER.createObjectNode();
+    private static JsonObject base(String method, Object params) {
+        JsonObject node = new JsonObject();
         node.put("jsonrpc", "2.0");
         node.put("method", method);
-        if (params != null && !params.isNull()) {
-            node.set("params", params);
+        if (params != null && !JsonCursor.of(params).isNull()) {
+            node.put("params", params);
         }
         return node;
     }
 
-    private static String write(ObjectNode node) {
-        try {
-            return MAPPER.writeValueAsString(node);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("ACP 报文序列化失败: " + e.getOriginalMessage(), e);
-        }
+    /**
+     * 紧凑单行 JSON。
+     *
+     * <p>必须先过 {@link JsonUtil#toPlainValue}：{@code JsonObject.toString()} 走的是缩进美化，
+     * 直接喂 {@code JsonUtil.toJson} 会吐出多行报文，把「每行一条 JSON」的 newline-delimited
+     * 分帧当场打散。摊平成 LinkedHashMap/ArrayList 后 {@code toJson} 才输出紧凑单行。</p>
+     */
+    private static String write(JsonObject node) {
+        return JsonUtil.toJson(JsonUtil.toPlainValue(node));
     }
 
     /** 便于测试断言：把一行 JSON 摊平成 {@code key=value} 序列（只到第一层）。 */
     public static String flatten(String json) {
         StringBuilder sb = new StringBuilder();
+        Object node;
         try {
-            JsonNode node = MAPPER.readTree(json);
-            walk("", node, sb);
-        } catch (java.io.IOException e) {
+            node = JsonUtil.parse(json);
+        } catch (RuntimeException e) {
             return "<unparseable:" + json + ">";
         }
+        walk("", JsonCursor.of(node), sb);
         return sb.toString();
     }
 
-    private static void walk(String prefix, JsonNode node, StringBuilder sb) {
+    private static void walk(String prefix, JsonCursor node, StringBuilder sb) {
         if (node.isObject()) {
-            Iterator<Map.Entry<String, JsonNode>> it = node.fields();
-            while (it.hasNext()) {
-                Map.Entry<String, JsonNode> e = it.next();
-                walk(prefix.isEmpty() ? e.getKey() : prefix + "." + e.getKey(), e.getValue(), sb);
+            Set<String> names = node.fieldNames();
+            for (String name : names) {
+                walk(prefix.isEmpty() ? name : prefix + "." + name, node.path(name), sb);
             }
         } else if (node.isArray()) {
             for (int i = 0; i < node.size(); i++) {
-                walk(prefix + "[" + i + "]", node.get(i), sb);
+                walk(prefix + "[" + i + "]", node.at(i), sb);
             }
         } else {
             sb.append(sb.length() == 0 ? "" : " ").append(prefix).append('=').append(node.asText());

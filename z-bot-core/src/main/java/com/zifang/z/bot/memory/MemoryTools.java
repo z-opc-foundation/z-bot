@@ -4,11 +4,10 @@ import com.zifang.z.agent.kernel.tool.Tool;
 import com.zifang.z.agent.kernel.tool.ToolResult;
 import com.zifang.z.bot.tool.Confirmations;
 import com.zifang.z.bot.tool.Toolkit;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -28,7 +27,6 @@ import java.util.Map;
  */
 public final class MemoryTools {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     private MemoryTools() {
     }
@@ -141,30 +139,31 @@ public final class MemoryTools {
         if (raw == null) {
             return out;
         }
-        JsonNode node;
+        Object node;
         if (raw instanceof String) {
             String s = ((String) raw).trim();
             if (s.isEmpty()) {
                 return out;
             }
             try {
-                node = JSON.readTree(s);
-            } catch (Exception e) {
+                node = JsonUtil.parse(s);
+            } catch (RuntimeException e) {
                 throw new MemoryWriteRejectedException(MemoryWriteRejectedException.BAD_OPERATION,
                         "operations 不是合法 JSON：" + e.getMessage());
             }
         } else if (raw instanceof List || raw instanceof Map) {
-            node = JSON.convertValue(raw, JsonNode.class);
+            // 上游给的是已解析的 List/Map：包一层再读回，语义与原先 convertValue 造树一致。
+            node = JsonUtil.parse(JsonUtil.toJson(raw));
         } else {
             throw new MemoryWriteRejectedException(MemoryWriteRejectedException.BAD_OPERATION,
                     "operations 类型不支持：" + raw.getClass().getName());
         }
-        if (!node.isArray()) {
+        JsonCursor cur = JsonCursor.of(node);
+        if (!cur.isArray()) {
             throw new MemoryWriteRejectedException(MemoryWriteRejectedException.BAD_OPERATION,
-                    "operations 必须是 JSON 数组，实际是 " + node.getNodeType());
+                    "operations 必须是 JSON 数组，实际是 " + kindOf(cur));
         }
-        for (Iterator<JsonNode> it = node.elements(); it.hasNext(); ) {
-            JsonNode el = it.next();
+        for (JsonCursor el : cur.elements()) {
             if (!el.isObject()) {
                 throw new MemoryWriteRejectedException(MemoryWriteRejectedException.BAD_OPERATION,
                         "operations 第 " + (out.size() + 1) + " 个元素不是对象。");
@@ -180,9 +179,23 @@ public final class MemoryTools {
         return out;
     }
 
-    private static String text(JsonNode node, String field) {
-        JsonNode v = node.get(field);
-        return v == null || v.isNull() ? "" : v.asText();
+    private static String text(JsonCursor node, String field) {
+        Object v = node.path(field).value();
+        return v == null ? "" : String.valueOf(v);
+    }
+
+    /** 只为报错文案：把"不是数组"这件事说成节点形态，对齐原先 {@code node.getNodeType()}。 */
+    private static String kindOf(JsonCursor cur) {
+        if (cur.isMissing()) {
+            return "缺失";
+        }
+        if (cur.isObject()) {
+            return "对象";
+        }
+        if (cur.isScalar()) {
+            return "标量";
+        }
+        return "未知";
     }
 
     /** 门禁拒绝 → 带机读码 + 现场的回执。 */

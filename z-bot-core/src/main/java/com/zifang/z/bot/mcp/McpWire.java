@@ -1,7 +1,7 @@
 package com.zifang.z.bot.mcp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 
 import java.util.Map;
 
@@ -15,8 +15,6 @@ import java.util.Map;
  */
 final class McpWire {
 
-    static final ObjectMapper JSON = new ObjectMapper();
-
     /** 我们自己发出去的请求用的协议版本（对齐官方 SDK 支持的下界）。 */
     static final String PROTOCOL_VERSION = "2025-06-18";
 
@@ -25,66 +23,67 @@ final class McpWire {
 
     /** 解析后取 {@code id}；数字返回 Long，字符串返回其值，没有 id（notification）返回 null。 */
     static Long idOf(String json) {
-        JsonNode node = read(json);
+        Object node = read(json);
         if (node == null) {
             return null;
         }
         return idOf(node);
     }
 
-    static Long idOf(JsonNode node) {
+    static Long idOf(Object node) {
         if (node == null) {
             return null;
         }
-        JsonNode id = node.get("id");
-        if (id == null || id.isNull()) {
+        Object id = JsonCursor.of(node).path("id").value();
+        if (id == null) {
             return null;
         }
         return Long.valueOf(asLong(id));
     }
 
     /** id 允许是字符串（规范允许），统一成 long 便于做 key；非数字 id 走 hashCode 兜底。 */
-    private static long asLong(JsonNode id) {
-        if (id.isNumber()) {
-            return id.asLong();
+    private static long asLong(Object id) {
+        if (id instanceof Number) {
+            return ((Number) id).longValue();
         }
         try {
-            return Long.parseLong(id.asText().trim());
+            return Long.parseLong(String.valueOf(id).trim());
         } catch (NumberFormatException e) {
             // 规范允许字符串 id；本仓 client 只发数字 id，出现字符串 id 说明对端在回显别的请求，
             // 用一个稳定但不会和数字 id 撞的负数空间。
-            return -Math.abs((long) id.asText().hashCode()) - 1L;
+            return -Math.abs((long) String.valueOf(id).hashCode()) - 1L;
         }
     }
 
-    static JsonNode read(String json) {
+    static Object read(String json) {
         try {
-            return JSON.readTree(json);
-        } catch (Exception e) {
+            return JsonUtil.parse(json);
+        } catch (RuntimeException e) {
             return null;
         }
     }
 
-    static String methodOf(JsonNode node) {
+    static String methodOf(Object node) {
         if (node == null) {
             return null;
         }
-        JsonNode m = node.get("method");
-        return m == null || m.isNull() ? null : m.asText();
+        Object m = JsonCursor.of(node).path("method").value();
+        return m == null ? null : JsonCursor.of(m).asText();
     }
 
     @SuppressWarnings("unchecked")
-    static Map<String, Object> paramsOf(JsonNode node) {
+    static Map<String, Object> paramsOf(Object node) {
         if (node == null) {
             return McpNotificationListener.emptyParams();
         }
-        JsonNode p = node.get("params");
-        if (p == null || p.isNull() || !p.isObject()) {
+        Object p = JsonCursor.of(node).path("params").value();
+        if (!JsonCursor.of(p).isObject()) {
             return McpNotificationListener.emptyParams();
         }
         try {
-            return JSON.convertValue(p, Map.class);
-        } catch (Exception e) {
+            // 摊平成 LinkedHashMap/ArrayList：与原先 Jackson convertValue(p, Map.class) 同形。
+            return (Map<String, Object>) JsonUtil.toPlainValue(p);
+        } catch (RuntimeException e) {
             return McpNotificationListener.emptyParams();
         }
     }
@@ -110,8 +109,8 @@ final class McpWire {
             return;
         }
         try {
-            sb.append(JSON.writeValueAsString(params));
-        } catch (Exception e) {
+            sb.append(JsonUtil.toJson(params));
+        } catch (RuntimeException e) {
             throw new IllegalArgumentException("params 无法序列化: " + e.getMessage(), e);
         }
     }

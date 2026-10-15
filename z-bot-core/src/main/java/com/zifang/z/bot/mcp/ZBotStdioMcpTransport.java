@@ -1,6 +1,6 @@
 package com.zifang.z.bot.mcp;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.zifang.util.json.JsonCursor;
 import com.zifang.z.agent.kernel.mcp.McpTransport;
 import com.zifang.z.bot.BuildInfo;
 import org.slf4j.Logger;
@@ -214,22 +214,22 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         params.put("clientInfo", clientInfo);
         String resp = requestRaw(id, McpWire.request(id, "initialize", params),
                 options.handshakeTimeoutMillis);
-        JsonNode node = McpWire.read(resp);
-        JsonNode result = node == null ? null : node.get("result");
-        if (result == null || result.isNull()) {
+        Object node = McpWire.read(resp);
+        Object result = node == null ? null : JsonCursor.of(node).path("result").value();
+        if (result == null || JsonCursor.of(result).isNull()) {
             throw new IOException("mcp initialize 没有 result: "
                     + McpWire.abbreviate(resp, 200));
         }
-        JsonNode pv = result.get("protocolVersion");
-        serverProtocolVersion = pv == null ? null : pv.asText();
-        JsonNode caps = result.get("capabilities");
-        JsonNode toolsCap = caps == null ? null : caps.get("tools");
-        JsonNode lc = toolsCap == null ? null : toolsCap.get("listChanged");
-        peerAdvertisesListChanged = lc != null && lc.asBoolean(false);
-        JsonNode si = result.get("serverInfo");
-        if (si != null && si.isObject()) {
-            serverName = text(si.get("name"));
-            serverVersion = text(si.get("version"));
+        JsonCursor resultCur = JsonCursor.of(result);
+        serverProtocolVersion = text(resultCur.path("protocolVersion").value());
+        Object caps = resultCur.path("capabilities").value();
+        Object toolsCap = JsonCursor.of(caps).path("tools").value();
+        Object lc = JsonCursor.of(toolsCap).path("listChanged").value();
+        peerAdvertisesListChanged = JsonCursor.of(lc).asBoolean(false);
+        Object si = resultCur.path("serverInfo").value();
+        if (JsonCursor.of(si).isObject()) {
+            serverName = text(JsonCursor.of(si).path("name").value());
+            serverVersion = text(JsonCursor.of(si).path("version").value());
         }
         // notifications/initialized
         writeLine(McpWire.notification("notifications/initialized", null));
@@ -360,8 +360,8 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
 
     // ---------------------------------------------------------------- 内部
 
-    private String text(JsonNode n) {
-        return n == null || n.isNull() ? null : n.asText();
+    private String text(Object n) {
+        return n == null ? null : JsonCursor.of(n).asText();
     }
 
     private File workingDir() {
@@ -463,13 +463,13 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
      * {@code params.name} 的再带上目标名。<b>刻意不带 arguments/params 的值</b> ——
      * 参数值可能含密钥，超时信息是要进日志的。
      */
-    private static String describeCall(JsonNode request) {
+    private static String describeCall(Object request) {
         String method = McpWire.methodOf(request);
         if (method == null) {
             return "unknown";
         }
-        JsonNode target = request.path("params").path("name");
-        return target.isTextual() ? method + ":" + target.asText() : method;
+        Object target = JsonCursor.of(request).path("params").path("name").value();
+        return target instanceof String ? method + ":" + target : method;
     }
 
     private void writeLine(String json) throws IOException {
@@ -493,7 +493,7 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
                 if (trimmed.isEmpty()) {
                     continue;
                 }
-                JsonNode node = McpWire.read(trimmed);
+                Object node = McpWire.read(trimmed);
                 if (node == null) {
                     LOG.debug("[mcp:{}] 收到非 JSON 行，忽略", options.serverName);
                     continue;

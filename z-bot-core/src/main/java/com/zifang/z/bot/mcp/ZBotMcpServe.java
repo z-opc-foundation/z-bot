@@ -1,7 +1,7 @@
 package com.zifang.z.bot.mcp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 import com.zifang.z.bot.BuildInfo;
 
 import java.io.BufferedReader;
@@ -50,7 +50,6 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class ZBotMcpServe {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     /** 读端工具之一：列会话（= MCP 语境下的 conversations）。 */
     public static final String TOOL_CONVERSATIONS = "zbot_conversations_list";
@@ -192,13 +191,13 @@ public final class ZBotMcpServe {
      */
     public String handle(String line) {
         requestsHandled.incrementAndGet();
-        JsonNode node = McpWire.read(line);
+        Object node = McpWire.read(line);
         if (node == null) {
             rejected.incrementAndGet();
             return error(null, PARSE_ERROR, "非 JSON 行");
         }
-        JsonNode idNode = node.get("id");
-        boolean wantsResponse = idNode != null && !idNode.isNull();
+        Object idNode = JsonCursor.of(node).path("id").value();
+        boolean wantsResponse = idNode != null;
         String method = McpWire.methodOf(node);
         if (method == null || method.isEmpty()) {
             rejected.incrementAndGet();
@@ -210,7 +209,7 @@ public final class ZBotMcpServe {
         }
         String result;
         try {
-            result = dispatch(method, node.get("params"));
+            result = dispatch(method, JsonCursor.of(node).path("params").value());
         } catch (JsonRpcError e) {
             rejected.incrementAndGet();
             return error(idNode, e.code, e.getMessage());
@@ -228,7 +227,7 @@ public final class ZBotMcpServe {
         return "{\"jsonrpc\":\"2.0\",\"id\":" + idLiteral(idNode) + ",\"result\":" + result + "}";
     }
 
-    private String dispatch(String method, JsonNode params) throws JsonRpcError {
+    private String dispatch(String method, Object params) throws JsonRpcError {
         if ("initialize".equals(method)) {
             return initializeResult(params);
         }
@@ -246,7 +245,7 @@ public final class ZBotMcpServe {
         throw new JsonRpcError(METHOD_NOT_FOUND, "未知 method: " + method);
     }
 
-    private String initializeResult(JsonNode params) {
+    private String initializeResult(Object params) {
         String requested = textAt(params, "protocolVersion");
         String negotiated = requested == null || requested.isEmpty()
                 ? McpWire.PROTOCOL_VERSION : requested;
@@ -270,7 +269,7 @@ public final class ZBotMcpServe {
         return write(result);
     }
 
-    private String toolCallResult(JsonNode params) throws JsonRpcError {
+    private String toolCallResult(Object params) throws JsonRpcError {
         String name = textAt(params, "name");
         if (name == null || name.isEmpty()) {
             throw new JsonRpcError(INVALID_PARAMS, "tools/call 缺 params.name");
@@ -279,7 +278,7 @@ public final class ZBotMcpServe {
             throw new JsonRpcError(INVALID_PARAMS,
                     "未知工具: " + name + "（只暴露 " + TOOL_CONVERSATIONS + " / " + TOOL_MESSAGES + "）");
         }
-        JsonNode args = params == null ? null : params.get("arguments");
+        Object args = JsonCursor.of(params).path("arguments").value();
         Map<String, Object> payload;
         try {
             payload = name.equals(TOOL_CONVERSATIONS)
@@ -303,7 +302,7 @@ public final class ZBotMcpServe {
         return write(ok);
     }
 
-    private Map<String, Object> readConversations(JsonNode args) throws JsonRpcError {
+    private Map<String, Object> readConversations(Object args) throws JsonRpcError {
         boolean includeArchived = boolAt(args, "include_archived");
         int limit = limitAt(args, options.defaultLimit);
         List<Map<String, Object>> rows = source.conversations(Boolean.valueOf(includeArchived),
@@ -317,7 +316,7 @@ public final class ZBotMcpServe {
         return out;
     }
 
-    private Map<String, Object> readMessages(JsonNode args) throws JsonRpcError {
+    private Map<String, Object> readMessages(Object args) throws JsonRpcError {
         String id = textAt(args, "conversation_id");
         if (id == null || id.trim().isEmpty()) {
             throw new JsonRpcError(INVALID_PARAMS, "zbot_messages_read 需要 params.conversation_id");
@@ -340,8 +339,9 @@ public final class ZBotMcpServe {
     }
 
     /** 上限夹紧 + 非正值回落默认：不给 client 一个"limit=0 ⇒ 全库扫"的口子。 */
-    private int limitAt(JsonNode args, int dflt) {
-        Integer v = args == null ? null : integerOrNull(args.get("limit"));
+    private int limitAt(Object args, int dflt) {
+        Integer v = args == null ? null
+                : integerOrNull(JsonCursor.of(args).path("limit").value());
         int limit = v == null ? dflt : v.intValue();
         if (limit <= 0) {
             limit = dflt;
@@ -349,39 +349,35 @@ public final class ZBotMcpServe {
         return Math.min(limit, options.maxLimit);
     }
 
-    private static Integer integerOrNull(JsonNode n) {
-        if (n == null || n.isNull()) {
+    private static Integer integerOrNull(Object n) {
+        if (n == null) {
             return null;
         }
         try {
-            if (n.isNumber()) {
-                return Integer.valueOf(n.asInt());
+            if (n instanceof Number) {
+                return Integer.valueOf(((Number) n).intValue());
             }
-            if (n.isTextual() && !n.asText().trim().isEmpty()) {
-                return Integer.valueOf(Integer.parseInt(n.asText().trim()));
+            if (n instanceof String && !((String) n).trim().isEmpty()) {
+                return Integer.valueOf(Integer.parseInt(((String) n).trim()));
             }
         } catch (NumberFormatException ignored) {
         }
         return null;
     }
 
-    private static boolean boolAt(JsonNode args, String key) {
+    private static boolean boolAt(Object args, String key) {
         if (args == null) {
             return false;
         }
-        JsonNode n = args.get(key);
-        return n != null && !n.isNull() && n.asBoolean(false);
+        return JsonCursor.of(args).path(key).asBoolean(false);
     }
 
-    private static String textAt(JsonNode node, String key) {
-        if (node == null || node.isNull()) {
-            return null;
-        }
-        JsonNode n = node.get(key);
-        return n == null || n.isNull() ? null : n.asText();
+    private static String textAt(Object node, String key) {
+        Object v = JsonCursor.of(node).path(key).value();
+        return v == null ? null : JsonCursor.of(v).asText();
     }
 
-    private static String error(JsonNode idNode, int code, String message) {
+    private static String error(Object idNode, int code, String message) {
         return "{\"jsonrpc\":\"2.0\",\"id\":" + idLiteral(idNode)
                 + ",\"error\":{\"code\":" + code
                 + ",\"message\":" + jsonLiteral(message)
@@ -392,14 +388,14 @@ public final class ZBotMcpServe {
      * id 原样回显：数字不加引号，字符串必须加引号。
      * 数字 id 被引号化（或反之）会让规范严格的 client 判成"响应配不上请求"。
      */
-    private static String idLiteral(JsonNode idNode) {
-        if (idNode == null || idNode.isNull()) {
+    private static String idLiteral(Object idNode) {
+        if (idNode == null) {
             return "null";
         }
-        if (idNode.isNumber() || idNode.isBoolean()) {
-            return idNode.asText().trim();
+        if (idNode instanceof Number || idNode instanceof Boolean) {
+            return String.valueOf(idNode).trim();
         }
-        return jsonLiteral(idNode.asText());
+        return jsonLiteral(String.valueOf(idNode));
     }
 
     /** 数字 id 原样进线（不加引号），其余按字符串转义。 */
@@ -408,16 +404,16 @@ public final class ZBotMcpServe {
             return raw;
         }
         try {
-            return JSON.writeValueAsString(raw == null ? "" : raw);
-        } catch (Exception e) {
+            return JsonUtil.toJson(raw == null ? "" : raw);
+        } catch (RuntimeException e) {
             return "\"\"";
         }
     }
 
     private static String write(Object v) {
         try {
-            return JSON.writeValueAsString(v);
-        } catch (Exception e) {
+            return JsonUtil.toJson(v);
+        } catch (RuntimeException e) {
             return "{\"unserializable\":\"" + e.getClass().getSimpleName() + "\"}";
         }
     }

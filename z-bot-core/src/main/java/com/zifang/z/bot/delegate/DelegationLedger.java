@@ -1,7 +1,7 @@
 package com.zifang.z.bot.delegate;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,7 +79,6 @@ public final class DelegationLedger {
     private static final Pattern KEYISH = Pattern.compile("(?i)\\bsk-[A-Za-z0-9_-]{8,}\\b");
 
     private final File root;
-    private final ObjectMapper mapper = new ObjectMapper();
     private final Object ioLock = new Object();
     private volatile boolean ok = true;
     private volatile String lastError = "";
@@ -192,8 +191,9 @@ public final class DelegationLedger {
             return null;
         }
         try {
-            JsonNode n = mapper.readTree(f);
-            return Entry.fromJson(n);
+            Object n = JsonUtil.parse(new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8));
+            return Entry.fromJson(JsonCursor.of(n));
         } catch (Exception ex) {
             LOG.debug("[delegate-ledger] state.json 解析失败 {}: {}", f, ex.getMessage());
             return null;
@@ -247,7 +247,10 @@ public final class DelegationLedger {
                     throw new IOException("mkdirs 失败: " + d);
                 }
                 w = new OutputStreamWriter(new FileOutputStream(tmp), UTF8);
-                mapper.writerWithDefaultPrettyPrinter().writeValue(w, e.toMap());
+                // 刻意用紧凑 toJson 而不是 toJsonPretty：z-util 1.2.2 的 prettyPrint 是按文本
+                // 重新缩进的（不是 JSON-aware），会把**字符串值里的冒号**也跟上一个空格 ——
+                // claim_token 形如 "cli:54353:1" 会被写成 "cli: 54353: 1"，读回来对不上凭证。
+                w.write(JsonUtil.toJson(e.toMap()));
                 w.close();
                 w = null;
                 try {
@@ -619,7 +622,7 @@ public final class DelegationLedger {
             return m;
         }
 
-        static Entry fromJson(JsonNode n) {
+        static Entry fromJson(JsonCursor n) {
             Entry e = new Entry(text(n, "id"));
             e.task = text(n, "task");
             e.label = text(n, "label");
@@ -640,13 +643,14 @@ public final class DelegationLedger {
             return e;
         }
 
-        private static String text(JsonNode n, String key) {
+        private static String text(JsonCursor n, String key) {
             return text(n, key, "");
         }
 
-        private static String text(JsonNode n, String key, String dflt) {
-            JsonNode v = n.path(key);
-            return v.isTextual() ? v.asText() : dflt;
+        /** 只认字符串形态：数字 / 布尔 / 对象一律回落缺省，与原先 {@code isTextual()} 判定一致。 */
+        private static String text(JsonCursor n, String key, String dflt) {
+            Object v = n.path(key).value();
+            return v instanceof String ? (String) v : dflt;
         }
 
         /** 现场年龄（以完成时刻为准，没完成就看最后一次更新）。 */

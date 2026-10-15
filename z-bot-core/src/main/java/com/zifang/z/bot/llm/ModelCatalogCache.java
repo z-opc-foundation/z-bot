@@ -1,9 +1,9 @@
 package com.zifang.z.bot.llm;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.model.JsonArray;
+import com.zifang.util.json.model.JsonObject;
 import com.zifang.z.agent.kernel.llm.Model;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,7 +31,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ModelCatalogCache {
 
     private static final Logger LOG = LoggerFactory.getLogger(ModelCatalogCache.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     /** 默认 TTL 5 分钟。 */
     public static final long DEFAULT_TTL_MS = 5 * 60_000L;
@@ -148,19 +147,20 @@ public final class ModelCatalogCache {
             return;
         }
         try {
-            JsonNode root = JSON.readTree(file);
+            String text = new String(Files.readAllBytes(file.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            JsonCursor root = JsonCursor.of(JsonUtil.parse(text));
             synchronized (this) {
-                for (java.util.Iterator<Map.Entry<String, JsonNode>> it = root.fields(); it.hasNext(); ) {
-                    Map.Entry<String, JsonNode> en = it.next();
-                    JsonNode v = en.getValue();
+                for (String providerCode : root.fieldNames()) {
+                    JsonCursor v = root.path(providerCode);
                     if (!v.has("models")) {
                         continue;
                     }
                     List<Model> models = new ArrayList<Model>();
-                    for (JsonNode m : v.get("models")) {
+                    for (JsonCursor m : v.path("models").elements()) {
                         models.add(fromJson(m));
                     }
-                    entries.put(en.getKey(), new CacheEntry(
+                    entries.put(providerCode, new CacheEntry(
                             Collections.unmodifiableList(models), v.path("fetchedAt").asLong(0L)));
                 }
             }
@@ -174,11 +174,13 @@ public final class ModelCatalogCache {
             return;
         }
         try {
-            ObjectNode root = JSON.createObjectNode();
+            JsonObject root = new JsonObject();
             for (Map.Entry<String, CacheEntry> en : entries.entrySet()) {
-                ObjectNode v = root.putObject(en.getKey());
+                JsonObject v = new JsonObject();
+                root.put(en.getKey(), v);
                 v.put("fetchedAt", en.getValue().fetchedAt);
-                ArrayNode arr = v.putArray("models");
+                JsonArray arr = new JsonArray();
+                v.put("models", arr);
                 for (Model m : en.getValue().models) {
                     arr.add(toJson(m));
                 }
@@ -188,7 +190,11 @@ public final class ModelCatalogCache {
                 parent.mkdirs();
             }
             File tmp = new File(file.getParentFile(), file.getName() + ".tmp");
-            JSON.writerWithDefaultPrettyPrinter().writeValue(tmp, root);
+            // 同 DelegationLedger：走紧凑 toJson。z-util 的 prettyPrint 不解析字符串字面量，
+            // 模型 id / provider 名里一旦带冒号（"openai:foo"）就会多出空格而读不回来。
+            Files.write(tmp.toPath(),
+                    JsonUtil.toJson(JsonUtil.toPlainValue(root)).getBytes(
+                            java.nio.charset.StandardCharsets.UTF_8));
             Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
         } catch (Exception e) {
@@ -196,23 +202,24 @@ public final class ModelCatalogCache {
         }
     }
 
-    private static ObjectNode toJson(Model m) {
-        ObjectNode n = JSON.createObjectNode();
+    private static JsonObject toJson(Model m) {
+        JsonObject n = new JsonObject();
         n.put("id", m.getId());
         n.put("displayName", m.getDisplayName());
         n.put("provider", m.getProvider());
         n.put("contextWindow", m.getContextWindow());
         n.put("maxOutputTokens", m.getMaxOutputTokens());
-        ArrayNode caps = n.putArray("capabilities");
+        JsonArray caps = new JsonArray();
+        n.put("capabilities", caps);
         for (Model.Capability c : m.getCapabilities()) {
             caps.add(c.name());
         }
         return n;
     }
 
-    private static Model fromJson(JsonNode n) {
+    private static Model fromJson(JsonCursor n) {
         List<Model.Capability> caps = new ArrayList<Model.Capability>();
-        for (JsonNode c : n.path("capabilities")) {
+        for (JsonCursor c : n.path("capabilities").elements()) {
             try {
                 caps.add(Model.Capability.valueOf(c.asText()));
             } catch (IllegalArgumentException ignored) {

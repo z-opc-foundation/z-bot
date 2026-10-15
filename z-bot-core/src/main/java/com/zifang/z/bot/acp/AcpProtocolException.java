@@ -1,8 +1,7 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.zifang.util.json.model.JsonArray;
+import com.zifang.util.json.model.JsonObject;
 
 /**
  * 一条要按 JSON-RPC error 回给对端的协议异常。
@@ -17,16 +16,16 @@ public class AcpProtocolException extends RuntimeException {
     private static final long serialVersionUID = 1L;
 
     private final int code;
-    private final JsonNode data;
-    private final transient JsonNode requestId;
+    private final Object data;
+    private final transient Object requestId;
 
-    public AcpProtocolException(int code, String message, JsonNode data, Throwable cause) {
+    public AcpProtocolException(int code, String message, Object data, Throwable cause) {
         this(code, message, data, cause, null);
     }
 
     /** 带 requestId 的构造：分派层知道该把 error 回给谁。 */
-    public AcpProtocolException(int code, String message, JsonNode data, Throwable cause,
-                                JsonNode requestId) {
+    public AcpProtocolException(int code, String message, Object data, Throwable cause,
+                                Object requestId) {
         super(message, cause);
         this.code = code;
         this.data = data;
@@ -46,9 +45,10 @@ public class AcpProtocolException extends RuntimeException {
      * 让客户端一眼看到自己拼错了哪个名字，而不是只收到一个裸码。
      */
     public static AcpProtocolException methodNotFound(String method) {
-        ObjectNode data = JsonRpc.object();
+        JsonObject data = JsonRpc.object();
         data.put("unknownMethod", method);
-        ArrayNode known = data.putArray("knownMethods");
+        JsonArray known = JsonRpc.array();
+        data.put("knownMethods", known);
         for (String m : AcpMethods.AGENT_METHODS) {
             known.add(m);
         }
@@ -58,7 +58,7 @@ public class AcpProtocolException extends RuntimeException {
 
     /** 已知但本期不实现：同一个码，文案里明说原因（见 EVIDENCE §未做）。 */
     public static AcpProtocolException notImplemented(String method, String why) {
-        ObjectNode data = JsonRpc.object();
+        JsonObject data = JsonRpc.object();
         data.put("method", method);
         data.put("status", "not-implemented-in-p25");
         return new AcpProtocolException(JsonRpc.METHOD_NOT_FOUND,
@@ -69,11 +69,11 @@ public class AcpProtocolException extends RuntimeException {
         return code;
     }
 
-    public JsonNode data() {
+    public Object data() {
         return data;
     }
 
-    public JsonNode requestId() {
+    public Object requestId() {
         return requestId;
     }
 }

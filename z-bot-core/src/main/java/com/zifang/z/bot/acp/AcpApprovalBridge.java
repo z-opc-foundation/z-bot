@@ -1,8 +1,8 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.model.JsonArray;
+import com.zifang.util.json.model.JsonObject;
 import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.tool.ApprovalService;
 
@@ -186,12 +186,12 @@ public final class AcpApprovalBridge {
         ApprovalService.Request head = pending.get(0);
 
         List<String> allowedOptionIds = new ArrayList<String>();
-        ObjectNode params = JsonRpc.object();
+        JsonObject params = JsonRpc.object();
         params.put("sessionId", session.acpSessionId());
-        params.set("toolCall", permissionToolCall(head, parsed));
-        params.set("options", buildOptions(head, offerAlways, allowedOptionIds));
+        params.put("toolCall", permissionToolCall(head, parsed));
+        params.put("options", buildOptions(head, offerAlways, allowedOptionIds));
 
-        JsonNode result = conn.requestClient(AcpMethods.SESSION_REQUEST_PERMISSION, params,
+        Object result = conn.requestClient(AcpMethods.SESSION_REQUEST_PERMISSION, params,
                 clientRequestTimeoutMillis(clientTimeoutMillis));
 
         ApprovalService.Resolution resolution = mapOutcome(result, allowedOptionIds);
@@ -208,19 +208,20 @@ public final class AcpApprovalBridge {
      * optionId → 四档。认不出来一律 {@link ApprovalService.Resolution#DENY}，
      * 与她 {@code permissions.py:98—107} 的保守映射同构（宁可少放行）。
      */
-    static ApprovalService.Resolution mapOutcome(JsonNode result, List<String> allowedOptionIds) {
+    static ApprovalService.Resolution mapOutcome(Object result, List<String> allowedOptionIds) {
         if (result == null) {
             return ApprovalService.Resolution.DENY;
         }
-        JsonNode outcome = result.get("outcome");
-        if (outcome == null || !outcome.isObject()) {
+        Object outcome = JsonCursor.of(result).path("outcome").value();
+        if (!JsonCursor.of(outcome).isObject()) {
             return ApprovalService.Resolution.DENY;
         }
-        String kind = text(outcome.get("outcome"), "");
+        JsonCursor outcomeCur = JsonCursor.of(outcome);
+        String kind = text(outcomeCur.path("outcome").value(), "");
         if (!"selected".equals(kind)) {
             return ApprovalService.Resolution.DENY; // cancelled / 未知 ⇒ 不执行
         }
-        String optionId = text(outcome.get("optionId"), "");
+        String optionId = text(outcomeCur.path("optionId").value(), "");
         if (!allowedOptionIds.contains(optionId)) {
             return ApprovalService.Resolution.DENY; // 对端编了个没给过它的选项
         }
@@ -237,14 +238,15 @@ public final class AcpApprovalBridge {
     }
 
     /** {@code ToolCallUpdate}（wire 字段 {@code toolCallId}/{@code title}/{@code kind}/{@code status}/{@code rawInput}）。 */
-    private static ObjectNode permissionToolCall(ApprovalService.Request head, ParsedWait parsed) {
-        ObjectNode call = JsonRpc.object();
+    private static JsonObject permissionToolCall(ApprovalService.Request head, ParsedWait parsed) {
+        JsonObject call = JsonRpc.object();
         call.put("toolCallId", "perm-check-" + head.id());
         call.put("title", head.toolName() + ": " + head.command());
         call.put("kind", "execute");
         call.put("status", "pending");
-        ArrayNode content = call.putArray("content");
-        ObjectNode text = JsonRpc.object();
+        JsonArray content = JsonRpc.array();
+        call.put("content", content);
+        JsonObject text = JsonRpc.object();
         text.put("type", "text");
         text.put("text", head.reason() == null ? parsed.reason : head.reason());
         content.add(text);
@@ -252,21 +254,21 @@ public final class AcpApprovalBridge {
         // AcpStreamPublisher 的 tool_call 帧共用同一个 parseJsonOrWrap：同一个 toolCall 在
         // "待批外送"和"执行中"两条帧里必须是同一个形状，否则 IDE 只能渲染其中一条。
         // z-bot 自己的记账字段（argsJson / approvalKey）挪进 _meta，不冒充协议的 rawInput。
-        call.set("rawInput", AcpStreamPublisher.parseJsonOrWrap(head.argsJson()));
+        call.put("rawInput", AcpStreamPublisher.parseJsonOrWrap(head.argsJson()));
         // requestId 只经 ApprovalService 拿得到：这条 meta 就是"桥真的接在 FIFO 上"的证据。
-        ObjectNode meta = JsonRpc.object();
+        JsonObject meta = JsonRpc.object();
         meta.put("approvalRequestId", head.id());
         meta.put("approvalSessionKey", head.sessionKey());
         meta.put("approvalArgsJson", head.argsJson() == null ? "" : head.argsJson());
         meta.put("approvalKey", head.approvalKey());
         meta.put("rule", head.rule());
-        call.set("_meta", meta);
+        call.put("_meta", meta);
         return call;
     }
 
-    private static ArrayNode buildOptions(ApprovalService.Request head, boolean offerAlways,
+    private static JsonArray buildOptions(ApprovalService.Request head, boolean offerAlways,
                                           List<String> allowedOptionIds) {
-        ArrayNode options = JsonRpc.array();
+        JsonArray options = JsonRpc.array();
         allowedOptionIds.clear();
         options.add(option(options, allowedOptionIds,
                 AcpMethods.OPTION_ALLOW_ONCE, "allow_once", "Allow once"));
@@ -282,10 +284,10 @@ public final class AcpApprovalBridge {
         return options;
     }
 
-    private static ObjectNode option(ArrayNode options, List<String> allowedOptionIds,
+    private static JsonObject option(JsonArray options, List<String> allowedOptionIds,
                                      String optionId, String kind, String name) {
         allowedOptionIds.add(optionId);
-        ObjectNode node = JsonRpc.object();
+        JsonObject node = JsonRpc.object();
         node.put("optionId", optionId);
         node.put("kind", kind);
         node.put("name", name);
@@ -297,7 +299,7 @@ public final class AcpApprovalBridge {
         return requested > 0L ? requested : AcpConnection.CLIENT_REQUEST_TIMEOUT_MILLIS;
     }
 
-    private static String text(JsonNode node, String fallback) {
-        return node == null || node.isNull() ? fallback : node.asText();
+    private static String text(Object node, String fallback) {
+        return node == null ? fallback : JsonCursor.of(node).asText();
     }
 }

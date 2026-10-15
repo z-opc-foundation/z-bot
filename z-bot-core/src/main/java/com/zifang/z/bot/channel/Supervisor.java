@@ -310,17 +310,15 @@ public final class Supervisor {
             return out;
         }
         try {
-            com.fasterxml.jackson.databind.JsonNode node =
-                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
-            com.fasterxml.jackson.databind.JsonNode boots = node.path("boots");
-            if (boots.isArray()) {
-                for (com.fasterxml.jackson.databind.JsonNode e : boots) {
-                    if (e.isNumber() || e.isTextual()) {
-                        out.add(Long.valueOf(e.asLong()));
-                    }
+            com.zifang.util.json.JsonCursor boots =
+                    com.zifang.util.json.JsonCursor.of(com.zifang.util.json.JsonUtil.parse(raw))
+                            .path("boots");
+            for (com.zifang.util.json.JsonCursor e : boots.elements()) {
+                if (e.value() instanceof Number || e.value() instanceof String) {
+                    out.add(Long.valueOf(e.asLong(0L)));
                 }
             }
-        } catch (IOException e) {
+        } catch (RuntimeException e) {
             // 坏文件 = 空账本（fail-open）
             LOG.debug("[supervisor] 熔断账本解析失败（按空处理）: {}", e.getMessage());
             return new ArrayList<Long>();

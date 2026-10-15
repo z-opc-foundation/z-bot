@@ -1,8 +1,8 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.model.JsonArray;
+import com.zifang.util.json.model.JsonObject;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.session.SessionManager;
 
@@ -100,75 +100,75 @@ public final class AcpAgentServer {
     public AcpAgentServer register() {
         conn.onRequest(AcpMethods.INITIALIZE, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return initialize(msg.params());
             }
         });
         conn.onRequest(AcpMethods.AUTHENTICATE, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return authenticate(msg.params());
             }
         });
         conn.onRequest(AcpMethods.SESSION_NEW, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return newSession(msg.params());
             }
         });
         conn.onRequest(AcpMethods.SESSION_LOAD, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return loadSession(msg.params(), false);
             }
         });
         conn.onRequest(AcpMethods.SESSION_RESUME, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return loadSession(msg.params(), true);
             }
         });
         conn.onRequest(AcpMethods.SESSION_LIST, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return listSessions(msg.params());
             }
         });
         conn.onRequest(AcpMethods.SESSION_PROMPT, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 startPrompt(c, msg);
                 return AcpConnection.ACP_ASYNC; // 工作线程回包
             }
         });
         conn.onRequest(AcpMethods.SESSION_SET_MODE, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return setSessionMode(msg.params());
             }
         });
         conn.onRequest(AcpMethods.SESSION_SET_MODEL, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return setSessionModel(msg.params());
             }
         });
         conn.onRequest(AcpMethods.SESSION_SET_CONFIG_OPTION, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return setConfigOption(msg.params());
             }
         });
         conn.onRequest(AcpMethods.SESSION_CLOSE, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 return closeSession(msg.params());
             }
         });
         // 已知但本期不实现：也要"大声"，不能让客户端以为成功了。
         conn.onRequest(AcpMethods.SESSION_FORK, new AcpConnection.AcpRequestHandler() {
             @Override
-            public JsonNode handle(AcpConnection c, JsonRpc.Message msg) {
+            public Object handle(AcpConnection c, JsonRpc.Message msg) {
                 throw AcpProtocolException.notImplemented(AcpMethods.SESSION_FORK,
                         "需要「复制历史到新会话」的落盘原语；BotAgent.forkFor 只派生空会话，"
                                 + "照它做会给出一个看不到父会话历史的假 fork（见 EVIDENCE §未做）");
@@ -202,31 +202,35 @@ public final class AcpAgentServer {
 
     // ---- initialize / authenticate ----
 
-    private JsonNode initialize(JsonNode params) {
-        int requested = params.path("protocolVersion").asInt(AcpMethods.PROTOCOL_VERSION);
+    private Object initialize(Object params) {
+        JsonCursor cur = JsonCursor.of(params);
+        int requested = cur.path("protocolVersion").asInt(AcpMethods.PROTOCOL_VERSION);
         if (requested != AcpMethods.PROTOCOL_VERSION) {
             // 版本不合就明说，别装成能聊（她 SDK 的 initialize 同样只回自己的版本）。
             throw new AcpProtocolException(JsonRpc.INVALID_PARAMS,
                     "unsupported protocolVersion " + requested + "，z-bot 实现 v"
                             + AcpMethods.PROTOCOL_VERSION + "（acp/meta.py:29）", null, null);
         }
-        JsonNode clientInfo = params.path("clientInfo");
-        clientInfo = clientInfo.isTextual() ? clientInfo : clientInfo.path("name");
-        clientInfo = clientInfo.isTextual() ? clientInfo : JsonRpc.mapper().nullNode();
-        this.clientInfo = clientInfo.isTextual() ? clientInfo.asText() : "unknown";
+        // clientInfo 可以是字符串，也可以是 {"name":…}；两种形态都要认，再兜底 "unknown"。
+        Object clientInfo = cur.path("clientInfo").value();
+        if (!(clientInfo instanceof String)) {
+            clientInfo = JsonCursor.of(clientInfo).path("name").value();
+        }
+        this.clientInfo = clientInfo instanceof String ? (String) clientInfo : "unknown";
         this.initialized = true;
 
-        ObjectNode result = JsonRpc.object();
+        JsonObject result = JsonRpc.object();
         result.put("protocolVersion", AcpMethods.PROTOCOL_VERSION);
-        ObjectNode info = JsonRpc.object();
+        JsonObject info = JsonRpc.object();
         info.put("name", AGENT_NAME);
         info.put("version", com.zifang.z.bot.agent.BotAgent.BOT_VERSION);
-        result.set("agentInfo", info);
-        result.set("agentCapabilities", capabilities());
+        result.put("agentInfo", info);
+        result.put("agentCapabilities", capabilities());
         if (!advertisedAuthMethods.isEmpty()) {
-            ArrayNode methods = result.putArray("authMethods");
+            JsonArray methods = JsonRpc.array();
+            result.put("authMethods", methods);
             for (String id : advertisedAuthMethods) {
-                ObjectNode m = JsonRpc.object();
+                JsonObject m = JsonRpc.object();
                 m.put("id", id);
                 m.put("name", "z-bot credential from config.properties");
                 methods.add(m);
@@ -239,22 +243,22 @@ public final class AcpAgentServer {
      * 能力声明只报真做得到的：{@code fork} 不声明（与 {@link #register()} 里那条
      * {@code notImplemented} 一致），否则客户端会照着能力表去调一个必然失败的方法。
      */
-    private ObjectNode capabilities() {
-        ObjectNode caps = JsonRpc.object();
+    private JsonObject capabilities() {
+        JsonObject caps = JsonRpc.object();
         caps.put("loadSession", true);
-        ObjectNode promptCaps = JsonRpc.object();
+        JsonObject promptCaps = JsonRpc.object();
         promptCaps.put("image", false);
         promptCaps.put("audio", false);
-        caps.set("promptCapabilities", promptCaps);
-        ObjectNode sessionCaps = JsonRpc.object();
-        sessionCaps.set("list", JsonRpc.object());
-        sessionCaps.set("resume", JsonRpc.object());
-        caps.set("sessionCapabilities", sessionCaps);
+        caps.put("promptCapabilities", promptCaps);
+        JsonObject sessionCaps = JsonRpc.object();
+        sessionCaps.put("list", JsonRpc.object());
+        sessionCaps.put("resume", JsonRpc.object());
+        caps.put("sessionCapabilities", sessionCaps);
         return caps;
     }
 
-    private JsonNode authenticate(JsonNode params) {
-        String methodId = params.path("methodId").asText("");
+    private Object authenticate(Object params) {
+        String methodId = JsonCursor.of(params).path("methodId").asText();
         if (methodId.isEmpty()) {
             throw AcpProtocolException.invalidParams("authenticate 需要 methodId（取自 initialize.authMethods）");
         }
@@ -269,10 +273,10 @@ public final class AcpAgentServer {
 
     // ---- 会话 ----
 
-    private JsonNode newSession(JsonNode params) {
-        String cwd = params.path("cwd").asText("");
+    private Object newSession(Object params) {
+        String cwd = JsonCursor.of(params).path("cwd").asText();
         AcpSessionRegistry.AcpSession session = registry.create(cwd);
-        ObjectNode result = JsonRpc.object();
+        JsonObject result = JsonRpc.object();
         result.put("sessionId", session.acpSessionId());
         attachSessionMeta(result, session);
         advertiseCommands(session);
@@ -317,15 +321,16 @@ public final class AcpAgentServer {
      * <p>ACP 规定 {@code session/load} 必须在响应<b>之前</b>把历史灌完
      * （她 {@code server.py:1196—1204} 的注释就是为此），这里同构。</p>
      */
-    private JsonNode loadSession(JsonNode params, boolean resume) {
+    private Object loadSession(Object params, boolean resume) {
         String sessionId = requireSessionId(params);
-        String cwd = params.path("cwd").asText("");
+        String cwd = JsonCursor.of(params).path("cwd").asText();
         AcpSessionRegistry.AcpSession session = registry.attach(cwd, sessionId);
         AcpStreamPublisher publisher = new AcpStreamPublisher(conn, session.acpSessionId());
         replayHistory(session, publisher);
-        ObjectNode result = JsonRpc.object();
+        JsonObject result = JsonRpc.object();
         if (!resume) {
-            result.putNull("models");
+            // ACP 规定这里必须显式给 "models": null（不是缺键）。
+            result.put("models", null);
         }
         attachSessionMeta(result, session);
         advertiseCommands(session);
@@ -374,30 +379,32 @@ public final class AcpAgentServer {
         return null;
     }
 
-    private JsonNode listSessions(JsonNode params) {
-        String cwdFilter = params.path("cwd").asText("");
-        ObjectNode result = JsonRpc.object();
-        ArrayNode sessions = result.putArray("sessions");
+    private Object listSessions(Object params) {
+        String cwdFilter = JsonCursor.of(params).path("cwd").asText();
+        JsonObject result = JsonRpc.object();
+        JsonArray sessions = JsonRpc.array();
+        result.put("sessions", sessions);
         for (AcpSessionRegistry.AcpSession s : registry.sessions()) {
             if (!cwdFilter.isEmpty() && !cwdFilter.equals(s.cwd())) {
                 continue;
             }
-            ObjectNode node = JsonRpc.object();
+            JsonObject node = JsonRpc.object();
             node.put("sessionId", s.acpSessionId());
             node.put("title", s.acpSessionId());
             node.put("updatedAt", java.time.Instant.ofEpochMilli(s.createdAtMillis()).toString());
             if (s.cwd() != null && !s.cwd().isEmpty()) {
                 node.put("cwd", s.cwd());
             }
-            ObjectNode meta = JsonRpc.object();
+            JsonObject meta = JsonRpc.object();
             meta.put("zbotSessionId", s.zbotSessionId());
             meta.put("model", s.target().model());
-            node.set("_meta", meta);
+            node.put("_meta", meta);
             sessions.add(node);
         }
-        result.putNull("nextCursor");
+        result.put("nextCursor", null);
         // 落盘但尚未被任何 ACP 句柄采纳的会话也要看得见，否则重启后客户端无从下手。
-        ArrayNode restorable = result.putArray("restorableZbotSessions");
+        JsonArray restorable = JsonRpc.array();
+        result.put("restorableZbotSessions", restorable);
         List<String> known = registry.knownZbotSessionIds();
         for (String id : known) {
             if (registry.byZbotSessionId(id) == null) {
@@ -407,10 +414,10 @@ public final class AcpAgentServer {
         return result;
     }
 
-    private JsonNode closeSession(JsonNode params) {
+    private Object closeSession(Object params) {
         String sessionId = requireSessionId(params);
         AcpSessionRegistry.AcpSession closed = registry.close(sessionId);
-        ObjectNode result = JsonRpc.object();
+        JsonObject result = JsonRpc.object();
         result.put("closed", true);
         result.put("sessionId", closed.acpSessionId());
         // 关的是连接句柄，落盘会话仍在：明说恢复路径，免得客户端以为记录没了。
@@ -418,9 +425,9 @@ public final class AcpAgentServer {
         return result;
     }
 
-    private JsonNode setSessionMode(JsonNode params) {
+    private Object setSessionMode(Object params) {
         String sessionId = requireSessionId(params);
-        String modeId = params.path("modeId").asText("");
+        String modeId = JsonCursor.of(params).path("modeId").asText();
         if (modeId.isEmpty()) {
             throw AcpProtocolException.invalidParams("session/set_mode 需要 modeId");
         }
@@ -431,14 +438,14 @@ public final class AcpAgentServer {
         }
         AcpSessionRegistry.AcpSession session = registry.resolve(sessionId);
         session.setModeId(modeId);
-        ObjectNode result = JsonRpc.object();
-        result.set("availableModes", modesArray(session));
+        JsonObject result = JsonRpc.object();
+        result.put("availableModes", modesArray(session));
         return result;
     }
 
-    private JsonNode setSessionModel(JsonNode params) {
+    private Object setSessionModel(Object params) {
         String sessionId = requireSessionId(params);
-        String modelId = params.path("modelId").asText("");
+        String modelId = JsonCursor.of(params).path("modelId").asText();
         if (modelId.isEmpty()) {
             throw AcpProtocolException.invalidParams("session/set_model 需要 modelId");
         }
@@ -452,8 +459,8 @@ public final class AcpAgentServer {
             throw AcpProtocolException.internal("set_model 之后 target 仍报 " 
                     + reconfigured.target().model() + "，不是请求的 " + modelId, null);
         }
-        ObjectNode result = JsonRpc.object();
-        result.set("models", modelsArray(reconfigured));
+        JsonObject result = JsonRpc.object();
+        result.put("models", modelsArray(reconfigured));
         return result;
     }
 
@@ -461,23 +468,29 @@ public final class AcpAgentServer {
      * {@code session/set_config_option}：本期只承接 {@code reasoning}（是否回推思考增量）
      * 这一条真有效果的开关，其余 config option 大声拒绝而不是收下不办事。
      */
-    private JsonNode setConfigOption(JsonNode params) {
+    private Object setConfigOption(Object params) {
         String sessionId = requireSessionId(params);
         registry.resolve(sessionId);
-        String optionId = params.path("configId").asText(params.path("optionId").asText(""));
-        String value = params.path("value").asText("");
+        JsonCursor cur = JsonCursor.of(params);
+        // ACP 里这格叫 configId，早期草案叫 optionId：前者缺失/为 null 时才回落后者。
+        Object rawOptionId = cur.path("configId").value();
+        if (rawOptionId == null) {
+            rawOptionId = cur.path("optionId").value();
+        }
+        String optionId = rawOptionId == null ? "" : String.valueOf(rawOptionId);
+        String value = cur.path("value").asText();
         if (!"reasoning".equals(optionId)) {
             throw AcpProtocolException.invalidParams("unknown config option: " + optionId
                     + "；本期只支持 reasoning");
         }
-        ObjectNode result = JsonRpc.object();
+        JsonObject result = JsonRpc.object();
         result.put("configId", optionId);
         result.put("value", "true".equalsIgnoreCase(value) ? "true" : "false");
         return result;
     }
 
-    private void cancel(JsonNode params) {
-        String sessionId = params.path("sessionId").asText("");
+    private void cancel(Object params) {
+        String sessionId = JsonCursor.of(params).path("sessionId").asText();
         if (sessionId.isEmpty()) {
             System.err.println("[acp] session/cancel 无 sessionId，忽略（通知不能回包）");
             return;
@@ -496,7 +509,7 @@ public final class AcpAgentServer {
     // ---- prompt ----
 
     private void startPrompt(final AcpConnection c, final JsonRpc.Message msg) {
-        final JsonNode params = msg.params();
+        final Object params = msg.params();
         final String sessionId = requireSessionId(params);
         final String text = promptText(params);
         final AcpSessionRegistry.AcpSession session;
@@ -536,9 +549,9 @@ public final class AcpAgentServer {
                 AcpApprovalBridge.Outcome outcome =
                         bridge.requestAndResolve(c, session, reply, offerAlways);
                 publishAsMessageChunks(publisher, outcome.toolOutput());
-                ObjectNode result = JsonRpc.object();
+                JsonObject result = JsonRpc.object();
                 result.put("stopReason", AcpMethods.STOP_END_TURN);
-                ObjectNode meta = JsonRpc.object();
+                JsonObject meta = JsonRpc.object();
                 meta.put("approvalResolution", outcome.resolution().name());
                 meta.put("approvalRequestId", outcome.request() == null ? "" : outcome.request().id());
                 meta.put("approvalTimedOut", outcome.timedOut());
@@ -546,7 +559,7 @@ public final class AcpAgentServer {
                 meta.put("continueHint", "z-bot 的待批语义是中断当前回合"
                         + "（agent/BotAgent.java:915—919），放行后工具已执行并把结果写进记忆；"
                         + "要让模型接着推，请再发一条 session/prompt");
-                result.set("_meta", meta);
+                result.put("_meta", meta);
                 c.respond(msg.id(), result);
                 return;
             }
@@ -562,7 +575,7 @@ public final class AcpAgentServer {
                 // 模型没走流式（或被工具轮吃掉）时补一帧，保证客户端至少看得到这一轮的文本。
                 publishAsMessageChunks(publisher, reply);
             }
-            ObjectNode result = JsonRpc.object();
+            JsonObject result = JsonRpc.object();
             String stopReason = reply.startsWith("已中止") ? AcpMethods.STOP_CANCELLED
                     : AcpMethods.STOP_END_TURN;
             result.put("stopReason", stopReason);
@@ -572,16 +585,16 @@ public final class AcpAgentServer {
                 if (done instanceof StreamEvent.Done) {
                     StreamEvent.Done d = (StreamEvent.Done) done;
                     if (d.promptTokens != null || d.completionTokens != null) {
-                        ObjectNode usage = JsonRpc.object();
+                        JsonObject usage = JsonRpc.object();
                         usage.put("inputTokens", d.promptTokens == null ? 0 : d.promptTokens);
                         usage.put("outputTokens", d.completionTokens == null ? 0 : d.completionTokens);
                         usage.put("totalTokens",
                                 (d.promptTokens == null ? 0 : d.promptTokens)
                                         + (d.completionTokens == null ? 0 : d.completionTokens));
-                        ObjectNode meta = JsonRpc.object();
-                        meta.set("usage", usage);
+                        JsonObject meta = JsonRpc.object();
+                        meta.put("usage", usage);
                         meta.put("totalSteps", d.totalSteps);
-                        result.set("_meta", meta);
+                        result.put("_meta", meta);
                     }
                 }
             }
@@ -605,23 +618,24 @@ public final class AcpAgentServer {
 
     // ---- 共用小料 ----
 
-    private void attachSessionMeta(ObjectNode result, AcpSessionRegistry.AcpSession session) {
-        result.set("modes", modesArray(session));
-        result.set("models", modelsArray(session));
-        ObjectNode meta = JsonRpc.object();
+    private void attachSessionMeta(JsonObject result, AcpSessionRegistry.AcpSession session) {
+        result.put("modes", modesArray(session));
+        result.put("models", modelsArray(session));
+        JsonObject meta = JsonRpc.object();
         meta.put("zbotSessionId", session.zbotSessionId());
         meta.put("approvalBridge", bridge.isEnabled() ? "attached" : "DISABLED");
-        result.set("_meta", meta);
+        result.put("_meta", meta);
     }
 
-    private ObjectNode modesArray(AcpSessionRegistry.AcpSession session) {
-        ObjectNode modes = JsonRpc.object();
+    private JsonObject modesArray(AcpSessionRegistry.AcpSession session) {
+        JsonObject modes = JsonRpc.object();
         String current = session.modeId() == null || session.modeId().isEmpty()
                 ? (availableModeIds.isEmpty() ? "" : availableModeIds.get(0)) : session.modeId();
         modes.put("currentModeId", current);
-        ArrayNode available = modes.putArray("availableModes");
+        JsonArray available = JsonRpc.array();
+        modes.put("availableModes", available);
         for (String id : availableModeIds) {
-            ObjectNode m = JsonRpc.object();
+            JsonObject m = JsonRpc.object();
             m.put("id", id);
             m.put("name", id);
             available.add(m);
@@ -629,18 +643,19 @@ public final class AcpAgentServer {
         return modes;
     }
 
-    private ObjectNode modelsArray(AcpSessionRegistry.AcpSession session) {
-        ObjectNode models = JsonRpc.object();
+    private JsonObject modelsArray(AcpSessionRegistry.AcpSession session) {
+        JsonObject models = JsonRpc.object();
         models.put("currentModelId", session.target().model());
-        ArrayNode available = models.putArray("availableModelIds");
+        JsonArray available = JsonRpc.array();
+        models.put("availableModelIds", available);
         for (String id : availableModelIds) {
             available.add(id);
         }
         return models;
     }
 
-    private static String requireSessionId(JsonNode params) {
-        String sessionId = params.path("sessionId").asText("");
+    private static String requireSessionId(Object params) {
+        String sessionId = JsonCursor.of(params).path("sessionId").asText();
         if (sessionId.isEmpty()) {
             throw AcpProtocolException.invalidParams("缺少 sessionId");
         }
@@ -648,23 +663,23 @@ public final class AcpAgentServer {
     }
 
     /** 从 {@code prompt:[{type:"text",text:…}]} 里取文本；非文本块明说被忽略（不许静默丢）。 */
-    static String promptText(JsonNode params) {
-        JsonNode prompt = params.path("prompt");
+    static String promptText(Object params) {
+        JsonCursor prompt = JsonCursor.of(params).path("prompt");
         StringBuilder sb = new StringBuilder();
         int skipped = 0;
         if (prompt.isArray()) {
-            for (JsonNode block : prompt) {
-                String type = block.path("type").asText("");
+            for (JsonCursor block : prompt.elements()) {
+                String type = block.path("type").asText();
                 if ("text".equals(type)) {
                     if (sb.length() > 0) {
                         sb.append('\n');
                     }
-                    sb.append(block.path("text").asText(""));
+                    sb.append(block.path("text").asText());
                 } else {
                     skipped++;
                 }
             }
-        } else if (prompt.isTextual()) {
+        } else if (prompt.isScalar()) {
             sb.append(prompt.asText());
         }
         if (skipped > 0) {

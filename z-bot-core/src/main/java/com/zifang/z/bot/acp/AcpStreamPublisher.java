@@ -1,8 +1,9 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.model.JsonArray;
+import com.zifang.util.json.model.JsonObject;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.slash.CommandCatalog;
@@ -193,7 +194,7 @@ public final class AcpStreamPublisher implements StreamListener {
      *       {@code :1104—1120} {@code UnstructuredCommandInput.hint} ⇒ 有参数提示时
      *       {@code "input": {"hint": "..."}}；无提示时省略 —— 与 hermes
      *       {@code acp_adapter/server.py:1699—1712}（{@code input_hint} 为假 ⇒ {@code input=None}）同形。</li>
-     *   <li>外层 {@code params = {sessionId, update}} —— 与本类 {@link #send(ObjectNode)} 已有的
+     *   <li>外层 {@code params = {sessionId, update}} —— 与本类 {@link #send(JsonObject)} 已有的
      *       五种 sessionUpdate 帧同一套包裹，不另造。</li>
      * </ul>
      *
@@ -204,9 +205,10 @@ public final class AcpStreamPublisher implements StreamListener {
      * 不让通知插到本会话的回包前面。</p>
      */
     public void sendAvailableCommands() {
-        ObjectNode update = JsonRpc.object();
+        JsonObject update = JsonRpc.object();
         update.put("sessionUpdate", AcpMethods.UPDATE_AVAILABLE_COMMANDS);
-        ArrayNode commands = update.putArray("availableCommands");
+        JsonArray commands = JsonRpc.array();
+        update.put("availableCommands", commands);
         for (CommandCatalog.Def d : CommandCatalog.defsFor(CommandCatalog.Endpoint.ACP)) {
             commands.add(commandNode(d.name(), d.description(), d.argsHint()));
         }
@@ -222,14 +224,14 @@ public final class AcpStreamPublisher implements StreamListener {
         send(update);
     }
 
-    private static ObjectNode commandNode(String name, String description, String argsHint) {
-        ObjectNode command = JsonRpc.object();
+    private static JsonObject commandNode(String name, String description, String argsHint) {
+        JsonObject command = JsonRpc.object();
         command.put("name", name);
         command.put("description", description == null ? "" : description);
         if (argsHint != null && !argsHint.isEmpty()) {
-            ObjectNode input = JsonRpc.object();
+            JsonObject input = JsonRpc.object();
             input.put("hint", argsHint);
-            command.set("input", input);
+            command.put("input", input);
         }
         return command;
     }
@@ -237,12 +239,12 @@ public final class AcpStreamPublisher implements StreamListener {
     // ---- 内部 ----
 
     private void emitChunk(String sessionUpdate, String text, boolean record) {
-        ObjectNode update = JsonRpc.object();
+        JsonObject update = JsonRpc.object();
         update.put("sessionUpdate", sessionUpdate);
-        ObjectNode content = JsonRpc.object();
+        JsonObject content = JsonRpc.object();
         content.put("type", "text");
         content.put("text", text == null ? "" : text);
-        update.set("content", content);
+        update.put("content", content);
         send(update);
         if (record) {
             synchronized (chunkTexts) {
@@ -262,9 +264,9 @@ public final class AcpStreamPublisher implements StreamListener {
             }
             q.addLast(id);
         }
-        ObjectNode update = baseToolCall(id, name, "pending");
+        JsonObject update = baseToolCall(id, name, "pending");
         update.put("status", "pending");
-        update.set("rawInput", parseJsonOrWrap(req.argumentsJson));
+        update.put("rawInput", parseJsonOrWrap(req.argumentsJson));
         send(update);
     }
 
@@ -280,24 +282,25 @@ public final class AcpStreamPublisher implements StreamListener {
             // 否则客户端会永远等一个不存在的 tool_call_update。
             id = "tc-orphan-" + (++sequence);
         }
-        ObjectNode update = JsonRpc.object();
+        JsonObject update = JsonRpc.object();
         update.put("sessionUpdate", AcpMethods.UPDATE_TOOL_CALL_UPDATE);
         update.put("toolCallId", id);
         update.put("status", res.success ? "completed" : "failed");
         if (res.error != null) {
-            ArrayNode content = update.putArray("content");
-            ObjectNode text = JsonRpc.object();
+            JsonArray content = JsonRpc.array();
+            update.put("content", content);
+            JsonObject text = JsonRpc.object();
             text.put("type", "text");
             text.put("text", res.error);
             content.add(text);
         }
-        update.set("rawOutput", res.result == null ? JsonRpc.object()
+        update.put("rawOutput", res.result == null ? JsonRpc.object()
                 : parseJsonOrWrap(String.valueOf(res.result)));
         send(update);
     }
 
-    private ObjectNode baseToolCall(String id, String name, String status) {
-        ObjectNode update = JsonRpc.object();
+    private JsonObject baseToolCall(String id, String name, String status) {
+        JsonObject update = JsonRpc.object();
         update.put("sessionUpdate", AcpMethods.UPDATE_TOOL_CALL);
         update.put("toolCallId", id);
         update.put("title", name);
@@ -312,28 +315,29 @@ public final class AcpStreamPublisher implements StreamListener {
      * {@code session/update} 必须走同一个函数 —— 同一个 toolCall 在两条帧里给出两种形状，
      * IDE 端就只能挑一条渲染（她 SDK 的 {@code acp/helpers.py:226,247} 就是"rawInput 即真入参对象"）。</p>
      */
-    static JsonNode parseJsonOrWrap(String raw) {
+    static Object parseJsonOrWrap(String raw) {
         if (raw == null || raw.isEmpty()) {
             return JsonRpc.object();
         }
         try {
-            JsonNode node = JsonRpc.mapper().readTree(raw);
-            if (node.isObject() || node.isArray()) {
+            Object node = JsonUtil.parse(raw);
+            JsonCursor cur = JsonCursor.of(node);
+            if (cur.isObject() || cur.isArray()) {
                 return node;
             }
-        } catch (java.io.IOException ignored) {
+        } catch (RuntimeException ignored) {
             // 工具参数/输出不是 JSON 是常态（exec 的 stdout），下面包成文本。
         }
-        ObjectNode wrapper = JsonRpc.object();
+        JsonObject wrapper = JsonRpc.object();
         wrapper.put("text", raw);
         return wrapper;
     }
 
-    private void send(ObjectNode update) {
-        String sessionUpdate = update.path("sessionUpdate").asText("");
-        ObjectNode params = JsonRpc.object();
+    private void send(JsonObject update) {
+        String sessionUpdate = JsonCursor.of(update).path("sessionUpdate").asText();
+        JsonObject params = JsonRpc.object();
         params.put("sessionId", acpSessionId);
-        params.set("update", update);
+        params.put("update", update);
         conn.notify(AcpMethods.SESSION_UPDATE, params);
         synchronized (emittedSessionUpdates) {
             emittedSessionUpdates.add(sessionUpdate);

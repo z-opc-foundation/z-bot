@@ -1,7 +1,5 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
-
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -43,7 +41,7 @@ public final class AcpConnection {
 
     /** 一个请求的处理者。同步回包用 {@code return}，异步（prompt 那种长跑）自己调 respond/fail。 */
     public interface AcpRequestHandler {
-        JsonNode handle(AcpConnection conn, JsonRpc.Message msg) throws Exception;
+        Object handle(AcpConnection conn, JsonRpc.Message msg) throws Exception;
     }
 
     public interface AcpNotificationHandler {
@@ -193,7 +191,7 @@ public final class AcpConnection {
             return;
         }
         try {
-            JsonNode result = handler.handle(this, msg);
+            Object result = handler.handle(this, msg);
             if (result != ACP_ASYNC) {
                 respond(msg.id(), result);
                 // 回包已经写出去了，这时才补发"会话建立之后"的通知 —— 对齐 hermes
@@ -256,14 +254,20 @@ public final class AcpConnection {
     }
 
     /** 异步处理标记：handler 已经自己接管了这条请求的应答权。 */
-    public static final JsonNode ACP_ASYNC = JsonRpc.object().put("__acp_async__", Boolean.TRUE);
+    public static final Object ACP_ASYNC = acpAsync();
+
+    private static Object acpAsync() {
+        com.zifang.util.json.model.JsonObject marker = JsonRpc.object();
+        marker.put("__acp_async__", Boolean.TRUE);
+        return marker;
+    }
 
     /** handler 异步完成后自己回包。 */
-    public void respond(JsonNode id, JsonNode result) {
+    public void respond(Object id, Object result) {
         send(JsonRpc.response(id, result));
     }
 
-    public void fail(JsonNode id, AcpProtocolException e) {
+    public void fail(Object id, AcpProtocolException e) {
         send(JsonRpc.error(id, e.code(), e.getMessage(), e.data()));
     }
 
@@ -274,7 +278,7 @@ public final class AcpConnection {
      *
      * @return 响应的 {@code result}；超时或对端报错时返回 {@code null}（调用方须按"未放行"处理）
      */
-    public JsonNode requestClient(String method, JsonNode params, long timeoutMillis) {
+    public Object requestClient(String method, Object params, long timeoutMillis) {
         String id = "z-bot-" + outboundIds.incrementAndGet();
         PendingCall call = new PendingCall();
         outbound.put(id, call);
@@ -295,7 +299,7 @@ public final class AcpConnection {
     }
 
     /** 发一条通知（{@code session/update} 走这里）。 */
-    public void notify(String method, JsonNode params) {
+    public void notify(String method, Object params) {
         send(JsonRpc.notification(method, params));
     }
 
@@ -335,6 +339,6 @@ public final class AcpConnection {
 
     private static final class PendingCall {
         private final CountDownLatch latch = new CountDownLatch(1);
-        private volatile JsonNode result;
+        private volatile Object result;
     }
 }

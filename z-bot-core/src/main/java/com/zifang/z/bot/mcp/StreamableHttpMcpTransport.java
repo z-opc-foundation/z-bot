@@ -1,6 +1,6 @@
 package com.zifang.z.bot.mcp;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.zifang.util.json.JsonCursor;
 import com.zifang.z.agent.kernel.mcp.McpTransport;
 import com.zifang.z.bot.BuildInfo;
 import org.slf4j.Logger;
@@ -171,9 +171,9 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
             sessionId = sid;
         }
         String payload = reply.isSse() ? firstDataFrame(reply.body) : reply.body;
-        JsonNode node = McpWire.read(payload);
-        JsonNode result = node == null ? null : node.get("result");
-        if (result == null || result.isNull()) {
+        Object node = McpWire.read(payload);
+        Object result = node == null ? null : JsonCursor.of(node).path("result").value();
+        if (result == null || JsonCursor.of(result).isNull()) {
             throw new IOException("mcp initialize 没有 result: "
                     + SecretRedaction.scrub(McpWire.abbreviate(payload, 200), options.headers));
         }
@@ -181,18 +181,18 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
         if (echoedId == null || echoedId.longValue() != id) {
             throw new IOException("mcp initialize 响应 id 不匹配：发 " + id + " 收到 " + echoedId);
         }
-        JsonNode pv = result.get("protocolVersion");
-        serverProtocolVersion = pv == null ? null : pv.asText();
+        JsonCursor resultCur = JsonCursor.of(result);
+        serverProtocolVersion = text(resultCur.path("protocolVersion").value());
         negotiatedProtocolVersion = serverProtocolVersion == null
                 ? McpWire.PROTOCOL_VERSION : serverProtocolVersion;
-        JsonNode caps = result.get("capabilities");
-        JsonNode toolsCap = caps == null ? null : caps.get("tools");
-        JsonNode lc = toolsCap == null ? null : toolsCap.get("listChanged");
-        peerAdvertisesListChanged = lc != null && lc.asBoolean(false);
-        JsonNode si = result.get("serverInfo");
-        if (si != null && si.isObject()) {
-            serverInfoName = text(si.get("name"));
-            serverInfoVersion = text(si.get("version"));
+        Object caps = resultCur.path("capabilities").value();
+        Object toolsCap = JsonCursor.of(caps).path("tools").value();
+        Object lc = JsonCursor.of(toolsCap).path("listChanged").value();
+        peerAdvertisesListChanged = JsonCursor.of(lc).asBoolean(false);
+        Object si = resultCur.path("serverInfo").value();
+        if (JsonCursor.of(si).isObject()) {
+            serverInfoName = text(JsonCursor.of(si).path("name").value());
+            serverInfoVersion = text(JsonCursor.of(si).path("version").value());
         }
         opened = true;
 
@@ -231,7 +231,7 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
             return pickFromSse(reply.body, id.longValue());
         }
         jsonShapeResponses.incrementAndGet();
-        JsonNode node = McpWire.read(reply.body);
+        Object node = McpWire.read(reply.body);
         Long echoed = McpWire.idOf(node);
         if (echoed == null || echoed.longValue() != id.longValue()) {
             throw new IOException("mcp 响应 id 不匹配：发 " + id + " 收到 " + echoed
@@ -355,8 +355,8 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
 
     private static final String ACCEPT_KEY = "Accept";
 
-    private String text(JsonNode n) {
-        return n == null || n.isNull() ? null : n.asText();
+    private String text(Object n) {
+        return n == null ? null : JsonCursor.of(n).asText();
     }
 
     private void noteWire(String line) {
@@ -455,7 +455,7 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
     }
 
     private static String methodOf(String json) {
-        JsonNode node = McpWire.read(json);
+        Object node = McpWire.read(json);
         return McpWire.methodOf(node);
     }
 
@@ -473,7 +473,7 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
     private String pickFromSse(String sse, long wantId) throws IOException {
         List<String> frames = sseFrames(sse);
         for (String frame : frames) {
-            JsonNode node = McpWire.read(frame);
+            Object node = McpWire.read(frame);
             Long id = McpWire.idOf(node);
             if (id != null && id.longValue() == wantId) {
                 return frame.trim();
@@ -605,7 +605,7 @@ public final class StreamableHttpMcpTransport implements McpTransport, McpNotifi
     }
 
     private void onFrame(String frame) {
-        JsonNode node = McpWire.read(frame);
+        Object node = McpWire.read(frame);
         String method = McpWire.methodOf(node);
         if (method == null) {
             return;

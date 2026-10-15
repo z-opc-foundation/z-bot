@@ -1,12 +1,13 @@
 package com.zifang.z.bot.acp;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.zifang.z.bot.tool.ApprovalService;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -354,14 +355,25 @@ public class AcpApprovalBridgeTest {
                 AcpApprovalBridge.mapOutcome(selected("allow_always_4ever"), allowed));
         assertEquals(ApprovalService.Resolution.DENY, AcpApprovalBridge.mapOutcome(null, allowed));
         assertEquals(ApprovalService.Resolution.DENY,
-                AcpApprovalBridge.mapOutcome(JsonRpc.object().put("outcome", JsonRpc.object()), allowed));
+                AcpApprovalBridge.mapOutcome(emptyOutcome(), allowed));
     }
 
-    private static JsonNode selected(String optionId) {
-        ObjectNode node = JsonRpc.object();
-        ObjectNode outcome = node.putObject("outcome");
+    // 「去 Jackson」第 1 档把 mapOutcome 的入参从 JsonNode 换成了 plain Object（JsonUtil.parse
+    // 的产物形态：LinkedHashMap/ArrayList/标量）。夹具跟着改造成 plain map，断言口径不变；
+    // Jackson 树在这里已经不被识别（JsonCursor 只认 JsonObject/Map/List），留着只会静默 DENY。
+    private static Map<String, Object> emptyOutcome() {
+        Map<String, Object> outcome = new LinkedHashMap<String, Object>();
+        Map<String, Object> node = new LinkedHashMap<String, Object>();
+        node.put("outcome", outcome);
+        return node;
+    }
+
+    private static Map<String, Object> selected(String optionId) {
+        Map<String, Object> outcome = new LinkedHashMap<String, Object>();
         outcome.put("outcome", "selected");
         outcome.put("optionId", optionId);
+        Map<String, Object> node = new LinkedHashMap<String, Object>();
+        node.put("outcome", outcome);
         return node;
     }
 
