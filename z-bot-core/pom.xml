@@ -103,6 +103,15 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- 「去 Jackson」campaign 第 0 档：测试里的 ObjectMapper 已换成 JsonUtil。
+             只挂 test scope —— src/main 本轮不动，生产侧暂时还不需要它；
+             等 src/main 也切完再把它抬成 compile。版本由根 pom 的 dependencyManagement 钉 1.1.1。 -->
+        <dependency>
+            <groupId>io.github.yuku123</groupId>
+            <artifactId>z-util-parser-json</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- CLI 命令解析（地板与 fleet 都不管 info.picocli ⇒ 面值 4.7.6 留着） -->
         <dependency>
             <groupId>info.picocli</groupId>

@@ -1,7 +1,5 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zifang.z.agent.kernel.llm.ChatCompletionsRequest;
 import com.zifang.z.agent.kernel.llm.ChatCompletionsResponse;
 import com.zifang.z.agent.kernel.llm.LlmProvider;
@@ -10,6 +8,7 @@ import com.zifang.z.agent.kernel.types.TokenUsage;
 import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.session.SessionManager;
 import com.zifang.z.bot.tool.Sandbox;
+import com.zifang.util.json.JsonUtil;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -38,7 +37,6 @@ import static org.junit.Assert.fail;
  */
 public class DingTalkOutboundTest {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
     private static final String ACCESS_SENTINEL = "0123456789abcdef0123456789abcdef-leakcanary";
     private static final String SECRET_SENTINEL = "SECleakcanary0123456789abcdefghij";
 
@@ -91,8 +89,7 @@ public class DingTalkOutboundTest {
         String sent = URLDecoder.decode(r.query.get("sign"), "UTF-8");
         assertEquals("sign 就是 base64(HMAC-SHA256(secret, ts + \"\\n\" + secret))", expected, sent);
 
-        Map<String, Object> body = JSON.readValue(r.body, new TypeReference<Map<String, Object>>() {
-        });
+        Map<String, Object> body = plainMap(r.body);
         assertEquals("text", body.get("msgtype"));
         assertEquals("真出站测试", asMap(body.get("text")).get("content"));
     }
@@ -127,9 +124,7 @@ public class DingTalkOutboundTest {
     @Test
     public void errorMessageAddsAtUsersAndStillSends() throws Exception {
         signed().send(OutboundMessage.error("chat_9", "Error: 炸了"));
-        Map<String, Object> body = JSON.readValue(lastPost().body,
-                new TypeReference<Map<String, Object>>() {
-                });
+        Map<String, Object> body = plainMap(lastPost().body);
         assertEquals("text", body.get("msgtype"));
         assertTrue("错误回执要 @ 到会坏的那会话：" + body, body.containsKey("at"));
         assertEquals(Collections.singletonList("chat_9"), (List<?>) asMap(body.get("at")).get("atUserIds"));
@@ -329,9 +324,7 @@ public class DingTalkOutboundTest {
             while ((n = is.read(buf)) != -1) {
                 baos.write(buf, 0, n);
             }
-            return JSON.readValue(new String(baos.toByteArray(), StandardCharsets.UTF_8),
-                    new TypeReference<Map<String, Object>>() {
-                    });
+            return plainMap(new String(baos.toByteArray(), StandardCharsets.UTF_8));
         }
     }
 
@@ -347,6 +340,13 @@ public class DingTalkOutboundTest {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> asMap(Object v) {
         return (Map<String, Object>) v;
+    }
+
+    /** 契约测试用：把响应体读成 plain 的有序 Map（嵌套层同样是 Map/List）。 */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> plainMap(String json) {
+        Object node = JsonUtil.toPlainValue(JsonUtil.parse(json));
+        return node instanceof Map ? (Map<String, Object>) node : null;
     }
 
     private static String sign(String timestamp, String secret) throws Exception {

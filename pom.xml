@@ -100,6 +100,32 @@
 
     <dependencyManagement>
         <dependencies>
+            <!--
+                「去 Jackson」campaign 第 0 档（只动 src/test）：把测试里的 ObjectMapper 换成
+                自研 JsonUtil。JsonUtil.parse / JsonUtil.toPlainValue 这套 API 是 z-util 1.1.1
+                才有的，而本仓的 z-util 面值被 z-boot BOM 钉在 **1.0.19** ⇒ 必须在这里抬。
+                三格同笔钉的原因：parser-json 1.1.1 的 pom 依赖 dsl-kernel 1.1.1，而
+                dependencyManagement 对**传递依赖**同样生效 —— 只钉 parser-json，dsl-kernel 会被
+                BOM 反向压回 1.0.19，运行期就裂成"新解析器 + 旧 DSL 内核"的版本错配。
+                z-util-core 一并钉住，防的是同一类问题（parser-json 未来引入 core 传递边时
+                又被压回 1.0.19）。加完必须用 dependency:tree 实测三格真的是 1.1.1。
+            -->
+            <dependency>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-util-core</artifactId>
+                <version>1.1.1</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-util-parser-json</artifactId>
+                <version>1.1.1</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.yuku123</groupId>
+                <artifactId>z-util-dsl-kernel</artifactId>
+                <version>1.1.1</version>
+            </dependency>
+
             <!-- 自家 3 个 reactor 坐标钉 ${project.version}。继承来的 DM 会改写**传递依赖**的版本，
                  而 fleet 里 z-bot 那格钉的是 repo1 已发布的那一版（2026-10-01 现读 `z-boot-fleet:1.0.1`
                  是 `z-bot.version=0.2.0`；本仓 revision 已抬到 0.2.1 ⇒ 永远滞后一格）⇒ 任何
