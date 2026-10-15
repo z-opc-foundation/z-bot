@@ -1,6 +1,7 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 import com.zifang.z.bot.tool.ApprovalService;
 import org.junit.Test;
 
@@ -82,8 +83,9 @@ public class AcpApprovalBridgeTest {
 
     /** 出向请求的 id 是字符串（{@code z-bot-N}），回帧必须原样带引号回去。 */
     private static String idLiteral(String permissionFrame) {
-        JsonNode id = child(permissionFrame, "id");
-        return id.isTextual() ? "\"" + id.asText() + "\"" : id.toString();
+        JsonCursor id = child(permissionFrame, "id");
+        Object raw = id.value();
+        return raw instanceof String ? "\"" + raw + "\"" : id.toString();
     }
 
     // ---- 外送链路 ----
@@ -100,9 +102,9 @@ public class AcpApprovalBridgeTest {
         List<String> frames = f.recorder.awaitFrames(1, 3000L);
         String permission = permissionRequest(frames);
         assertNotNull("必须有 session/request_permission 帧（桥没接上就不会有）", permission);
-        JsonNode params = child(permission, "params");
+        JsonCursor params = child(permission, "params");
         assertEquals(f.acpId, params.path("sessionId").asText());
-        JsonNode call = params.path("toolCall");
+        JsonCursor call = params.path("toolCall");
         assertTrue("toolCallId 要钉在 ApprovalService 的 requestId 上: " + call.path("toolCallId").asText(),
                 call.path("toolCallId").asText().startsWith("perm-check-"));
         String requestId = call.path("_meta").path("approvalRequestId").asText();
@@ -116,12 +118,12 @@ public class AcpApprovalBridgeTest {
         assertEquals("pending", call.path("status").asText());
 
         // 选项集 = z-bot 的四档，optionId 沿用她的稳定命名。
-        JsonNode options = params.path("options");
+        JsonCursor options = params.path("options");
         assertEquals(Arrays.asList("allow_once", "allow_session", "allow_always", "deny"),
                 optionIds(options));
-        assertEquals("allow_once", options.get(0).path("optionId").asText());
-        assertEquals("allow_once", options.get(0).path("kind").asText());
-        assertEquals("reject_once", options.get(3).path("kind").asText());
+        assertEquals("allow_once", options.at(0).path("optionId").asText());
+        assertEquals("allow_once", options.at(0).path("kind").asText());
+        assertEquals("reject_once", options.at(3).path("kind").asText());
     }
 
     @Test
@@ -136,7 +138,7 @@ public class AcpApprovalBridgeTest {
 
         f.conn.handleLine(optionIdOf(permission, AcpMethods.OPTION_ALLOW_ONCE));
 
-        JsonNode result = child(awaitPromptReply(f, 43), "result");
+        JsonCursor result = child(awaitPromptReply(f, 43), "result");
         awaitQueueDrained(f.target, 3000L);
         assertEquals("队列必须被消费掉", 0, f.target.pendingApprovals().size());
         assertEquals(Arrays.asList(ApprovalService.Resolution.ONCE), f.target.resolutionsSeen);
@@ -145,7 +147,7 @@ public class AcpApprovalBridgeTest {
         assertEquals(permissionRequestMeta(permission),
                 result.path("_meta").path("approvalRequestId").asText());
         assertTrue("z-bot 的待批语义是中断当前回合，必须告诉客户端怎么继续",
-                result.path("_meta").path("turnInterruptedByApproval").asBoolean());
+                result.path("_meta").path("turnInterruptedByApproval").asBoolean(false));
         assertTrue(result.path("_meta").path("continueHint").asText().contains("session/prompt"));
         assertFalse("WAIT_CONFIRM 原文不许泄漏给客户端",
                 f.recorder.lines().toString().contains("WAIT_CONFIRM"));
@@ -309,9 +311,9 @@ public class AcpApprovalBridgeTest {
         String promptReply = awaitPromptReply(f, 70);
         List<String> frames = f.recorder.lines();
         assertEquals("桥摘掉后不许再有权责外的外送帧", -1, frames.toString().indexOf("request_permission"));
-        JsonNode error = child(promptReply, "error");
-        assertFalse("桥不在了绝不能当成功回包", error.isMissingNode());
-        assertEquals(-32603, error.path("code").asInt());
+        JsonCursor error = child(promptReply, "error");
+        assertFalse("桥不在了绝不能当成功回包", error.isMissing());
+        assertEquals(-32603, error.path("code").asInt(0));
         assertTrue(error.path("message").asText().contains("AcpApprovalBridge"));
         assertEquals("队列必须还堵着 —— 这正是'别另起一套审批'的可测形式",
                 1, f.target.pendingApprovals().size());
@@ -358,7 +360,7 @@ public class AcpApprovalBridgeTest {
                 AcpApprovalBridge.mapOutcome(emptyOutcome(), allowed));
     }
 
-    // 「去 Jackson」第 1 档把 mapOutcome 的入参从 JsonNode 换成了 plain Object（JsonUtil.parse
+    // 「去 Jackson」第 1 档把 mapOutcome 的入参从 JsonCursor 换成了 plain Object（JsonUtil.parse
     // 的产物形态：LinkedHashMap/ArrayList/标量）。夹具跟着改造成 plain map，断言口径不变；
     // Jackson 树在这里已经不被识别（JsonCursor 只认 JsonObject/Map/List），留着只会静默 DENY。
     private static Map<String, Object> emptyOutcome() {
@@ -407,22 +409,22 @@ public class AcpApprovalBridgeTest {
 
     // ---- 小料 ----
 
-    private static List<String> optionIds(JsonNode options) {
+    private static List<String> optionIds(JsonCursor options) {
         List<String> ids = new java.util.ArrayList<String>();
-        for (JsonNode o : options) {
+        for (JsonCursor o : options.elements()) {
             ids.add(o.path("optionId").asText());
         }
         return ids;
     }
 
-    private static JsonNode child(String json, String... path) {
+    private static JsonCursor child(String json, String... path) {
         try {
-            JsonNode node = JsonRpc.mapper().readTree(json);
+            JsonCursor node = JsonCursor.of(JsonUtil.parse(json));
             for (String p : path) {
                 node = node.path(p);
             }
             return node;
-        } catch (java.io.IOException e) {
+        } catch (RuntimeException e) {
             throw new AssertionError("帧不是合法 JSON: " + json, e);
         }
     }

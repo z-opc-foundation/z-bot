@@ -35,18 +35,6 @@ public final class JsonRpc {
     private JsonRpc() {
     }
 
-    /**
-     * 「去 Jackson」第 1 档后 src/main 已不再用 Jackson。这一格只为**尚未迁移的 src/test**
-     * 留着（acp 包 4 个测试类仍按 Jackson 树断言报文形态）；它们迁完就把本方法连同
-     * z-bot-core 的 jackson-databind 一起退场。
-     */
-    public static com.fasterxml.jackson.databind.ObjectMapper mapper() {
-        return LEGACY_JACKSON;
-    }
-
-    private static final com.fasterxml.jackson.databind.ObjectMapper LEGACY_JACKSON =
-            new com.fasterxml.jackson.databind.ObjectMapper();
-
     /** 一条已解析的报文（请求 / 通知 / 响应三态合一，按字段是否有值区分）。 */
     public static final class Message {
 

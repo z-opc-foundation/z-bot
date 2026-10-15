@@ -1,6 +1,7 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -62,15 +63,15 @@ public class AcpProtocolSurfaceTest {
 
         String frame = recorder.last();
         assertNotNull("未知方法必须有回帧", frame);
-        JsonNode node = parse(frame);
-        assertEquals("要带原 id", 7, node.path("id").asInt());
-        JsonNode error = node.path("error");
-        assertFalse("不许静默忽略", error.isMissingNode());
-        assertEquals(-32601, error.path("code").asInt());
+        JsonCursor node = parse(frame);
+        assertEquals("要带原 id", 7, node.path("id").asInt(0));
+        JsonCursor error = node.path("error");
+        assertFalse("不许静默忽略", error.isMissing());
+        assertEquals(-32601, error.path("code").asInt(0));
         assertTrue("文案要点名方法名: " + error.path("message").asText(),
                 error.path("message").asText().contains("session/promt"));
         List<String> known = new java.util.ArrayList<String>();
-        for (JsonNode m : error.path("data").path("knownMethods")) {
+        for (JsonCursor m : error.path("data").path("knownMethods").elements()) {
             known.add(m.asText());
         }
         assertEquals("data.knownMethods 必须是协议全集，帮客户端一眼看出拼错", 13, known.size());
@@ -86,8 +87,8 @@ public class AcpProtocolSurfaceTest {
 
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"session/fork\",\"params\":"
                 + "{\"sessionId\":\"acp-x\",\"cwd\":\"\"}}");
-        JsonNode error = parse(recorder.last()).path("error");
-        assertEquals(-32601, error.path("code").asInt());
+        JsonCursor error = parse(recorder.last()).path("error");
+        assertEquals(-32601, error.path("code").asInt(0));
         assertEquals("not-implemented-in-p25", error.path("data").path("status").asText());
         assertTrue("未实现要说清是哪条方法: " + error.path("message").asText(),
                 error.path("message").asText().contains("session/fork"));
@@ -114,14 +115,14 @@ public class AcpProtocolSurfaceTest {
                 new AcpApprovalBridge()).register();
 
         conn.handleLine("{not json at all");
-        JsonNode error = parse(recorder.last()).path("error");
-        assertEquals(-32700, error.path("code").asInt());
+        JsonCursor error = parse(recorder.last()).path("error");
+        assertEquals(-32700, error.path("code").asInt(0));
 
         recorder.clear();
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":3}");
         error = parse(recorder.last()).path("error");
-        assertEquals(-32600, error.path("code").asInt());
-        assertEquals(3, parse(recorder.last()).path("id").asInt());
+        assertEquals(-32600, error.path("code").asInt(0));
+        assertEquals(3, parse(recorder.last()).path("id").asInt(0));
     }
 
     // ---- initialize ----
@@ -136,19 +137,19 @@ public class AcpProtocolSurfaceTest {
 
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{"
                 + "\"protocolVersion\":1,\"clientInfo\":{\"name\":\"zed\"}}}");
-        JsonNode result = parse(recorder.last()).path("result");
+        JsonCursor result = parse(recorder.last()).path("result");
         assertTrue(server.isInitialized());
-        assertEquals(1, result.path("protocolVersion").asInt());
+        assertEquals(1, result.path("protocolVersion").asInt(0));
         assertEquals("z-bot", result.path("agentInfo").path("name").asText());
         assertTrue(result.path("agentInfo").path("version").asText().startsWith("z-bot/"));
         assertTrue("loadSession 真做了 ⇒ 才敢声明",
-                result.path("agentCapabilities").path("loadSession").asBoolean());
+                result.path("agentCapabilities").path("loadSession").asBoolean(false));
         assertFalse("session/fork 未实现 ⇒ 不许在能力表里撒谎",
                 result.path("agentCapabilities").path("sessionCapabilities").has("fork"));
         assertTrue(result.path("agentCapabilities").path("sessionCapabilities").has("list"));
         assertFalse("prompt 不收图（未声明 image 能力）",
-                result.path("agentCapabilities").path("promptCapabilities").path("image").asBoolean());
-        assertEquals("z-bot-config", result.path("authMethods").get(0).path("id").asText());
+                result.path("agentCapabilities").path("promptCapabilities").path("image").asBoolean(false));
+        assertEquals("z-bot-config", result.path("authMethods").at(0).path("id").asText());
     }
 
     @Test
@@ -160,8 +161,8 @@ public class AcpProtocolSurfaceTest {
 
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"initialize\",\"params\":{"
                 + "\"protocolVersion\":99}}");
-        JsonNode error = parse(recorder.last()).path("error");
-        assertEquals(-32602, error.path("code").asInt());
+        JsonCursor error = parse(recorder.last()).path("error");
+        assertEquals(-32602, error.path("code").asInt(0));
         assertTrue(error.path("message").asText().contains("99"));
     }
 
@@ -179,8 +180,8 @@ public class AcpProtocolSurfaceTest {
         recorder.clear();
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"authenticate\","
                 + "\"params\":{\"methodId\":\"somebody-elses-key\"}}");
-        JsonNode error = parse(recorder.last()).path("error");
-        assertEquals(-32602, error.path("code").asInt());
+        JsonCursor error = parse(recorder.last()).path("error");
+        assertEquals(-32602, error.path("code").asInt(0));
         assertTrue("要点名是哪个 methodId 不认: " + error.path("message").asText(),
                 error.path("message").asText().contains("somebody-elses-key"));
     }
@@ -197,7 +198,7 @@ public class AcpProtocolSurfaceTest {
 
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/new\","
                 + "\"params\":{\"cwd\":\"/work/a\"}}");
-        JsonNode result = parse(recorder.last()).path("result");
+        JsonCursor result = parse(recorder.last()).path("result");
         String acpId = result.path("sessionId").asText();
         assertTrue("ACP 句柄要有自己的前缀，别和 z-bot 会话 id 混成一个: " + acpId,
                 acpId.startsWith("acp-"));
@@ -216,13 +217,13 @@ public class AcpProtocolSurfaceTest {
                 new AcpApprovalBridge()).register();
 
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"session/prompt\",\"params\":{}}");
-        assertEquals(-32602, parse(recorder.last()).path("error").path("code").asInt());
+        assertEquals(-32602, parse(recorder.last()).path("error").path("code").asInt(0));
     }
 
-    private static JsonNode parse(String line) {
+    private static JsonCursor parse(String line) {
         try {
-            return JsonRpc.mapper().readTree(line);
-        } catch (java.io.IOException e) {
+            return JsonCursor.of(JsonUtil.parse(line));
+        } catch (RuntimeException e) {
             throw new AssertionError("回帧不是合法 JSON: " + line, e);
         }
     }

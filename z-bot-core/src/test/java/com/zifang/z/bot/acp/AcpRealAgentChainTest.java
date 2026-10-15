@@ -1,6 +1,7 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 import com.zifang.z.agent.kernel.llm.ChatCompletionsRequest;
 import com.zifang.z.agent.kernel.llm.ChatCompletionsResponse;
 import com.zifang.z.agent.kernel.llm.LlmProvider;
@@ -204,7 +205,7 @@ public class AcpRealAgentChainTest {
                 kinds.contains("agent_message_chunk"));
         assertTrue("帧数必须多于 1（整包实现会在这里红）: " + kinds.size(), kinds.size() > 1);
         String last = frames.get(frames.size() - 1);
-        assertEquals("末帧才是 prompt 响应", 2, child(last, "id").asInt());
+        assertEquals("末帧才是 prompt 响应", 2, child(last, "id").asInt(0));
         assertEquals(AcpMethods.STOP_END_TURN, child(last, "result", "stopReason").asText());
         assertTrue(textOf(frames, "agent_message_chunk").contains("读完了"));
         registry.closeAll();
@@ -321,7 +322,7 @@ public class AcpRealAgentChainTest {
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/set_model\",\"params\":{"
                 + "\"sessionId\":\"" + acpId + "\",\"modelId\":\"other-model\"}}");
         String frame = recorder.last();
-        assertFalse("set_model 不许静默失败: " + frame, child(frame, "error").isMissingNode() ? false : true);
+        assertFalse("set_model 不许静默失败: " + frame, child(frame, "error").isMissing() ? false : true);
         assertEquals("other-model", child(frame, "result", "models", "currentModelId").asText());
         BotAgent after = factory.lastAgent();
         assertFalse("必须是真的换了一个 agent 实例", before == after);
@@ -344,7 +345,7 @@ public class AcpRealAgentChainTest {
         recorder.clear();
         conn.handleLine("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/set_model\",\"params\":{"
                 + "\"sessionId\":\"" + acpId + "\",\"modelId\":\"not-in-catalog\"}}");
-        assertEquals(-32602, child(recorder.last(), "error").path("code").asInt());
+        assertEquals(-32602, child(recorder.last(), "error").path("code").asInt(0));
         assertTrue(child(recorder.last(), "error", "message").asText().contains("not-in-catalog"));
         assertEquals("白名单外不许真的换掉 agent", 1, factory.built.size());
         registry.closeAll();
@@ -373,9 +374,9 @@ public class AcpRealAgentChainTest {
 
         conn2.handleLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/load\",\"params\":{"
                 + "\"sessionId\":\"" + acpId + "\",\"cwd\":\"/w\"}}");
-        JsonNode error = child(recorder2.last(), "error");
-        assertFalse("旧 ACP 句柄跨进程必须大声拒绝", error.isMissingNode());
-        assertEquals(-32602, error.path("code").asInt());
+        JsonCursor error = child(recorder2.last(), "error");
+        assertFalse("旧 ACP 句柄跨进程必须大声拒绝", error.isMissing());
+        assertEquals(-32602, error.path("code").asInt(0));
         assertTrue("要给出可恢复办法: " + error.path("message").asText(),
                 error.path("message").asText().contains("session/list"));
 
@@ -419,8 +420,8 @@ public class AcpRealAgentChainTest {
     private static List<String> sessionUpdates(List<String> frames) {
         List<String> out = new ArrayList<String>();
         for (String f : frames) {
-            JsonNode update = child(f, "params", "update");
-            if (!update.isMissingNode()) {
+            JsonCursor update = child(f, "params", "update");
+            if (!update.isMissing()) {
                 out.add(update.path("sessionUpdate").asText());
             }
         }
@@ -430,35 +431,38 @@ public class AcpRealAgentChainTest {
     private static String textOf(List<String> frames, String sessionUpdate) {
         StringBuilder sb = new StringBuilder();
         for (String f : frames) {
-            JsonNode update = child(f, "params", "update");
-            if (update.isMissingNode() || !sessionUpdate.equals(update.path("sessionUpdate").asText())) {
+            JsonCursor update = child(f, "params", "update");
+            if (update.isMissing() || !sessionUpdate.equals(update.path("sessionUpdate").asText())) {
                 continue;
             }
-            JsonNode content = update.path("content");
+            JsonCursor content = update.path("content");
             if (content.isArray()) {
-                for (JsonNode c : content) {
-                    sb.append(c.path("text").asText(""));
+                for (JsonCursor c : content.elements()) {
+                    String t = c.path("text").asText();
+                    sb.append(t == null ? "" : t);
                 }
             } else {
-                sb.append(content.path("text").asText(""));
+                String t = content.path("text").asText();
+                sb.append(t == null ? "" : t);
             }
         }
         return sb.toString();
     }
 
     private static String idLiteral(String permissionFrame) {
-        JsonNode id = child(permissionFrame, "id");
-        return id.isTextual() ? "\"" + id.asText() + "\"" : id.toString();
+        JsonCursor id = child(permissionFrame, "id");
+        Object raw = id.value();
+        return raw instanceof String ? "\"" + raw + "\"" : id.toString();
     }
 
-    private static JsonNode child(String json, String... path) {
+    private static JsonCursor child(String json, String... path) {
         try {
-            JsonNode node = JsonRpc.mapper().readTree(json);
+            JsonCursor node = JsonCursor.of(JsonUtil.parse(json));
             for (String p : path) {
                 node = node.path(p);
             }
             return node;
-        } catch (java.io.IOException e) {
+        } catch (RuntimeException e) {
             throw new AssertionError("帧不是合法 JSON: " + json, e);
         }
     }

@@ -1,6 +1,7 @@
 package com.zifang.z.bot.acp;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.zifang.util.json.JsonCursor;
+import com.zifang.util.json.JsonUtil;
 import com.zifang.z.bot.agent.StreamEvent;
 import org.junit.Test;
 
@@ -36,9 +37,9 @@ public class AcpStreamPublisherTest {
         List<String> frames = h.recorder.lines();
         assertEquals("三个增量必须三帧，攒成一帧就是功能缺失", 3, frames.size());
         for (String frame : frames) {
-            JsonNode node = parse(frame);
+            JsonCursor node = parse(frame);
             assertEquals("session/update", node.path("method").asText());
-            assertTrue("通知不带 id", node.path("id").isMissingNode());
+            assertTrue("通知不带 id", node.path("id").isMissing());
             assertEquals("acp-demo", node.path("params").path("sessionId").asText());
             assertEquals("agent_message_chunk",
                     node.path("params").path("update").path("sessionUpdate").asText());
@@ -78,10 +79,10 @@ public class AcpStreamPublisherTest {
         assertEquals("同名工具两次调用要各自配对", firstId, thirdId);
         assertFalse("不能把第二笔的结果配到第一笔上", secondId.equals(thirdId));
         assertEquals(secondId, fourthId);
-        JsonNode start = parse(frames.get(0)).path("params").path("update");
+        JsonCursor start = parse(frames.get(0)).path("params").path("update");
         assertEquals("pending", start.path("status").asText());
         assertEquals("ls", start.path("rawInput").path("command").asText());
-        JsonNode end = parse(frames.get(2)).path("params").path("update");
+        JsonCursor end = parse(frames.get(2)).path("params").path("update");
         assertEquals("completed", end.path("status").asText());
         assertEquals(0, h.publisher.openToolCallCount());
     }
@@ -91,9 +92,9 @@ public class AcpStreamPublisherTest {
         Harness h = new Harness();
         h.publisher.onEvent(AcpFakes.toolRequest("exec", "{\"command\":\"false\"}"));
         h.publisher.onEvent(AcpFakes.toolResult("exec", "exit 1", false));
-        JsonNode update = parse(h.recorder.lines().get(1)).path("params").path("update");
+        JsonCursor update = parse(h.recorder.lines().get(1)).path("params").path("update");
         assertEquals("failed", update.path("status").asText());
-        assertEquals("exit 1", update.path("content").get(0).path("text").asText());
+        assertEquals("exit 1", update.path("content").at(0).path("text").asText());
     }
 
     @Test
@@ -102,7 +103,7 @@ public class AcpStreamPublisherTest {
         h.publisher.onEvent(AcpFakes.toolResult("ghost", "无主的输出", true));
         List<String> frames = h.recorder.lines();
         assertEquals(1, frames.size());
-        JsonNode update = parse(frames.get(0)).path("params").path("update");
+        JsonCursor update = parse(frames.get(0)).path("params").path("update");
         assertEquals("tool_call_update", update.path("sessionUpdate").asText());
         assertTrue("没配对也要给出可辨识的 id，否则客户端永远等不到",
                 update.path("toolCallId").asText().startsWith("tc-orphan-"));
@@ -151,7 +152,7 @@ public class AcpStreamPublisherTest {
     public void nonJsonToolOutputIsWrappedNotDropped() {
         Harness h = new Harness();
         h.publisher.onEvent(AcpFakes.toolRequest("exec", "not-json"));
-        JsonNode update = parse(h.recorder.lines().get(0)).path("params").path("update");
+        JsonCursor update = parse(h.recorder.lines().get(0)).path("params").path("update");
         assertEquals("not-json", update.path("rawInput").path("text").asText());
     }
 
@@ -168,10 +169,10 @@ public class AcpStreamPublisherTest {
         assertEquals(expected, texts(h.recorder.lines()));
     }
 
-    private static JsonNode parse(String line) {
+    private static JsonCursor parse(String line) {
         try {
-            return JsonRpc.mapper().readTree(line);
-        } catch (java.io.IOException e) {
+            return JsonCursor.of(JsonUtil.parse(line));
+        } catch (RuntimeException e) {
             throw new AssertionError("帧不是合法 JSON: " + line, e);
         }
     }

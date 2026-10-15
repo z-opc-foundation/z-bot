@@ -81,9 +81,12 @@
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
         </dependency>
+        <!-- 生产代码零 Jackson；剩下的 8 个 src/test 类仍按 Jackson 树断言报文/账本形态，
+             降到 test 域，等测试也迁完再整条删掉。 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+            <scope>test</scope>
         </dependency>
         <!-- state.db 会话持久化 (SQLite WAL) -->
         <dependency>
