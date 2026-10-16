@@ -1,14 +1,11 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-
 /**
  * 出站消息（bus → 通道）。通道负责把这条消息翻译成自家协议（HTTP 回调 / IM API）。
  *
  * <p>{@link #replyTo} 用于反向寻址入站会话；{@link #kind} 让通道走不同渲染路径
  * （普通文本 / 卡片 / 错误回执）。</p>
  */
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class OutboundMessage {
 
     public enum Kind { TEXT, ERROR }

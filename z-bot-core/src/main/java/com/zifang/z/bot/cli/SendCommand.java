@@ -1,6 +1,6 @@
 package com.zifang.z.bot.cli;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
 import com.zifang.z.bot.config.BotConfig;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
@@ -50,12 +50,11 @@ public class SendCommand implements Callable<Integer> {
     }
 
     private int sendWebhook() throws Exception {
-        ObjectMapper json = new ObjectMapper();
         Map<String, Object> body = new HashMap<String, Object>();
         body.put("conversationId", conversationId);
         body.put("text", text);
         body.put("senderId", System.getProperty("user.name"));
-        byte[] payload = json.writeValueAsBytes(body);
+        byte[] payload = JsonUtil.toJson(body).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         java.net.HttpURLConnection con = (java.net.HttpURLConnection)
                 new java.net.URL(webhookUrl).openConnection();
         con.setRequestMethod("POST");

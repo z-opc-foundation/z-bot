@@ -1,7 +1,7 @@
 package com.zifang.z.bot.mcp;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.define.TypeReference;
 import com.zifang.z.agent.kernel.mcp.McpClient;
 import com.zifang.z.agent.kernel.mcp.McpTransport;
 import com.zifang.z.agent.kernel.mcp.StdioMcpTransport;
@@ -21,8 +21,6 @@ import java.util.concurrent.atomic.AtomicLong;
  * 未知 transport 或缺必需字段一律抛，不静默降级成 stdio。</p>
  */
 public final class McpClientFactory {
-
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     private McpClientFactory() {
     }
@@ -174,14 +172,14 @@ public final class McpClientFactory {
             long id = nextId.incrementAndGet();
             String argJson;
             try {
-                argJson = JSON.writeValueAsString(arguments == null
+                argJson = JsonUtil.toJson(arguments == null
                         ? java.util.Collections.<String, Object>emptyMap() : arguments);
             } catch (Exception e) {
                 return McpClient.McpResult.error("参数序列化失败: " + e.getMessage());
             }
             String req = "{\"jsonrpc\":\"2.0\",\"id\":" + id
                     + ",\"method\":\"tools/call\",\"params\":"
-                + "{\"name\":" + JSON.valueToTree(toolName)
+                + "{\"name\":" + JsonUtil.toJson(toolName)
                 + ",\"arguments\":" + argJson + "}}";
             try {
                 String resp = transport.request(req);
@@ -214,7 +212,7 @@ public final class McpClientFactory {
         @SuppressWarnings("unchecked")
         private List<McpClient.McpTool> parseTools(String resp) {
             try {
-                java.util.Map<String, Object> root = JSON.readValue(resp,
+                java.util.Map<String, Object> root = JsonUtil.fromJson(resp,
                         new TypeReference<java.util.Map<String, Object>>() {
                         });
                 Object result = root.get("result");
@@ -248,7 +246,7 @@ public final class McpClientFactory {
         @SuppressWarnings("unchecked")
         private McpClient.McpResult parseCall(String resp) {
             try {
-                java.util.Map<String, Object> root = JSON.readValue(resp,
+                java.util.Map<String, Object> root = JsonUtil.fromJson(resp,
                         new TypeReference<java.util.Map<String, Object>>() {
                         });
                 if (root.containsKey("error")) {

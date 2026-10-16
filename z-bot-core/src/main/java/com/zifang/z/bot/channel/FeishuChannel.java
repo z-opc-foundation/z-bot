@@ -1,7 +1,7 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.define.TypeReference;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import okhttp3.MediaType;
@@ -87,7 +87,6 @@ import javax.crypto.spec.SecretKeySpec;
 public final class FeishuChannel implements Channel {
 
     private static final Logger LOG = LoggerFactory.getLogger(FeishuChannel.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
     private static final MediaType JSON_MEDIA = MediaType.parse("application/json; charset=utf-8");
 
     /** manifest 里 {@code channel.<name>.config.<key>} 的键名（也是缺键报错里写的名字）。 */
@@ -309,13 +308,13 @@ public final class FeishuChannel implements Channel {
         Map<String, Object> body = new HashMap<String, Object>();
         body.put("receive_id", message.replyTo == null ? "" : message.replyTo);
         body.put("msg_type", "text");
-        body.put("content", JSON.writeValueAsString(content));
+        body.put("content", JsonUtil.toJson(content));
         if (message.kind == OutboundMessage.Kind.ERROR) {
             // 错误回执在飞书侧没有专门 msg_type，用文本前缀 + 平台可查的 uuid 区分
             body.put("uuid", "zbot-err-" + Integer.toHexString(
                     (message.replyTo + "|" + message.text).hashCode()));
         }
-        return JSON.writeValueAsString(body);
+        return JsonUtil.toJson(body);
     }
 
     private HttpResult call(String url, String jsonBody, String token) throws IOException {
@@ -437,7 +436,7 @@ public final class FeishuChannel implements Channel {
                 // challenge 只在过了 token 门之后回显：否则未鉴权请求能拿它验证"我打到了你的回调地址"。
                 Map<String, Object> echo = new HashMap<String, Object>();
                 echo.put("challenge", str(parsed.get("challenge")));
-                byte[] bytes = JSON.writeValueAsBytes(echo);
+                byte[] bytes = toUtf8(echo);
                 ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
                 ex.sendResponseHeaders(200, bytes.length);
                 ex.getResponseBody().write(bytes);
@@ -491,7 +490,7 @@ public final class FeishuChannel implements Channel {
             payload = new HashMap<String, Object>();
             payload.put("text", "");
         }
-        byte[] body = JSON.writeValueAsBytes(payload);
+        byte[] body = toUtf8(payload);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         ex.sendResponseHeaders(200, body.length);
         ex.getResponseBody().write(body);
@@ -567,7 +566,7 @@ public final class FeishuChannel implements Channel {
         Map<String, Object> req = new HashMap<String, Object>();
         req.put("app_id", appId);
         req.put("app_secret", appSecret);
-        String json = JSON.writeValueAsString(req);
+        String json = JsonUtil.toJson(req);
         Request post = new Request.Builder()
                 .url(tokenUrl())
                 .header("Content-Type", "application/json; charset=utf-8")
@@ -645,12 +644,17 @@ public final class FeishuChannel implements Channel {
             return Collections.<String, Object>emptyMap();
         }
         try {
-            Map<String, Object> parsed = JSON.readValue(body, new TypeReference<HashMap<String, Object>>() {
+            Map<String, Object> parsed = JsonUtil.fromJson(body, new TypeReference<Map<String, Object>>() {
             });
             return parsed == null ? Collections.<String, Object>emptyMap() : parsed;
-        } catch (IOException e) {
+        } catch (RuntimeException e) {
             return Collections.<String, Object>emptyMap();
         }
+    }
+
+    /** 紧凑 JSON 的 UTF-8 字节（对应 Jackson 的 {@code writeValueAsBytes}）。 */
+    private static byte[] toUtf8(Object o) {
+        return JsonUtil.toJson(o).getBytes(StandardCharsets.UTF_8);
     }
 
     private static String str(Object v) {
@@ -682,7 +686,7 @@ public final class FeishuChannel implements Channel {
 
     /**
      * v2 的 {@code message.content} 是<b>字符串化</b>的 JSON：文本消息形如 {@code {"text":"你好"}}
-     * （与出站侧 {@code body.put("content", JSON.writeValueAsString(content))} 互为逆运算）。
+     * （与出站侧 {@code body.put("content", JsonUtil.toJson(content))} 互为逆运算）。
      *
      * <p>非 {@code text} 类型（富文本 / 图片 / 卡片回传）本期不投递：返回空串 ⇒ 上层按"没有正文"
      * 处理，既不会投一条空消息，也不会因为遇到陌生形状而 500。</p>

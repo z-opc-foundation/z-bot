@@ -1,12 +1,13 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -34,7 +35,6 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class DeadTargets {
 
     private static final Logger LOG = LoggerFactory.getLogger(DeadTargets.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     /** 与 hermes {@code _DEAD_ERROR_KINDS} 同名同集合：只有这两种意味着整会话不可达。 */
     static final String FORBIDDEN = "forbidden";
@@ -246,9 +246,13 @@ public final class DeadTargets {
             return;
         }
         try {
-            Map<String, Object> raw = JSON.readValue(path,
-                    new TypeReference<HashMap<String, Object>>() {
-                    });
+            // toPlainValue：下游靠 instanceof Map 认嵌套项，parseToMap 的嵌套仍是
+            // z-util 的 JsonObject（不是 java.util.Map），会全被判成非条目。
+            // 不能用 fromJson(json, Map.class)：Map 是接口，走 POJO 分支拿不到
+            // 无参构造器，会抛 deserializePojo failed: java.util.Map（已实测）。
+            @SuppressWarnings("unchecked")
+            Map<String, Object> raw = (Map<String, Object>) JsonUtil.toPlainValue(
+                    JsonUtil.parse(new String(Files.readAllBytes(path.toPath()), StandardCharsets.UTF_8)));
             if (raw == null) {
                 return;
             }
@@ -281,7 +285,7 @@ public final class DeadTargets {
                 snapshot.put(e.getKey(), new LinkedHashMap<String, Object>(e.getValue()));
             }
             File tmp = new File(path.getAbsolutePath() + ".tmp");
-            JSON.writerWithDefaultPrettyPrinter().writeValue(tmp, snapshot);
+            Files.write(tmp.toPath(), JsonUtil.toJsonPretty(snapshot).getBytes(StandardCharsets.UTF_8));
             try {
                 java.nio.file.Files.move(tmp.toPath(), path.toPath(),
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING,

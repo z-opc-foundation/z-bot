@@ -1,7 +1,7 @@
 package com.zifang.z.bot.session;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.define.TypeReference;
 import com.zifang.z.agent.kernel.message.MessageType;
 import com.zifang.z.agent.kernel.message.Msg;
 import com.zifang.z.agent.kernel.message.ToolCall;
@@ -18,8 +18,6 @@ import java.util.Map;
  */
 public final class MsgCodec {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
     private MsgCodec() {
     }
 
@@ -29,7 +27,7 @@ public final class MsgCodec {
             for (Msg m : messages) {
                 out.add(toPlain(m));
             }
-            return MAPPER.writeValueAsString(out);
+            return JsonUtil.toJson(out);
         } catch (Exception e) {
             throw new IllegalStateException("消息序列化失败: " + e.getMessage(), e);
         }
@@ -40,7 +38,7 @@ public final class MsgCodec {
             return new ArrayList<Msg>();
         }
         try {
-            List<Map<String, Object>> raw = MAPPER.readValue(json,
+            List<Map<String, Object>> raw = JsonUtil.fromJson(json,
                     new TypeReference<List<Map<String, Object>>>() {
                     });
             List<Msg> out = new ArrayList<Msg>();

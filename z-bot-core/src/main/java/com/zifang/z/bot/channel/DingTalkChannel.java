@@ -1,7 +1,7 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.define.TypeReference;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import okhttp3.MediaType;
@@ -56,7 +56,6 @@ import java.util.concurrent.TimeUnit;
 public final class DingTalkChannel implements Channel {
 
     private static final Logger LOG = LoggerFactory.getLogger(DingTalkChannel.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
     private static final MediaType JSON_MEDIA = MediaType.parse("application/json; charset=utf-8");
 
     /** manifest 里 {@code channel.<name>.config.<key>} 的键名（也是缺键报错里写的名字）。 */
@@ -270,7 +269,7 @@ public final class DingTalkChannel implements Channel {
                     message.replyTo == null ? "" : message.replyTo));
             body.put("at", at);
         }
-        return JSON.writeValueAsString(body);
+        return JsonUtil.toJson(body);
     }
 
     /**
@@ -389,7 +388,7 @@ public final class DingTalkChannel implements Channel {
             payload = new HashMap<String, Object>();
             payload.put("text", "");
         }
-        byte[] body = JSON.writeValueAsBytes(payload);
+        byte[] body = toUtf8(payload);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         ex.sendResponseHeaders(200, body.length);
         ex.getResponseBody().write(body);
@@ -496,12 +495,17 @@ public final class DingTalkChannel implements Channel {
             return Collections.<String, Object>emptyMap();
         }
         try {
-            Map<String, Object> parsed = JSON.readValue(body, new TypeReference<HashMap<String, Object>>() {
+            Map<String, Object> parsed = JsonUtil.fromJson(body, new TypeReference<Map<String, Object>>() {
             });
             return parsed == null ? Collections.<String, Object>emptyMap() : parsed;
-        } catch (IOException e) {
+        } catch (RuntimeException e) {
             return Collections.<String, Object>emptyMap();
         }
+    }
+
+    /** 紧凑 JSON 的 UTF-8 字节（对应 Jackson 的 {@code writeValueAsBytes}）。 */
+    private static byte[] toUtf8(Object o) {
+        return JsonUtil.toJson(o).getBytes(StandardCharsets.UTF_8);
     }
 
     private static String str(Object v) {

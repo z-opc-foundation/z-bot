@@ -1,7 +1,7 @@
 package com.zifang.z.bot.agent;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.define.TypeReference;
 import com.zifang.z.agent.kernel.agent.AgentContext;
 import com.zifang.z.agent.kernel.agent.ContextEngine;
 import com.zifang.z.agent.kernel.agent.InterruptFlag;
@@ -112,7 +112,6 @@ public class BotAgent {
             Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
     private static final Pattern QUOTED = Pattern.compile("[\"']([^\"']+)[\"']");
 
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final BotConfig config;
     private final LlmProvider provider;
@@ -1971,7 +1970,7 @@ public class BotAgent {
             return new HashMap<String, Object>();
         }
         try {
-            Map<String, Object> parsed = JSON.readValue(argumentsJson,
+            Map<String, Object> parsed = JsonUtil.fromJson(argumentsJson,
                     new TypeReference<Map<String, Object>>() {
                     });
             return parsed == null ? new HashMap<String, Object>() : new HashMap<String, Object>(parsed);
@@ -2035,7 +2034,7 @@ public class BotAgent {
                 args.put(names.get(i), quoted.get(i));
             }
             try {
-                return new ToolCall("fb_" + System.currentTimeMillis(), name, JSON.writeValueAsString(args));
+                return new ToolCall("fb_" + System.currentTimeMillis(), name, JsonUtil.toJson(args));
             } catch (Exception ignored) {
                 return null;
             }

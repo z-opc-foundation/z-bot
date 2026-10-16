@@ -1,5 +1,6 @@
 package com.zifang.z.bot.store;
 
+import com.zifang.util.json.JsonUtil;
 import com.zifang.z.agent.kernel.message.Msg;
 import com.zifang.z.bot.session.MsgCodec;
 
@@ -50,9 +51,6 @@ import java.util.Set;
  * {@code cli.py:1914}）。旧签名 {@link #prune(int)} 行为保持兼容：过期 + 0 消息 + 未结束但从未用过。</p>
  */
 public class StateStore {
-
-    private static final com.fasterxml.jackson.databind.ObjectMapper MAPPER =
-            new com.fasterxml.jackson.databind.ObjectMapper();
 
     /** state_meta 里记迁移台账的键（{@code state_meta} 表本期的真实消费者）。 */
     public static final String META_LAST_MIGRATION = "schema_last_migration";
@@ -1052,12 +1050,12 @@ public class StateStore {
                         ins.setString(5, str(plain.get("contentType")));
                         ins.setString(6, str(plain.get("toolName")));
                         ins.setString(7, str(plain.get("toolCallId")));
-                        ins.setString(8, MAPPER.writeValueAsString(plain));
+                        ins.setString(8, JsonUtil.toJson(plain));
                         ins.setString(9, now);
                         ins.addBatch();
                     }
                     ins.executeBatch();
-                } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                } catch (RuntimeException e) {
                     throw new SQLException("payload 序列化失败: " + e.getMessage(), e);
                 } finally {
                     close(ins);
@@ -1105,10 +1103,10 @@ public class StateStore {
                         ins.setString(5, str(plain.get("contentType")));
                         ins.setString(6, str(plain.get("toolName")));
                         ins.setString(7, str(plain.get("toolCallId")));
-                        ins.setString(8, MAPPER.writeValueAsString(plain));
+                        ins.setString(8, JsonUtil.toJson(plain));
                         ins.setString(9, now);
                         ins.executeUpdate();
-                    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                    } catch (RuntimeException e) {
                         throw new SQLException("payload 序列化失败: " + e.getMessage(), e);
                     } finally {
                         close(ins);
@@ -1156,15 +1154,15 @@ public class StateStore {
                     try (ResultSet rs = ps.executeQuery()) {
                         while (rs.next()) {
                             try {
-                                Map<String, Object> plain = MAPPER.readValue(rs.getString(1),
-                                        new com.fasterxml.jackson.core.type.TypeReference
+                                Map<String, Object> plain = JsonUtil.fromJson(rs.getString(1),
+                                        new com.zifang.util.json.define.TypeReference
                                                 <Map<String, Object>>() {
                                         });
                                 Msg m = MsgCodec.fromPlain(plain);
                                 if (m != null) {
                                     msgs.add(m);
                                 }
-                            } catch (java.io.IOException e) {
+                            } catch (RuntimeException e) {
                                 System.err.println("[StateStore] payload 解析失败（跳过该行）: " + e.getMessage());
                             }
                         }

@@ -113,17 +113,17 @@
             <dependency>
                 <groupId>io.github.yuku123</groupId>
                 <artifactId>z-util-core</artifactId>
-                <version>1.2.2</version>
+                <version>1.2.3</version>
             </dependency>
             <dependency>
                 <groupId>io.github.yuku123</groupId>
                 <artifactId>z-util-parser-json</artifactId>
-                <version>1.2.2</version>
+                <version>1.2.3</version>
             </dependency>
             <dependency>
                 <groupId>io.github.yuku123</groupId>
                 <artifactId>z-util-dsl-kernel</artifactId>
-                <version>1.2.2</version>
+                <version>1.2.3</version>
             </dependency>
 
             <!-- 自家 3 个 reactor 坐标钉 ${project.version}。继承来的 DM 会改写**传递依赖**的版本，

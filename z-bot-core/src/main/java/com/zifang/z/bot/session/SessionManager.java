@@ -1,13 +1,15 @@
 package com.zifang.z.bot.session;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.define.TypeReference;
 import com.zifang.z.agent.kernel.types.MessageRole;
 import com.zifang.z.agent.kernel.message.Msg;
 import com.zifang.z.bot.store.StateStore;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -33,7 +35,6 @@ public class SessionManager {
 
     private final File sessionDir;
     private final StateStore store;
-    private final ObjectMapper mapper = new ObjectMapper();
     private final Map<String, SessionData> sessions = new ConcurrentHashMap<String, SessionData>();
     /** 实例级随机短标识，拼进新会话 id 防跨进程/同进程不同实例同毫秒撞 id。 */
     private final String instanceTag =
@@ -169,7 +170,8 @@ public class SessionManager {
             for (Msg m : messages) {
                 plain.add(MsgCodec.toPlain(m));
             }
-            mapper.writeValue(new File(sessionDir, sessionId + ".json"), plain);
+            Files.write(new File(sessionDir, sessionId + ".json").toPath(),
+                    JsonUtil.toJson(plain).getBytes(StandardCharsets.UTF_8));
             saveIndex();
         } catch (IOException e) {
             System.err.println("[SessionManager] saveMessages 失败: " + e.getMessage());
@@ -185,7 +187,7 @@ public class SessionManager {
             return new ArrayList<Msg>();
         }
         try {
-            List<Map<String, Object>> raw = mapper.readValue(f,
+            List<Map<String, Object>> raw = JsonUtil.fromJson(readFile(f),
                     new TypeReference<List<Map<String, Object>>>() {
                     });
             List<Msg> out = new ArrayList<Msg>();
@@ -240,7 +242,7 @@ public class SessionManager {
             return new ArrayList<Msg>();
         }
         try {
-            List<Map<String, Object>> raw = mapper.readValue(f,
+            List<Map<String, Object>> raw = JsonUtil.fromJson(readFile(f),
                     new TypeReference<List<Map<String, Object>>>() {
                     });
             List<Msg> out = new ArrayList<Msg>();
@@ -270,14 +272,15 @@ public class SessionManager {
         File idx = new File(sessionDir, "_index.json");
         if (idx.exists()) {
             try {
-                List<SessionData> list = mapper.readValue(idx, new TypeReference<List<SessionData>>() {
-                });
+                List<SessionData> list = JsonUtil.fromJson(readFile(idx),
+                    new TypeReference<List<SessionData>>() {
+                    });
                 for (SessionData sd : list) {
                     if (sd != null && sd.id != null) {
                         sessions.put(sd.id, sd);
                     }
                 }
-            } catch (IOException ignored) {
+            } catch (Exception ignored) {
             }
         }
         adoptOrphanSessionFiles();
@@ -316,9 +319,16 @@ public class SessionManager {
 
     private void saveIndex() {
         try {
-            mapper.writeValue(new File(sessionDir, "_index.json"), new ArrayList<SessionData>(sessions.values()));
+            Files.write(new File(sessionDir, "_index.json").toPath(),
+                    JsonUtil.toJson(new ArrayList<SessionData>(sessions.values()))
+                            .getBytes(StandardCharsets.UTF_8));
         } catch (IOException ignored) {
         }
+    }
+
+    /** 读整个文件为 UTF-8 字符串；JsonUtil 只吃字符串，不吃 {@link File}。 */
+    private static String readFile(File f) throws IOException {
+        return new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
     }
 
     // ===== data =====

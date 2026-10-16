@@ -1,7 +1,5 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-
 /**
  * 入站消息（通道 → bus → agent）。
  *
@@ -9,7 +7,6 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  * 发送方（senderId，用于 audit/限额）、文本（text，可选）、原始负载（raw，IM 平台带签名的
  * 完整 webhook body，给前端 / 调试用）。</p>
  */
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class ChannelMessage {
 
     public String channel;

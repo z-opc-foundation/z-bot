@@ -1,7 +1,6 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
 
 import java.io.File;
 import java.io.IOException;
@@ -29,7 +28,6 @@ import java.util.List;
  */
 public final class PairingService {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
     private static final char[] ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
     private static final long DEFAULT_TTL_MS = 60L * 60L * 1000L;
 
@@ -115,7 +113,9 @@ public final class PairingService {
             return new ArrayList<Pairing>();
         }
         try {
-            Pairing[] arr = JSON.readValue(file, Pairing[].class);
+            Pairing[] arr = JsonUtil.fromJson(
+                    new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8),
+                    Pairing[].class);
             return arr == null ? new ArrayList<Pairing>() : new ArrayList<Pairing>(java.util.Arrays.asList(arr));
         } catch (IOException e) {
             return new ArrayList<Pairing>();
@@ -125,8 +125,7 @@ public final class PairingService {
     private void writeAll(List<Pairing> all) {
         try {
             File tmp = new File(file.getParentFile(), file.getName() + ".tmp");
-            Files.write(tmp.toPath(),
-                    JSON.writerWithDefaultPrettyPrinter().writeValueAsString(all).getBytes(StandardCharsets.UTF_8));
+            Files.write(tmp.toPath(), JsonUtil.toJsonPretty(all).getBytes(StandardCharsets.UTF_8));
             Files.move(tmp.toPath(), file.toPath(),
                     StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
@@ -142,7 +141,6 @@ public final class PairingService {
         return new String(out);
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Pairing {
         public String code;
         public String channel;

@@ -1,7 +1,7 @@
 package com.zifang.z.bot.channel;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
+import com.zifang.util.json.define.TypeReference;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.zifang.z.agent.kernel.message.Msg;
@@ -52,7 +52,6 @@ import java.util.concurrent.ExecutorService;
 public final class HttpChannel {
 
     private static final Logger LOG = LoggerFactory.getLogger(HttpChannel.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
     private static final String CONSOLE_RESOURCE = "/web/index.html";
 
     private final BotAgent agent;
@@ -930,10 +929,10 @@ public final class HttpChannel {
             return Collections.emptyMap();
         }
         try {
-            Map<String, Object> parsed = JSON.readValue(body, new TypeReference<Map<String, Object>>() {
-            });
+            Map<String, Object> parsed = JsonUtil.fromJson(body, new TypeReference<Map<String, Object>>() {
+});
             return parsed == null ? Collections.<String, Object>emptyMap() : parsed;
-        } catch (IOException e) {
+        } catch (RuntimeException e) {
             return Collections.emptyMap();
         }
     }
@@ -980,10 +979,15 @@ public final class HttpChannel {
     }
 
     private static void json(HttpExchange ex, int code, Object body) throws IOException {
-        byte[] bytes = JSON.writeValueAsBytes(body);
+        byte[] bytes = toUtf8(body);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         ex.sendResponseHeaders(code, bytes.length);
         ex.getResponseBody().write(bytes);
+    }
+
+    /** 紧凑 JSON 的 UTF-8 字节（对应 Jackson 的 {@code writeValueAsBytes}）。 */
+    private static byte[] toUtf8(Object o) {
+        return JsonUtil.toJson(o).getBytes(StandardCharsets.UTF_8);
     }
 
     private static Map<String, Object> error(String message) {

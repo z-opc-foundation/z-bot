@@ -1,14 +1,12 @@
 package com.zifang.z.bot.cron;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.zifang.util.json.annotation.JsonSerialize;
 
 import java.time.Instant;
 
 /**
  * 一条定时任务。持久化在 {@code <configDir>/cron/jobs.json}（数组）。
  */
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class CronJob {
 
     /** 一次性任务（{@code once <ISO>}）的可投递次数上限 —— 只跑一回（hermes 的 repeat.times=1）。 */
@@ -59,7 +57,15 @@ public class CronJob {
         this.schedule = schedule;
     }
 
-    /** 解析并校验调度表达式；坏表达式抛 IllegalArgumentException。 */
+    /**
+     * 解析并校验调度表达式；坏表达式抛 IllegalArgumentException。
+     *
+     * <p>{@code @JsonSerialize(ignore = true)}：纯运行时缓存，不进 jobs.json。
+     * Jackson 靠 {@code transient} 自动跳过；JsonUtil 走的是字段反射、<b>不</b>认
+     * {@code transient}，所以必须显式标注，否则 {@link CronSchedule} 的内部状态会被
+     * 序列化进去污染盘上文件（且反序列化时无无参构造器会炸）。</p>
+     */
+    @JsonSerialize(ignore = true)
     public transient CronSchedule parsed;
 
     public CronSchedule schedule() {
@@ -73,10 +79,10 @@ public class CronJob {
      * 一次性任务？表达式坏掉时按"不是"处理（坏任务本来就被 load() 禁用了），
      * 免得一次解析异常把整轮投递判定带崩。
      *
-     * <p>{@code @JsonIgnore}：它是 {@link #schedule} 的派生值，不进 jobs.json
-     * （少了 {@code is} 前缀污染，也免得读到一半的盘上状态被当成事实）。</p>
+     * <p>不进 jobs.json：它是 {@link #schedule} 的派生值（少了 {@code is} 前缀污染，
+     * 也免得读到一半的盘上状态被当成事实）。JsonUtil 只序列化字段、不看 getter，
+     * 所以这里不需要任何注解。</p>
      */
-    @JsonIgnore
     public boolean isOneShot() {
         try {
             return schedule().kind == CronSchedule.Kind.ONCE;

@@ -1,7 +1,5 @@
 package com.zifang.z.bot.cron;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -19,7 +17,6 @@ import java.time.format.DateTimeParseException;
  * {@code 0 <= age < ttl}。年龄为负（对端时钟超前 / 跨重启的时钟漂移）判<b>不</b>新鲜 ——
  * 否则一条未来时间戳的认领会把任务永久卡死（hermes #60703 踩过的同一个洞）。</p>
  */
-@JsonIgnoreProperties(ignoreUnknown = true)
 public final class CronRunClaim {
 
     /** 所有者标识：{@code pid@进程启动时间/随机后缀}，见 {@link CronScheduler#ownerId()}。 */

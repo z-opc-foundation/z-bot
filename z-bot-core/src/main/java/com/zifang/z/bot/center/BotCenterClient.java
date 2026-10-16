@@ -1,6 +1,6 @@
 package com.zifang.z.bot.center;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -39,7 +39,6 @@ public class BotCenterClient {
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .build();
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** 来自 /register 的 instanceCode（存 <profile>/instance.json 以便跨重启复用）。 */
     private String instanceCode;
@@ -102,7 +101,7 @@ public class BotCenterClient {
         body.put("capabilities", "{\"tools\":[\"read_file\",\"exec\"],\"skillSlots\":50}");
 
         try {
-            String json = objectMapper.writeValueAsString(body);
+            String json = JsonUtil.toJson(body);
             Request req = new Request.Builder()
                     .url(centerBaseUrl + "/api/agent/skill/register")
                     .post(RequestBody.create(json, JSON))
@@ -112,7 +111,7 @@ public class BotCenterClient {
                     warn("注册失败: HTTP " + resp.code());
                     return false;
                 }
-                Map<String, Object> respBody = objectMapper.readValue(resp.body().bytes(), Map.class);
+                Map<String, Object> respBody = parsePlainMap(resp.body().string());
                 Object data = respBody.get("data");
                 if (!(data instanceof Map)) {
                     return false;
@@ -147,7 +146,7 @@ public class BotCenterClient {
         body.put("status", status);
         body.put("agentVersion", version);
         try {
-            String json = objectMapper.writeValueAsString(body);
+            String json = JsonUtil.toJson(body);
             Request req = new Request.Builder()
                     .url(centerBaseUrl + "/api/agent/skill/heartbeat")
                     .header("Authorization", "Bearer " + authToken)
@@ -208,7 +207,7 @@ public class BotCenterClient {
                 if (!resp.isSuccessful()) {
                     return null;
                 }
-                Map<String, Object> body = objectMapper.readValue(resp.body().bytes(), Map.class);
+                Map<String, Object> body = parsePlainMap(resp.body().string());
                 Object data = body.get("data");
                 if (!(data instanceof Map)) {
                     return null;
@@ -236,7 +235,7 @@ public class BotCenterClient {
                 if (!resp.isSuccessful()) {
                     return null;
                 }
-                Map<String, Object> body = objectMapper.readValue(resp.body().bytes(), Map.class);
+                Map<String, Object> body = parsePlainMap(resp.body().string());
                 Object data = body.get("data");
                 return data == null ? null : data.toString();
             }
@@ -291,7 +290,7 @@ public class BotCenterClient {
             return;
         }
         try {
-            String json = objectMapper.writeValueAsString(body);
+            String json = JsonUtil.toJson(body);
             Request req = new Request.Builder()
                     .url(centerBaseUrl + path)
                     .header("Authorization", "Bearer " + authToken)
@@ -333,22 +332,46 @@ public class BotCenterClient {
             body.put("instanceCode", instanceCode);
             body.put("authToken", authToken);
             body.put("callbackUrl", callbackUrl);
-            try (java.io.FileWriter fw = new java.io.FileWriter(f)) {
-                objectMapper.writeValue(fw, body);
-            }
+            java.nio.file.Files.write(f.toPath(),
+                    JsonUtil.toJson(body).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } catch (Exception e) {
             warn("saveInstance 失败: " + e.getMessage());
         }
     }
 
     @SuppressWarnings("unchecked")
+    /**
+     * 解析响应体为纯 {@link Map}（{@link LinkedHashMap} + {@link List}）。
+     *
+     * <p>必须走 {@code parse} → {@code toPlainValue} 而不是 {@code JsonUtil.parseToMap}：
+     * 后者的<b>嵌套</b>值仍是 z-util 的 {@code JsonObject}/{@code JsonArray}，
+     * 下游的 {@code instanceof Map} / {@code instanceof List} 判定会全部落空
+     * （{@code JsonObject} 不是 {@code Map}）。</p>
+     *
+     * <p>也不能用 {@code fromJson(json, Map.class)} —— {@code Map} 是接口，
+     * 走 POJO 分支会因拿不到无参构造器而抛
+     * {@code deserializePojo failed: java.util.Map}（已实测）。</p>
+     */
+    private static Map<String, Object> parsePlainMap(String json) {
+        if (json == null || json.trim().isEmpty()) {
+            return new java.util.HashMap<String, Object>();
+        }
+        Object plain = JsonUtil.toPlainValue(JsonUtil.parse(json));
+        return plain instanceof Map ? (Map<String, Object>) plain : new java.util.HashMap<String, Object>();
+    }
+
+    private static String readFile(File f) throws IOException {
+        return new String(java.nio.file.Files.readAllBytes(f.toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private InstanceId loadSavedInstance() {
         try {
             File f = new File(zbotDir, "instance.json");
             if (!f.exists()) {
                 return null;
             }
-            Map<String, Object> body = objectMapper.readValue(f, Map.class);
+            Map<String, Object> body = parsePlainMap(readFile(f));
             String code = (String) body.get("instanceCode");
             String token = (String) body.get("authToken");
             String url = (String) body.get("callbackUrl");

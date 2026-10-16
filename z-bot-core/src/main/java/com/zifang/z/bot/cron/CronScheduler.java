@@ -1,6 +1,6 @@
 package com.zifang.z.bot.cron;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zifang.util.json.JsonUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -96,8 +96,6 @@ public final class CronScheduler {
             return changed;
         }
     }
-
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     /**
      * 认领新鲜期上限（毫秒）。对齐 hermes {@code jobs.py:183 ONESHOT_RUN_CLAIM_TTL_SECONDS=1800}：
@@ -797,7 +795,9 @@ public final class CronScheduler {
             return out;
         }
         try {
-            CronJob[] arr = JSON.readValue(jobsFile, CronJob[].class);
+            CronJob[] arr = JsonUtil.fromJson(
+                    new String(Files.readAllBytes(jobsFile.toPath()), StandardCharsets.UTF_8),
+                    CronJob[].class);
             for (CronJob j : arr) {
                 if (j == null || j.id == null) {
                     LOG.warn("[cron] jobs.json 里有缺 id 的记录，忽略该条");
@@ -819,8 +819,7 @@ public final class CronScheduler {
     private void writeStore(List<CronJob> store) {
         try {
             File tmp = new File(dir, "jobs.json.tmp");
-            Files.write(tmp.toPath(), JSON.writerWithDefaultPrettyPrinter()
-                    .writeValueAsString(store).getBytes(StandardCharsets.UTF_8));
+            Files.write(tmp.toPath(), JsonUtil.toJsonPretty(store).getBytes(StandardCharsets.UTF_8));
             Files.move(tmp.toPath(), jobsFile.toPath(),
                     StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
