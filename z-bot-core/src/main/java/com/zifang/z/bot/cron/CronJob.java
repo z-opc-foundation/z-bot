@@ -60,10 +60,10 @@ public class CronJob {
     /**
      * 解析并校验调度表达式；坏表达式抛 IllegalArgumentException。
      *
-     * <p>{@code @JsonSerialize(ignore = true)}：纯运行时缓存，不进 jobs.json。
-     * Jackson 靠 {@code transient} 自动跳过；JsonUtil 走的是字段反射、<b>不</b>认
-     * {@code transient}，所以必须显式标注，否则 {@link CronSchedule} 的内部状态会被
-     * 序列化进去污染盘上文件（且反序列化时无无参构造器会炸）。</p>
+     * <p>{@code transient} 本身就该够：纯运行时缓存，不进 jobs.json，Jackson 与
+     * z-util 1.2.4 起的 JsonUtil 都跳它。{@code @JsonSerialize(ignore = true)} 是
+     * 在 z-util 补上 transient 语义之前加的兜底，本仓地板还钉在 1.2.3，留着不亏 ——
+     * 钉版一抬就可以连注解一起删。</p>
      */
     @JsonSerialize(ignore = true)
     public transient CronSchedule parsed;
