@@ -21,11 +21,11 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 | 仓库 | `z-bot`（本地 agent 应用；`z-bot-core` 是唯一有代码的模块） | `ls -d */` |
 | Maven 坐标 | `io.github.yuku123:z-bot`（聚合 `pom`）/ `:z-bot-core`（`jar`，shade 件）/ `:z-bot-desktop-packager`（`pom`） | `grep -n '<artifactId>\|<packaging>' pom.xml */pom.xml` |
 | 当前源码版本 | `0.2.1`（根 POM `<revision>`，唯一真源；CI-friendly versions + `flatten-maven-plugin` 1.7.2 `flattenMode=oss`。源码侧的自报版本面值集中在 `z-bot-core/src/main/java/com/zifang/z/bot/BuildInfo.java` 的 `REVISION` 一格，其余各处一律从它派生；两处没对齐由 `BuildInfoDriftTest` 判红，三支具名变异验过牙） | `grep -n '<revision>' pom.xml` |
-| 父项目 | `io.github.yuku123:z-boot-parent:1.0.21`（`<relativePath/>` 留空，parent 在 repo1 不在磁盘；它自己的 `<parent>` 是 `z-boot-dependencies:1.0.20`） | `grep -n -A4 '<parent>' pom.xml` |
+| 父项目 | `io.github.yuku123:z-boot-parent:1.1.0`（`<relativePath/>` 留空，parent 在 repo1 不在磁盘；第三方地板与兄弟仓权威表均已并入 parent 自身） | `grep -n -A4 '<parent>' pom.xml` |
 | Central 实测状态 | **对外可见的仍是 `0.2.0`**：`z-bot:0.2.0.pom` / `z-bot-core:0.2.0.pom` / `z-bot-core:0.2.0.jar` / `:sources.jar` / `:javadoc.jar` / `z-bot-desktop-packager:0.2.0.pom` 均 200（6/6）；三个坐标的 `maven-metadata.xml` 的 `latest`/`release` 都是 `0.2.0`，`versions` 各为 `[0.1.0, 0.2.0]`，`lastUpdated` = `20260929022811`（z-bot-core）/`20260929022812`（另两坐标）。`0.1.0` 同样在架；没有 `0.3.0`。**`0.2.1` 已抬号但还没 deploy**（2026-10-01 19:4x 现读：3 个 reactor 坐标下的 `z-bot-0.2.1.pom` / `z-bot-core-0.2.1.pom` / `z-bot-core-0.2.1.jar` / `z-bot-desktop-packager-0.2.1.pom` 全 404 ⇒ 0/4，同一次运行里 `0.2.0` 侧读到 6/6=200 作阳性对照） | `curl -s https://repo1.maven.org/maven2/io/github/yuku123/z-bot-core/maven-metadata.xml` |
 | 内核 pin | `z-agent-kernel.version=0.2.1`（本仓按坐标写 12 条直接 DM 顶住 fleet 的 0.1.1；repo1 实测 12 件 `0.2.1` 全部 200 ⇒ 已可解析） | `grep -n 'z-agent-kernel.version' pom.xml` |
 | 默认端口 | http 控制台 `8080` · webhook `8090` · 飞书 `9101` · 钉钉 `9102`；**缺省只绑 `127.0.0.1`** | `cat z-bot-core/src/main/resources/com/zifang/z/bot/channel/channels.builtin.properties` |
-| 运行口径 | Java 8（`maven.compiler.source/target=8` 由 `z-boot-parent:1.0.21` 下发，本仓不重抄）· **不引 Spring** | `curl -s https://repo1.maven.org/maven2/io/github/yuku123/z-boot-parent/1.0.21/z-boot-parent-1.0.21.pom \| grep maven.compiler` |
+| 运行口径 | Java 8（`maven.compiler.source/target=8` 由 `z-boot-parent:1.1.0` 下发，本仓不重抄）· **不引 Spring** | `curl -s https://repo1.maven.org/maven2/io/github/yuku123/z-boot-parent/1.0.21/z-boot-parent-1.0.21.pom \| grep maven.compiler` |
 | 模块 | 2 支：`z-bot-core`（全部代码与测试）、`z-bot-desktop-packager`（jpackage 配置，无 `src`） | `grep -n '<module>' pom.xml` |
 | 最近更新 | 2026-09-30 | — |
 
@@ -72,7 +72,7 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
    repo1 上的 `z-bot-core-0.2.0.jar` 是 20,591,303 B，同一个形状。请进宿主 JVM 就是同批类两份定义，
    谁先加载取决于 classpath 顺序。
 3. **版本口径与宿主不同**：本仓刻意把 jackson 整族钉在 `2.13.5`（三条按坐标写的 DM 条目），
-   而地板 `z-boot-dependencies:1.0.20` 的 `jackson.version` 是 `2.18.6`（repo1 实测）。
+   而 `z-boot-parent` 自带地板的 `jackson.version` 是 `2.18.6`（repo1 实测）。
 4. **它没有 Spring 接入点**：`z-bot-core/src/main/resources` 只有 `web/index.html` 与
    `channel/channels.builtin.properties`，**没有** `META-INF/spring.factories` / `AutoConfiguration.imports`；
    主源码里 `org.springframework` 命中 0 处（`grep -rl "org.springframework" z-bot-core/src/main/java | wc -l` ⇒ 0）。
@@ -90,7 +90,7 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 
 ```
 z-bot/
-├── pom.xml                        # 聚合 POM：z-boot-parent:1.0.21 + <revision>0.2.1</revision> + 12 条 kernel 直接 DM
+├── pom.xml                        # 聚合 POM：z-boot-parent:1.1.0 + <revision>0.2.1</revision> + 12 条 kernel 直接 DM
 ├── LICENSE                        # MIT
 ├── z-bot-core/                    # 唯一有代码的模块（jar / shade）
 │   ├── pom.xml                    # finalName=z-bot-core，shade 3.6.0，mainClass=com.zifang.z.bot.ZBot
@@ -123,8 +123,8 @@ z-bot/
 └── _doc/                          # 见文末「文档目录」
 ```
 
-实测体量（今日工作树）：主源码 `z-bot-core/src/main/java` **144 个 `.java` / 42,341 行**；
-测试 `src/test` **129 个 `.java` / 38,036 行**（其中 `*Test.java` 116 支，其余 13 支是驱动/探针）。
+实测体量（今日工作树）：主源码 `z-bot-core/src/main/java` **145 个 `.java` / 42,479 行**；
+测试 `src/test` **130 个 `.java` / 38,360 行**（其中 `*Test.java` 117 支，其余 13 支是驱动/探针）。
 复算：`find z-bot-core/src/main/java -name '*.java' | wc -l`。
 
 仓里**没有** `Dockerfile`、`docker-compose*.yml`、`deploy/`、`k8s/`、`Makefile`（`find . -maxdepth 2` 实测无命中），
@@ -136,7 +136,7 @@ z-bot/
 
 | 层级 | 技术（版本全部来自 pom 实测） |
 |---|---|
-| 语言 / 运行时 | Java 8（`z-boot-parent:1.0.21` 下发 `maven.compiler.source/target=8`，class major 52） |
+| 语言 / 运行时 | Java 8（`z-boot-parent:1.1.0` 下发 `maven.compiler.source/target=8`，class major 52） |
 | 框架 | **无 Spring**；runtime 是 `z-agent-kernel-*:0.2.1` 的 12 件（llm / message / types / tool / memory / event / middleware / workspace / agent / formatter / mcp / credential） |
 | CLI | picocli `4.7.6`（面值写在模块 pom，地板与 fleet 都不管 `info.picocli`） |
 | 终端 | JLine `3.24.1`（父链不供这个坐标，本仓留属性） |
@@ -158,9 +158,9 @@ z-bot/
 mvn -o -DskipTests package      # 产出 z-bot-core/target/z-bot-core.jar（shade 件，4,509 条目 / ~20.6 MB）
 ```
 
-第三方版本由 `z-boot-parent:1.0.21` → `z-boot-dependencies`（地板）+ `z-boot-fleet`（兄弟仓权威表）供给；
+第三方版本由 `z-boot-parent:1.1.0` 供给（第三方地板与兄弟仓权威表均已并入 parent 自身）；
 本仓只有 kernel 12 件、jackson 3 件、jline、picocli、sqlite-jdbc 是刻意按坐标写的面值。若构建报找不到 parent，
-先确认本机/镜像能解析到 repo1 上的 `io.github.yuku123:z-boot-parent:1.0.21`。
+先确认本机/镜像能解析到 repo1 上的 `io.github.yuku123:z-boot-parent:1.1.0`。
 
 ### 跑起来
 
@@ -387,7 +387,7 @@ mvn -o -pl z-bot-desktop-packager -Djpackage.skip=false package   # 再打桌面
 - **`0.2.0` 已在 Central**（2026-09-29 靠 `e35c46f` 补 `<autoPublish>true</autoPublish>` 才从 `VALIDATED` 变公开；
   没有这一行时 `deploy` 一路 `BUILD SUCCESS` 却永远不可见）。仍**没做**的是"外部工程真 pull 验证"（P29 的后半腿）：
   目前没有第三个工程从 repo1 拉 `z-bot-core:0.2.0` 跑通的证据。`0.3.0` 不存在。
-- `z-boot-fleet` 的 `z-bot.version` 那格实测仍是 `0.1.0`（滞后一版），本仓靠按坐标写的 DM 条目顶住。
+- `z-boot-parent` 的 `z-bot.version` 那格实测仍是 `0.1.0`（滞后一版），本仓靠按坐标写的 DM 条目顶住。
 - 入站的**真凭据握手**仍然零验证：飞书/钉钉三条校验（SHA-256 验签、`{"encrypt": …}` 解密、钉钉 `sign` + 1 小时窗口）
   都实现并具名钉住了，但全部证据仍是"对 `127.0.0.1` 假端点发出的字节" —— 本机没有飞书/钉钉凭据。
 - 入站 body 上限 64 KiB 已闭合（门在分配之前），但**上限不是配置项**，改尺寸要重编。
@@ -417,12 +417,15 @@ _Maintained by the z-opc-foundation organization._
 
 ## 文档目录
 
-本仓 `_doc/` 下只有两格（`find _doc -maxdepth 1 -type d` 实测）：`001_arch`（1 份）与
+本仓 `_doc/` 下只有两格（`find _doc -maxdepth 1 -type d` 实测）：`001_arch`（2 份）与
 `005_testing`（验收证据）。`002_deploy` / `003_script` / `004_skill` / `006_release` /
 `007_backlog` / `008_troubleshooting` 六个槽位**按需不建** —— 本仓没有对应内容，不留空目录。
 
-- [`_doc/001_arch/07-roadmap.md`](_doc/001_arch/07-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
-  22 面能力矩阵、结构性红线（含红线 1 代码/数据分离、缺省绑回环）、P0→P30 分期与 §8 逐期实测读数。
+- [`_doc/001_arch/`](_doc/001_arch/) — 架构与规划：
+  - [`00-overview.md`](_doc/001_arch/00-overview.md) — 项目总览：进程形态与四条对外面（终端 / HTTP-SSE / MCP / ACP）、
+    20 个包的分层、8 张必检表、26 行路由台账、通道注册表缺省档、profile 数据根
+  - [`07-roadmap.md`](_doc/001_arch/07-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
+    22 面能力矩阵、结构性红线（含红线 1 代码/数据分离、缺省绑回环）、P0→P30 分期与 §8 逐期实测读数。
 
 - [`_doc/005_testing/acceptance/`](_doc/005_testing/acceptance/) — 每期验收证据，**24 个期目录**；典型四件套是
   `EVIDENCE.md`（逐字读数 + 产生读数的命令）、`LEDGER.tsv`（杠② 变异台账）、`pNN_e2e.py`（杠③ 真进程量具）、
