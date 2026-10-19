@@ -80,9 +80,9 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 
 ⇒ 并机方案只能按"**一个 z-bot = 一个独立进程 + 一个独立 profile 数据根**"来排：
 `java -jar z-bot-core.jar gateway`，宿主侧要接它只能走它对外说的那两面（HTTP/SSE，或 MCP/ACP over stdio）。
-另外 `z-boot-fleet` 里 `z-bot.version` 那格滞后（2026-10-01 19:1x 现读：`z-boot-parent:1.0.21` 导入
-`z-boot-fleet:1.0.1`，其中 `z-bot.version=0.2.0`，而本仓已抬到 `0.2.1` ⇒ 对外发布后仍滞后一格），所以任何引 z-bot 的工程
-都得像本仓一样按坐标把面值写死，否则会被 fleet 反向压成旧字节码。
+另外 `z-boot-parent` 的 `<z-bot.version>` 那格（现读 `0.2.1`）与本仓同格，**已不再滞后**
+（2026-10-01 19:1x 那次现读是旧形状：parent 1.0.21 import `z-boot-fleet:1.0.1`、其中 `z-bot.version=0.2.0`，
+而本仓已抬到 `0.2.1` ⇒ 当时对外发布后仍滞后一格；该形状随 2026-10-08 火车制拓扑退役）。
 
 ---
 
