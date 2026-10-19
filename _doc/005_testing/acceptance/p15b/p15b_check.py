@@ -17,7 +17,7 @@ P15b —— `sessions_column_alignment.md` 的保鲜尺（兼表格生成器）�
   C. 我们侧（消费者）：
      · `判定=要`   ⇒ "消费者"格里的每个 Java 类名必须在 `src/main/java` 下真存在
                      （`git ls-files` 打到同名 .java）；§6 的类名清单必须与表内一致。
-     · `判定=占位` ⇒ 整行必须带 `P\\d+` 期号，且该期号在 `_doc/001_arch/hermes-roadmap.md` §5 真排了期，
+     · `判定=占位` ⇒ 整行必须带 `P\\d+` 期号，且该期号在 `_doc/001_arch/07-roadmap.md` §5 真排了期，
                      禁写"以后再说/待定/TBD"。
      · `判定=不要` ⇒ 理由必须带"实测"串（不许凭印象判"我们真没有"）。
 
@@ -36,7 +36,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", ".."))
 DOC = os.path.join(HERE, "sessions_column_alignment.md")
-ROADMAP = os.path.join(REPO, "_doc", "001_arch", "hermes-roadmap.md")
+ROADMAP = os.path.join(REPO, "_doc", "001_arch", "07-roadmap.md")
 SCHEMA_JAVA = os.path.join(REPO, "z-bot-core", "src", "main", "java",
                            "com", "zifang", "z", "bot", "store", "SchemaMigrations.java")
 

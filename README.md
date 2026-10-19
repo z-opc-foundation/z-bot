@@ -10,7 +10,7 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 **它不是一等 Spring 服务，也不是可嵌入库**：入口是 picocli 的 `main()`，HTTP 面自己起 JDK
 `com.sun.net.httpserver`，数据根是自己独占的 profile 目录（进程形态与并机约束见下文）。
 
-工程口径与逐期实测读数见 [`_doc/001_arch/hermes-roadmap.md`](_doc/001_arch/hermes-roadmap.md)。
+工程口径与逐期实测读数见 [`_doc/001_arch/07-roadmap.md`](_doc/001_arch/07-roadmap.md)。
 
 ---
 
@@ -421,7 +421,7 @@ _Maintained by the z-opc-foundation organization._
 `005_testing`（验收证据）。`002_deploy` / `003_script` / `004_skill` / `006_release` /
 `007_backlog` / `008_troubleshooting` 六个槽位**按需不建** —— 本仓没有对应内容，不留空目录。
 
-- [`_doc/001_arch/hermes-roadmap.md`](_doc/001_arch/hermes-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
+- [`_doc/001_arch/07-roadmap.md`](_doc/001_arch/07-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
   22 面能力矩阵、结构性红线（含红线 1 代码/数据分离、缺省绑回环）、P0→P30 分期与 §8 逐期实测读数。
 
 - [`_doc/005_testing/acceptance/`](_doc/005_testing/acceptance/) — 每期验收证据，**24 个期目录**；典型四件套是

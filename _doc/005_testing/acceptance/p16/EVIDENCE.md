@@ -8,7 +8,7 @@
   日期 2026-09-26（本机 darwin 25.5，java 1.8/25 混用无碍，mvn -o 离线，python 3.14）
 * **两棒加起来一条产品代码都没改**：`git diff --name-only 235a9a7..HEAD` 只有 `_doc/005_testing/acceptance/p16/`
   里的四个交付物 + 一支 `.gitignore`（见「全树未被改动」那节的 md5 与 `git log` 对拍）；
-  `_doc/001_arch/hermes-roadmap.md` 一个字没动（共享文件，避开撞车）
+  `_doc/001_arch/07-roadmap.md` 一个字没动（共享文件，避开撞车）
 
 本文件里每个数字都跟着产生它的那条命令。判定只认 surefire XML 里的具名 testcase，
 `mvn` 退出码非 0 一律不算证据（照 p11b/p17 的纪律）。

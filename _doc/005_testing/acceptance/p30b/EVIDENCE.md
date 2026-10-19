@@ -26,7 +26,7 @@
 
 第一遍杠①（06:53）跑之前工作树里唯一的改动是 `M README.md`（外加三个未跟踪的 `__pycache__`）；
 第二遍（07:02，见 §1 末）之前是四处文档笔：`README.md`、`p30/EVIDENCE.md` §6 的闭合标记、
-`hermes-roadmap.md` §8.14/§8.15、以及本文件。README 会不会影响测试结果不是"我觉得"：
+`07-roadmap.md` §8.14/§8.15、以及本文件。README 会不会影响测试结果不是"我觉得"：
 `ReadmeClaimsTest` 只核对**定量主张**（`revision` / 内核 pin / 路由行数 / 路径数 / `/api/commands` 行数 /
 子命令名单），不读我改的那两处；而全仓**运行时真的会打开 `_doc/` 文件**的测试只有四处 ——
 `HttpRouteLedgerTest`（`p28/ROUTES.tsv` + `p28/EVIDENCE.md`）、`SessionsColumnAlignmentTest`
@@ -93,7 +93,7 @@ socket_hits=0
 ```
 
 复跑（07:02:23–07:04:33）之前落定的文档笔是四处：`README.md`、`_doc/005_testing/acceptance/p30/EVIDENCE.md` §6 的闭合
-标记、`hermes-roadmap.md` §8.14 的 D-P30-3 一行 + §8.15 整节、以及本文件。复跑之后**只剩本文件自己**在改
+标记、`07-roadmap.md` §8.14 的 D-P30-3 一行 + §8.15 整节、以及本文件。复跑之后**只剩本文件自己**在改
 （这一节与 §4），而全仓会读 `_doc/` 的测试只有 §0 列的那四处、都不指向 `p30b/` ⇒ 不再触发第三遍。
 
 ---

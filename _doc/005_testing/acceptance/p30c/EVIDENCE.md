@@ -21,7 +21,7 @@
 
 杠③ 的量具 `_doc/005_testing/acceptance/p30c/p30c_e2e.py`（`bf48ee6d31add6c7238f8d1483e08111`）与杠② 的产出 `LEDGER.tsv`（`31708c2f73fd416ce2dc068acb80e89e`）在跑时是**未跟踪**状态（量具边写边跑），收口时才入库 —— 这句话必须写出来，否则"三根杠同树"会被读成"四份文件早就在树里"。
 
-**一笔我自己的破形（记在这里，别学）**：`README.md` 的最后改动是 07:28:07，早于杠① 第一跑 07:28:31 ⇒ 唯一**会被测试打开**的那份文档在三跑期间一个字没动；但 `_doc/005_testing/acceptance/p30/EVIDENCE.md`（07:29:56）和 `_doc/001_arch/hermes-roadmap.md`（07:30:16）是**在 ×3 循环中途**改的，本文件更是写在三跑之后。为什么这三笔结构上影响不到读数 —— 现测的口径（不是回忆）：
+**一笔我自己的破形（记在这里，别学）**：`README.md` 的最后改动是 07:28:07，早于杠① 第一跑 07:28:31 ⇒ 唯一**会被测试打开**的那份文档在三跑期间一个字没动；但 `_doc/005_testing/acceptance/p30/EVIDENCE.md`（07:29:56）和 `_doc/001_arch/07-roadmap.md`（07:30:16）是**在 ×3 循环中途**改的，本文件更是写在三跑之后。为什么这三笔结构上影响不到读数 —— 现测的口径（不是回忆）：
 
 ```
 $ grep -rn "_doc/" z-bot-core/src/test --include='*.java' | grep -vE ":[0-9]+: *\*"
@@ -38,7 +38,7 @@ $ grep -rn 'README\.md' z-bot-core/src/test --include='*.java' | grep -vE ":[0-9
 ReadmeClaimsTest.java:186 / :198 / :233        ← 运行时真会打开 README.md 的只有这一支测试类
 ```
 
-全仓测试运行时打开的 `_doc/` 目标只有 `p28/ROUTES.tsv`、`p28/EVIDENCE.md`、`p15b/sessions_column_alignment.md`、`p21/` 目录四个，**没有一个指向本期改的文件**；被改的三篇（`p30/EVIDENCE.md`、`hermes-roadmap.md`、本文件）没有任何测试读它们。README 则在三跑之前就已定稿。**下期的规矩**：文档笔全部赶在杠① 之前落，别再用"读不到"替自己开脱 —— 形破了就是破了。
+全仓测试运行时打开的 `_doc/` 目标只有 `p28/ROUTES.tsv`、`p28/EVIDENCE.md`、`p15b/sessions_column_alignment.md`、`p21/` 目录四个，**没有一个指向本期改的文件**；被改的三篇（`p30/EVIDENCE.md`、`07-roadmap.md`、本文件）没有任何测试读它们。README 则在三跑之前就已定稿。**下期的规矩**：文档笔全部赶在杠① 之前落，别再用"读不到"替自己开脱 —— 形破了就是破了。
 
 ---
 

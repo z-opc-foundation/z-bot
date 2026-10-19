@@ -1099,7 +1099,7 @@ BAR1_DONE|end=2026-09-27 01:56:44 dir=/Users/zifang/.cache/zbot-integrate/bar1_2
   没有一支测试被静默挤掉（`class_sum` 与聚合行 `agg` 双尺一致，`build_success_rows=1` 说明只有一场 reactor）。
 - 协议照旧：每轮 `rm -rf z-bot-core/target/surefire-reports` 后 `mvn -o test` 全 reactor（**不** `-pl`），三轮串行不并发。
 - **`dirty_tracked` 开头 0、结尾 2 这个不一致，我这轮不当它作废，但要把证据摆齐**：
-  收尾时脏的两条是 `_doc/005_testing/acceptance/p28/EVIDENCE.md` 与 `_doc/001_arch/hermes-roadmap.md`（我在三轮跑期间写 §P28-lead-9 与本节），
+  收尾时脏的两条是 `_doc/005_testing/acceptance/p28/EVIDENCE.md` 与 `_doc/001_arch/07-roadmap.md`（我在三轮跑期间写 §P28-lead-9 与本节），
   `git status --porcelain -- z-bot-core/src` 空、`git diff --name-only 6f6b21f -- z-bot-core/src` 计 **0** 个文件，
   且被新加的那支测试在盘上与在 `6f6b21f` 里逐字节同（`md5` 前缀两边都是 `8fd84fa2`）。
   ⇒ 编译对象三轮都是 `6f6b21f` 那棵树，动的只有不参与编译的两篇文档。**下一期起：写作与测量不同时进行**，

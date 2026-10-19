@@ -4,7 +4,7 @@
 
 ## 0. 这一项在修什么
 
-`_doc/001_arch/hermes-roadmap.md` §6"`*.channel` HTTP 抖动真因"：四个通道的 `start()` 一律
+`_doc/001_arch/07-roadmap.md` §6"`*.channel` HTTP 抖动真因"：四个通道的 `start()` 一律
 `HttpServer.create(new InetSocketAddress(port), 0)` —— 那是**通配**地址 (0.0.0.0)。两个后果：
 
 1. macOS 上通配监听能和别的服务已经占住的 `127.0.0.1:P` **共存**：进程自己印"已启动"，

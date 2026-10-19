@@ -367,7 +367,7 @@ BAR4_T3 names=[".stty.bak", "config.properties", "cron", "memories", "models-cac
   之后才有第二次动作。此后全程**未用** `checkout/clean/restore/stash/reset --hard`。
 - 注入还原只用本次运行前 cp 的副本 + md5 对账，并独立复算（P28b-3）。
 - 未 push；未把本分支往 main 上并（`114b37f` 只把 `main`=`f237a25` 并进来，反向零操作）；
-  未改 `_doc/001_arch/hermes-roadmap.md`；未改 `slash/SlashRegistry.java`、`web/index.html`。
+  未改 `_doc/001_arch/07-roadmap.md`；未改 `slash/SlashRegistry.java`、`web/index.html`。
 - 持久产物全在 `~/.cache/zbot-p28-lead/`（`.log` 被 `.gitignore` ⇒ 决定性读数原样贴进本文件），未写 `/tmp`。
 - 假 HTTP 走自写 `ServerSocket`+`bind(0)`+`Connection: close`，未用 `com.sun.net.httpserver`；
   无 `pip install`/`npm i`，无守护进程，未打真厂商 API。
@@ -711,7 +711,7 @@ BAR1_DONE|end=2026-09-27 01:05:09 dir=/Users/zifang/.cache/zbot-integrate/bar1_2
 
 `1154 → 1158` 恰好等于新增的 4 条 `@Test`，`files=107 → 108` 恰好等于新增的那一个测试文件；
 三轮 `F=E=S=0`、`socket_hits=0`、`build_success_rows=1`。跑期间唯一受跟踪的在途改动是
-`_doc/001_arch/hermes-roadmap.md`（文档，不参与编译），读数行里 `dirty_tracked=1` 就是它。
+`_doc/001_arch/07-roadmap.md`（文档，不参与编译），读数行里 `dirty_tracked=1` 就是它。
 
 ### 5. 杠④ 与还原
 
@@ -797,7 +797,7 @@ README.md
 _doc/005_testing/acceptance/p27/p27_mutation.py
 _doc/005_testing/acceptance/p28/EVIDENCE.md
 _doc/005_testing/acceptance/p28/p28_mutation.py
-_doc/001_arch/hermes-roadmap.md
+_doc/001_arch/07-roadmap.md
 z-bot-core/src/test/java/com/zifang/z/bot/ReadmeClaimsTest.java
 ```
 

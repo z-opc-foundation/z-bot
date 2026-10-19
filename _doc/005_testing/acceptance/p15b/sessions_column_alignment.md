@@ -170,7 +170,7 @@ python3 _doc/005_testing/acceptance/p15b/p15b_check.py | grep -E '判定分布|�
   内核没有数据源（`TokenUsage` 无 cache/reasoning 档）、进程级而非会话级（`cwd`/`billing_base_url`/`profile_name`）、
   功能根本不存在（`handoff_*`、`rewind_count`、`tool_call_count`、`expiry_finalized`、`git_branch`、`git_repo_root`）。
 - **占位 = 18** 行，按期号聚合：`P12 = 7`、`P14 = 4`、`P16 = 7`。
-  尺逐行检查期号**确实排在 roadmap §5 里**（参照集由 `grep -oE '\*\*P[0-9]+[a-z]? ' _doc/001_arch/hermes-roadmap.md` 同一条规则摘出），
+  尺逐行检查期号**确实排在 roadmap §5 里**（参照集由 `grep -oE '\*\*P[0-9]+[a-z]? ' _doc/001_arch/07-roadmap.md` 同一条规则摘出），
   不许写"以后再说"。
 
 差额账：`46 = 14（要，全在已有 15 列内）+ 14（不要）+ 18（占位）`；已有 15 列里未被任何"要"行认领的只有
