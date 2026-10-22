@@ -67,13 +67,15 @@ public class ChannelRegistryTest {
     // ===== 缺省档的形状 =====
 
     @Test
-    public void builtinManifestDeclaresFourKindsWithExpectedFlags() throws Exception {
+    public void builtinManifestDeclaresFiveKindsWithExpectedFlags() throws Exception {
         ChannelRegistry r = ChannelRegistry.load(null);
-        assertEquals("缺省档应当只有四种通道声明", 4, r.names().size());
-        assertTrue(r.names().containsAll(java.util.Arrays.asList("http", "webhook", "feishu", "dingtalk")));
+        assertEquals("缺省档应当只有五种通道声明", 5, r.names().size());
+        assertTrue(r.names().containsAll(
+                java.util.Arrays.asList("http", "webhook", "feishu", "dingtalk", "zmsg")));
 
         assertFalse("IM 通道不随包发凭据，缺省必须 enabled=false", r.spec("feishu").enabled());
         assertFalse(r.spec("dingtalk").enabled());
+        assertFalse("z-msg 的地址不随包发，缺省必须 enabled=false", r.spec("zmsg").enabled());
         assertTrue("控制台缺省要起（P18 之前的行为）", r.spec("http").enabled());
         assertTrue(r.spec("webhook").enabled());
 
@@ -81,14 +83,19 @@ public class ChannelRegistryTest {
         assertEquals(8090, r.spec("webhook").defaultPort());
         assertEquals(9101, r.spec("feishu").defaultPort());
         assertEquals(9102, r.spec("dingtalk").defaultPort());
+        assertEquals("z-msg 不监听端口，没有缺省端口", -1, r.spec("zmsg").defaultPort());
 
         assertEquals("拉模式控制台不许当投递目标", false, r.spec("http").outbound());
         assertTrue(r.spec("webhook").outbound());
+        assertTrue("z-msg 是出站通道，可以当投递目标", r.spec("zmsg").outbound());
         assertEquals(java.util.Arrays.asList("app-id", "app-secret"), r.spec("feishu").requires());
         assertEquals(Collections.singletonList("webhook-url"), r.spec("dingtalk").requires());
+        assertEquals("z-msg 只认 base-url（地址）", Collections.singletonList("base-url"),
+                r.spec("zmsg").requires());
         assertEquals("https://open.feishu.cn/open-apis", r.spec("feishu").config().get("api-base"));
-        assertTrue("工厂表覆盖缺省档的四种 kind",
-                r.registeredKinds().containsAll(java.util.Arrays.asList("http", "webhook", "feishu", "dingtalk")));
+        assertTrue("工厂表覆盖缺省档的五种 kind",
+                r.registeredKinds().containsAll(
+                        java.util.Arrays.asList("http", "webhook", "feishu", "dingtalk", "zmsg")));
     }
 
     // ===== 惰性 =====
@@ -357,7 +364,8 @@ public class ChannelRegistryTest {
         // 注册表在同一层内按键名排序，保证通道注册顺序、status/cron 目标列表都是确定的。
         for (int i = 0; i < 3; i++) {
             ChannelRegistry r = ChannelRegistry.load(null);
-            assertEquals(java.util.Arrays.asList("dingtalk", "feishu", "http", "webhook"), r.names());
+            assertEquals(java.util.Arrays.asList("dingtalk", "feishu", "http", "webhook", "zmsg"),
+                    r.names());
         }
     }
 

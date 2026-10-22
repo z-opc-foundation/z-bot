@@ -43,7 +43,7 @@ import java.util.Set;
  * <ol>
  *   <li>随 jar 走的缺省档
  *       {@code src/main/resources/com/zifang/z/bot/channel/channels.builtin.properties}
- *       —— 声明四种 kind 的形状，IM 通道 {@code enabled=false}（不随包发凭据）。</li>
+ *       —— 声明五种 kind 的形状，IM 通道与 z-msg {@code enabled=false}（不随包发凭据与地址）。</li>
  *       <li>{@code <configDir>/channels.properties} —— <b>用户这一份 profile 的声明</b>。
  *       这是本期唯一的通道配置入口：{@link com.zifang.z.bot.config.BotConfig BotConfig}
  *       归 P21（它要给 {@code McpServerEntry} 加 transport 字段），里面没有任何 feishu/dingtalk 键，
@@ -240,7 +240,7 @@ public final class ChannelRegistry {
 
     // ===== 装配 =====
 
-    /** 缺省档 + {@code <configDir>/channels.properties}，并挂上仓内四种 kind 的工厂。 */
+    /** 缺省档 + {@code <configDir>/channels.properties}，并挂上仓内五种 kind 的工厂。 */
     public static ChannelRegistry load(File configDir) {
         return load(configDir, null);
     }
@@ -420,7 +420,8 @@ public final class ChannelRegistry {
         return new LinkedHashSet<String>(factories.keySet());
     }
 
-    /** 仓内四种通道：{@code http}（拉模式控制台）/ {@code webhook} / {@code feishu} / {@code dingtalk}。 */
+    /** 仓内五种通道：{@code http}（拉模式控制台）/ {@code webhook} / {@code feishu} /
+     *  {@code dingtalk} / {@code zmsg}（只出不进）。 */
     public ChannelRegistry registerBuiltInFactories() {
         registerFactory("http", new ChannelFactory() {
             @Override
@@ -465,6 +466,19 @@ public final class ChannelRegistry {
                         ctx.value(spec, DingTalkChannel.KEY_SECRET),
                         ctx.host(spec),
                         ctx.value(spec, DingTalkChannel.KEY_INBOUND_SECRET));
+            }
+        });
+        // z-msg：只出不进（outbound-only）。没有端口、没有入站面 —— 工厂只把 manifest 里给的
+        // 几项配置透给通道；地址不在仓内，缺 base-url 时 create() 的 requires 检查会点名缺哪个键。
+        registerFactory("zmsg", new ChannelFactory() {
+            @Override
+            public Channel create(Spec spec, Context ctx) {
+                return new ZMsgChannel(ctx.bus(),
+                        ctx.value(spec, ZMsgChannel.KEY_BASE_URL),
+                        ctx.value(spec, ZMsgChannel.KEY_TOKEN),
+                        ctx.value(spec, ZMsgChannel.KEY_MSG_CHANNEL),
+                        ctx.value(spec, ZMsgChannel.KEY_BIZ_TYPE),
+                        ctx.value(spec, ZMsgChannel.KEY_SUBJECT));
             }
         });
         return this;

@@ -363,7 +363,15 @@ public final class DeliveryLedger {
                                 + " updated_at INTEGER NOT NULL,"
                                 + " owner_pid INTEGER,"
                                 + " owner_started_at INTEGER,"
-                                + " last_error TEXT)");
+                                + " last_error TEXT,"
+                                // 外部回执号：zmsg 通道把 z-msg 回执里的 msgId 写在这里
+                                // （两本账的 join key 之一；老库没有这列 ⇒ 下面补 ALTER）
+                                + " external_msg_id TEXT)");
+                        // 迁移：老库（建表时还没有这一列）补一列。
+                        // SQLite 的 ADD COLUMN 只能加可空列且不能带非空默认值 ⇒ 这里正好满足。
+                        if (!hasColumn(c, "external_msg_id")) {
+                            st.execute("ALTER TABLE " + TABLE + " ADD COLUMN external_msg_id TEXT");
+                        }
                     } finally {
                         st.close();
                     }
@@ -372,6 +380,30 @@ public final class DeliveryLedger {
             });
         } catch (SQLException e) {
             throw new IllegalStateException("打不开送达台账（" + dbFile + "）: " + e.getMessage(), e);
+        }
+    }
+
+    /** 这张表有没有某列（迁移判断用；读不出来按「没有」处理 ⇒ 走 ADD COLUMN，最坏是多一列）。 */
+    private static boolean hasColumn(Connection c, String column) {
+        try {
+            java.sql.Statement st = c.createStatement();
+            try {
+                java.sql.ResultSet rs = st.executeQuery("PRAGMA table_info(" + TABLE + ")");
+                try {
+                    while (rs.next()) {
+                        if (column.equalsIgnoreCase(rs.getString(2))) {
+                            return true;
+                        }
+                    }
+                    return false;
+                } finally {
+                    rs.close();
+                }
+            } finally {
+                st.close();
+            }
+        } catch (SQLException e) {
+            return false;
         }
     }
 
@@ -457,6 +489,148 @@ public final class DeliveryLedger {
 
     public boolean markDelivered(String obligationId) {
         return updateState(obligationId, DELIVERED, null);
+    }
+
+    /**
+     * 结清一条义务，<b>并把外部回执号一起写进去</b>（zmsg 通道用：z-msg 回执里的 msgId）。
+     *
+     * <p>老库没有 {@code external_msg_id} 列时（例如库文件是旧版本建的）⇒ 这次写入降级成
+     * 普通的 {@link #markDelivered(String)}，不抛（台账是旁路观测面，绝不能把真投递拖下水）。</p>
+     */
+    public boolean markDelivered(String obligationId, String externalMsgId) {
+        if (externalMsgId == null || externalMsgId.trim().isEmpty()) {
+            return markDelivered(obligationId);
+        }
+        final String ext = externalMsgId.trim();
+        final long now = System.currentTimeMillis();
+        try {
+            Integer n = SqliteTx.write(dbFile, txConfig, counters, new SqliteTx.Body<Integer>() {
+                @Override
+                public Integer run(Connection c) throws SQLException {
+                    if (!hasColumn(c, "external_msg_id")) {
+                        return Integer.valueOf(updateStateIn(c, obligationId, DELIVERED, null, now));
+                    }
+                    PreparedStatement ps = c.prepareStatement(
+                            "UPDATE " + TABLE + " SET state=?, updated_at=?, external_msg_id=?"
+                                    + " WHERE obligation_id=?");
+                    try {
+                        ps.setString(1, DELIVERED);
+                        ps.setLong(2, now);
+                        ps.setString(3, ext);
+                        ps.setString(4, obligationId);
+                        return Integer.valueOf(ps.executeUpdate());
+                    } finally {
+                        ps.close();
+                    }
+                }
+            });
+            return n != null && n.intValue() > 0;
+        } catch (SQLException e) {
+            LOG.warn("[delivery-ledger] delivered(external) 写入失败 id={}: {}", obligationId, e.getMessage());
+            return markDelivered(obligationId);
+        }
+    }
+
+    /** 某条义务记的外部回执号（z-msg 的 msgId）；没有过就是空串。 */
+    public String externalMsgIdOf(final String obligationId) {
+        if (obligationId == null || obligationId.isEmpty()) {
+            return "";
+        }
+        try {
+            String s = SqliteTx.read(dbFile, txConfig, counters, new SqliteTx.Body<String>() {
+                @Override
+                public String run(Connection c) throws SQLException {
+                    if (!hasColumn(c, "external_msg_id")) {
+                        return "";
+                    }
+                    PreparedStatement ps = c.prepareStatement(
+                            "SELECT external_msg_id FROM " + TABLE + " WHERE obligation_id=?");
+                    try {
+                        ps.setString(1, obligationId);
+                        java.sql.ResultSet rs = ps.executeQuery();
+                        try {
+                            return rs.next() ? rs.getString(1) : "";
+                        } finally {
+                            rs.close();
+                        }
+                    } finally {
+                        ps.close();
+                    }
+                }
+            });
+            return s == null ? "" : s;
+        } catch (SQLException e) {
+            LOG.debug("[delivery-ledger] external_msg_id 读取失败 id={}: {}", obligationId, e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * 「有就留着，没有才建」：{@code INSERT OR IGNORE}。
+     *
+     * <p>与 {@link #recordObligation}（{@code INSERT OR REPLACE}）的区别是它<b>不覆盖既有行</b>：
+     * 重投时那一行的 {@code attempts}（重试预算）与 {@code created_at}（过期判定）必须原样留着，
+     * 否则每次重投都把预算清零 ⇒ 毒行永远达不到 {@link #MAX_ATTEMPTS} 上限 ⇒ 无限重投。</p>
+     */
+    public void ensureObligation(final String obligationId, final String sessionKey, final String platform,
+            final String chatId, final String content) {
+        final long now = System.currentTimeMillis();
+        final long pid = ownPid();
+        final Long started = ownStartedAt();
+        try {
+            SqliteTx.write(dbFile, txConfig, counters, new SqliteTx.Body<Object>() {
+                @Override
+                public Object run(Connection c) throws SQLException {
+                    PreparedStatement ps = c.prepareStatement(
+                            "INSERT OR IGNORE INTO " + TABLE + " (obligation_id, session_key, platform,"
+                                    + " chat_id, content, state, attempts, created_at, updated_at,"
+                                    + " owner_pid, owner_started_at, last_error)"
+                                    + " VALUES (?,?,?,?,?,?,0,?,?,?,?,NULL)");
+                    try {
+                        ps.setString(1, obligationId);
+                        ps.setString(2, str(sessionKey));
+                        ps.setString(3, str(platform));
+                        ps.setString(4, str(chatId));
+                        ps.setString(5, str(content));
+                        ps.setString(6, PENDING);
+                        ps.setLong(7, now);
+                        ps.setLong(8, now);
+                        ps.setLong(9, pid);
+                        if (started == null) {
+                            ps.setNull(10, java.sql.Types.INTEGER);
+                        } else {
+                            ps.setLong(10, started.longValue());
+                        }
+                        ps.executeUpdate();
+                    } finally {
+                        ps.close();
+                    }
+                    return null;
+                }
+            });
+        } catch (SQLException e) {
+            LOG.warn("[delivery-ledger] ensure 失败 id={}: {}", obligationId, e.getMessage());
+            return;
+        }
+        records.incrementAndGet();
+    }
+
+    /** {@link #updateState} 的同连接版本（供 {@link #markDelivered(String, String)} 复用）。 */
+    private static int updateStateIn(Connection c, String obligationId, String state,
+            String error, long now) throws SQLException {
+        String err = error == null || error.isEmpty() ? null
+                : (error.length() > 500 ? error.substring(0, 500) : error);
+        PreparedStatement ps = c.prepareStatement(
+                "UPDATE " + TABLE + " SET state=?, updated_at=?, last_error=? WHERE obligation_id=?");
+        try {
+            ps.setString(1, state);
+            ps.setLong(2, now);
+            ps.setString(3, err);
+            ps.setString(4, obligationId);
+            return ps.executeUpdate();
+        } finally {
+            ps.close();
+        }
     }
 
     public boolean markFailed(String obligationId, String error) {

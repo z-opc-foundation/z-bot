@@ -222,7 +222,7 @@ java -jar z-bot-core/target/z-bot-core.jar gateway --webhook-port 8090   # 多�
 ## 📡 通道与入站面（只写键名，不写值）
 
 缺省档随 jar 走：`z-bot-core/src/main/resources/com/zifang/z/bot/channel/channels.builtin.properties`，
-四种内置 kind 都能被 profile manifest 引用；`requires` 缺键 ⇒ 抛 `ChannelConfigException` 并点名缺哪个键。
+五种内置 kind 都能被 profile manifest 引用；`requires` 缺键 ⇒ 抛 `ChannelConfigException` 并点名缺哪个键。
 
 | kind | 缺省 enabled | outbound | 缺省端口 | 需要的配置键（值不入仓） | 入站路径 |
 |---|---|---|---|---|---|
@@ -230,6 +230,13 @@ java -jar z-bot-core/target/z-bot-core.jar gateway --webhook-port 8090   # 多�
 | `webhook` | true | true | 8090 | — | `POST /webhook/in`，出站 `GET /webhook/out` 轮询 |
 | `feishu` | **false** | true | 9101 | `app-id`、`app-secret`；事件面另用 `verification-token`、`encrypt-key`；出站另有 `static-token` 通路 | `POST /feishu/event`，出站 `GET /feishu/out` |
 | `dingtalk` | **false** | true | 9102 | `webhook-url`（加签群机器人）+ 入站 `sign` 密钥 | `POST /dingtalk/in`，出站 `GET /dingtalk/out` |
+| `zmsg`（只出不进） | **false** | true | —（不监听） | `base-url`（z-msg 地址）+ 可选 `token`；另可选 `msg-channel`（z-msg 侧介质，缺省 `EMAIL`）、`biz-type`（缺省 `DIRECT_SEND`）、`subject` | **无入站面**（outbound-only） |
+
+`zmsg` 是**只出不进**的通道：它不监听端口、不注册任何 HTTP 端点、不碰 `TurnLease` 的会话语义，
+只把一条出站消息交给 z-msg 的 `POST /api/msg/send`（地址与凭据**只**由 manifest / CLI 覆盖注入，
+仓内零硬编码）。提交成功后，z-msg 回执里的 `msgId` 会写进送达台账的 `external_msg_id` 列
+⇒ z-bot 的账与 z-msg 的 `z_msg_delivery_log` 用同一个 msgId 串起来（join key 是本通道写过去的
+`idempotencyKey` = 台账义务 id）。实现见 `channel/ZMsgChannel.java`。
 
 三面共用**一个**入站 body 读取口：`channel/InboundLimits.MAX_BODY_BYTES = 65_536`（64 KiB，与 hermes wecom
 `_MAX_BODY` 同值）。门看**已读字节数**而不是 `Content-Length`，超限在把 body 读进堆之前抛出，
