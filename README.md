@@ -260,6 +260,41 @@ java -jar z-bot-core/target/z-bot-core.jar gateway --webhook-port 8090   # 多�
 
 ---
 
+## 🧭 通道归属：通知型走 z-msg，会话型留本仓（渠道二分法）
+
+> 判据只有一条：**这条通道需不需要「接住对方的回话」。**
+> 需要 → **会话型**，留在本仓（入站验签解密 + TurnLease 防多通道抢话 + `state.db` 会话状态）；
+> 不需要 → **通知型**，走 z-msg（供应商切换一行 yml、投递日志、限流重试、模板审核流都在那边）。
+
+| kind | 有没有入站面 | 归属 | 落在哪 |
+|---|---|---|---|
+| `zmsg` | **无**（outbound-only） | **通知型** | z-msg 的 `POST /api/msg/send`；本仓只负责「把一条消息交给它」+ 记台账 |
+| `dingtalk` / `feishu` | 有（`POST /dingtalk/in`、`POST /feishu/event`） | **会话型**，本仓原生（短期） | 下沉 z-msg 会与 TurnLease / `state.db` 全套重叠 ⇒ 重复建设 |
+| `webhook` | 有（`POST /webhook/in`） | 通用对接面，本仓原生 | 它的入站语义是「谁都能 POST 进来」，不是某个 IM 厂商的协议 ⇒ 不归 z-msg，也不套本仓的会话模型 |
+| `http` | 有（控制台） | 本仓原生 | 调试面，不是对外渠道 |
+
+**三条边界，别越**：
+
+1. **`z-msg-im` 不是 IM 渠道屏蔽层。** 它是 **z-msg 自己仓内的服务端会话域**（会话/成员/消息/已读回执，
+   `seq` CAS 分配与增量同步，走 `z-msg-ws` 帧线），管的是「**本系统内部**人与人 / 与 agent 的聊天」。
+   本仓的 `dingtalk` / `feishu` 管的是「**外部 IM 厂商**的协议与入站验签」——两个维度，不是一件事。
+   ⇒ 「agent 接飞书」不需要 z-msg-im；z-msg 仓里有 z-msg-im 也不构成本仓会话型通道该下沉的理由。
+2. **agent 之间的内部协作消息不归 z-msg**（团队内部总线 `z-agent-msg` 是独立问题域）；
+   也别反向把那条总线当渠道屏蔽层用。
+3. **`zmsg` kind 是通知型的**：它没有入站面、不注册任何 HTTP 端点、不碰 `TurnLease` 的会话语义
+   ⇒ **不能当会话来源通道**（`ChannelRegistry#isOutbound` 判它 `outbound=true`，那是「可作投递目标」，
+   不是「可收回消息」）。想「在飞书里跟 agent 对话」，走的是本仓原生 `feishu` 通道，不是 `zmsg`。
+
+**跨进程，不引 jar**：本仓是独立进程（红线：不能进别人 JVM），z-msg 也是 ⇒ 通知型出站只走 HTTP
+（`POST /api/msg/send`），**不引 z-msg 的 jar 进本仓 JVM**。z-msg 侧那个端点**默认关**
+（`z-msg.web.send-endpoint-enabled=false`，关着时回**真 HTTP 403**）⇒ 接线方要先确认调用方在认证边界内。
+z-msg 的地址与 token **只**由 manifest / CLI 注入（`channel.<name>.config.base-url`），仓内零硬编码。
+
+**两本账用 msgId 串**：本仓台账 `external_msg_id` = z-msg 回执里的 `msgId` = z-msg 投递日志的
+`provider_message_id`；join key 是本通道写过去的 `idempotencyKey`（= 台账义务 id）。
+
+---
+
 ## 🔌 HTTP / SSE 路由台账
 
 路由清单是被跟踪的文件 [`_doc/005_testing/acceptance/p28/ROUTES.tsv`](_doc/005_testing/acceptance/p28/ROUTES.tsv)：
