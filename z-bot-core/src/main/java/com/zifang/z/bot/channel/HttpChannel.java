@@ -1,15 +1,19 @@
 package com.zifang.z.bot.channel;
 
+import com.zifang.util.core.lang.RandomUtil;
 import com.zifang.util.json.JsonUtil;
 import com.zifang.util.json.define.TypeReference;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.zifang.z.agent.kernel.message.Msg;
+import com.zifang.z.bot.agent.AgentCatalog;
 import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
+import com.zifang.z.bot.cliwrap.CliAgentConfig;
 import com.zifang.z.bot.cliwrap.CliEngineBridge;
+import com.zifang.z.bot.cliwrap.dto.ChatCompletionResponse;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.cron.CronJob;
 import com.zifang.z.bot.cron.CronScheduler;
@@ -32,6 +36,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -44,9 +49,16 @@ import java.util.concurrent.ExecutorService;
  * <ul>
  *   <li>对话：{@code POST /bot/chat}（同步纯文本）、{@code POST /bot/chat/stream}（SSE，
  *       逐事件推送 ReAct 步骤）、{@code POST /bot/confirm}（放行待确认工具）</li>
- *   <li>会话：{@code GET/POST /api/sessions}、{@code /api/session/switch|delete}、{@code /api/session/messages}</li>
+ *   <li>会话：{@code GET/POST /api/sessions}、{@code /api/session/switch|delete}、{@code /api/session/messages}；
+ *       桌面端适配面 {@code GET/POST /v1/sessions} 与 {@code GET/DELETE /v1/sessions/{id}}</li>
+ *   <li>桌面端（z-bot-desk）：{@code POST /v1/chat/completions}（OpenAI 兼容，jar 档走内置 ReAct、
+ *       CLI 档走 wrapper）、{@code GET/POST /v1/agents} 与 {@code GET/DELETE /v1/agents/{id}}、
+ *       {@code GET /health}、{@code /workspace} 前缀（Vite 产物静态面）</li>
  *   <li>center 联动：{@code /api/skill/push|list|sync}、{@code /api/agent/register}，控制面 {@code /bot/status}、{@code /bot/clear}</li>
  * </ul>
+ *
+ * <p>{@code /workspace} 前缀下是带哈希文件名的静态资源，按前缀下发、<b>不进字面量台账</b>
+ * （台账规则是 {@code "<path>".equals(path)}，前缀式静态面天然不在其中）。</p>
  *
  * <p>SSE 帧里 {@code data:} 不能带裸换行，所以文本统一转义成 {@code \n} 两字符，前端再还原。</p>
  */
@@ -65,6 +77,8 @@ public final class HttpChannel {
     private final CountDownLatch termination = new CountDownLatch(1);
     /** 模型目录缓存（懒建；文件在 configDir/models-cache.json）。 */
     private volatile com.zifang.z.bot.llm.ModelCatalogCache modelCatalog;
+    /** 桌面端 /v1/agents 面的目录（懒建；文件在 configDir/agents.json）。 */
+    private volatile AgentCatalog agentCatalog;
 
     public HttpChannel(BotAgent agent, int port) {
         this(agent, port, null);
@@ -257,11 +271,25 @@ public final class HttpChannel {
             new Route("POST", "/bot/chat/stream", BodyShape.SSE_STREAM,
                     "sse-events:step,thought,tool_call,tool_result,steer,compact,final,done,error,confirm",
                     "每个 ReAct 步骤一帧", ""),
-            // ---- OpenAI 兼容面（CLI wrapper 引擎，见 v1ChatCompletions） ----
-            // 顶层字段按状态分叉：engine=bot 时 400 {"error":{...}}；CLI 引擎下 200 回
-            // chat.completions 全形状（id,object,created,model,choices）。分叉记 EVIDENCE §1.1 同款。
+            // ---- OpenAI 兼容面 + 桌面端（z-bot-desk）适配面 ----
+            // 引擎解析顺序：agent_type > agent_id 记录 > agent.engine 配置；jar/bot/缺省 →
+            // 内置 ReAct（200 chat.completions 全形状），claude-code/hermes → CLI wrapper（同样 200；
+            // stream=true 时回 SSE chunk）。错误统一走 400/404/409 的 {"error":{...}}。
             new Route("POST", "/v1/chat/completions", BodyShape.JSON_OBJECT,
-                    "object;fields:error", "", ""),
+                    "object;fields:id,object,created,model,choices", "", ""),
+            new Route("GET", "/health", BodyShape.PLAIN_TEXT, "literal:ok", "", ""),
+            new Route("GET", "/v1/sessions", BodyShape.JSON_ARRAY,
+                    "array;rowfields:-:id,title,model,createdAt,updatedAt,messages", "", ""),
+            new Route("POST", "/v1/sessions", BodyShape.JSON_OBJECT,
+                    "object;fields:id,title,model,createdAt,updatedAt", "", ""),
+            new Route("DELETE", "/v1/sessions", BodyShape.JSON_OBJECT,
+                    "object;fields:deleted,id", "", ""),
+            new Route("GET", "/v1/agents", BodyShape.JSON_OBJECT,
+                    "object;fields:agents;rowfields:agents:id,name,type,status,createdAt", "", ""),
+            new Route("POST", "/v1/agents", BodyShape.JSON_OBJECT,
+                    "object;fields:id,name,type,status,createdAt", "", ""),
+            new Route("DELETE", "/v1/agents", BodyShape.JSON_OBJECT,
+                    "object;fields:deleted,id", "", ""),
             // ---- 会话 ----
             new Route("GET", "/api/sessions", BodyShape.JSON_ARRAY,
                     "array;rowfields:-:id,title,createdAt,messageCount",
@@ -367,6 +395,21 @@ public final class HttpChannel {
                 ex.sendResponseHeaders(204, -1);
                 return;
             }
+            // 桌面端前端面：Vite 产物文件名带哈希、不定名，这一面按前缀下发，不进字面量台账。
+            if ("/workspace".equals(path) || path.startsWith("/workspace/")) {
+                serveWorkspace(ex, path);
+                return;
+            }
+            // 资源级动态段：desk 走 /v1/agents/{id}、/v1/sessions/{id}，id 在路径段里，
+            // 形态带变量进不了字面量台账 ⇒ 方法口径借同名台账行，id 在这里剥出来。
+            if (path.startsWith("/v1/agents/")) {
+                v1Resource(ex, method, path, "/v1/agents");
+                return;
+            }
+            if (path.startsWith("/v1/sessions/")) {
+                v1Resource(ex, method, path, "/v1/sessions");
+                return;
+            }
             // 台账是唯一的门：不在表里的路径 404，在表里但方法没登记的回 405 + Allow。
             if (routesOf(path).isEmpty()) {
                 json(ex, 404, error("not found: " + path));
@@ -394,6 +437,12 @@ public final class HttpChannel {
                 busyGuard(ex, () -> chatStream(ex, streamBody));
             } else if ("/v1/chat/completions".equals(path)) {
                 v1ChatCompletions(ex, readBody(ex));
+            } else if ("/health".equals(path)) {
+                text(ex, 200, "ok");
+            } else if ("/v1/sessions".equals(path)) {
+                v1Sessions(ex, method, queryId(ex.getRequestURI().getQuery()));
+            } else if ("/v1/agents".equals(path)) {
+                v1Agents(ex, method, queryId(ex.getRequestURI().getQuery()));
             } else if ("/bot/confirm".equals(path)) {
                 String confirmBody = readBody(ex);
                 busyGuard(ex, () -> confirm(ex, confirmBody));
@@ -470,17 +519,13 @@ public final class HttpChannel {
     }
 
     /**
-     * OpenAI chat completions 兼容面：{@code agent.engine} 配成 CLI 引擎时由此应答。
-     * wrapper 是无状态 one-shot，上下文由 messages 传入，不读写 agent 会话记忆，
-     * 也不进 busyGuard（不走 agent 运行态）。
+     * OpenAI chat completions 兼容面（桌面端 z-bot-desk 的对话入口）。
+     *
+     * <p>引擎解析顺序：请求里的 {@code agent_type} &gt; {@code agent_id} 指向的目录条目
+     * &gt; {@code agent.engine} 配置。{@code jar}/{@code bot}/缺省走内置 ReAct（带 session_id
+     * 时先切会话，历史由会话记忆持有）；CLI 类型走 wrapper，无状态 one-shot、不读写会话记忆。</p>
      */
     private void v1ChatCompletions(HttpExchange ex, String body) throws IOException {
-        BotConfig config = agent.getConfig();
-        String engine = CliEngineBridge.engineType(config);
-        if (CliEngineBridge.ENGINE_BOT.equals(engine)) {
-            json(ex, 400, cliEngineError("agent.engine 未配置 CLI 引擎（claude-code / hermes / opencode）"));
-            return;
-        }
         Map<String, Object> parsed = parseObject(body);
         String prompt = "";
         Object messagesObj = parsed.get("messages");
@@ -498,8 +543,24 @@ public final class HttpChannel {
             json(ex, 400, cliEngineError("messages 里没有 user 内容"));
             return;
         }
+        String agentType = str(parsed.get("agent_type"));
+        String agentId = str(parsed.get("agent_id"));
+        Map<String, Object> agentRec = agentId.isEmpty() ? null : agentCatalog().get(agentId);
+        String engine = !agentType.isEmpty() ? agentType
+                : (agentRec != null ? str(agentRec.get("type"))
+                        : CliEngineBridge.engineType(agent.getConfig()));
+        if (engine.isEmpty()) {
+            engine = CliEngineBridge.ENGINE_BOT;
+        }
         boolean stream = Boolean.TRUE.equals(parsed.get("stream"))
                 || "true".equalsIgnoreCase(String.valueOf(parsed.get("stream")));
+
+        if (CliEngineBridge.ENGINE_BOT.equals(engine) || "jar".equals(engine)) {
+            v1BuiltinChat(ex, parsed, prompt, stream);
+            return;
+        }
+
+        CliAgentConfig cli = cliConfigFor(engine, agentRec);
         if (stream) {
             ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
             ex.getResponseHeaders().set("Cache-Control", "no-cache");
@@ -508,18 +569,403 @@ public final class HttpChannel {
             ex.sendResponseHeaders(200, 0);
             OutputStream os = ex.getResponseBody();
             try {
-                CliEngineBridge.chatStream(config, engine, prompt, os);
+                CliEngineBridge.chatStream(cli, prompt, os);
             } finally {
                 os.close();
             }
             return;
         }
-        String reply = CliEngineBridge.chatSync(config, engine, prompt);
-        byte[] out = com.zifang.z.bot.cliwrap.dto.ChatCompletionResponse.of(engine, reply)
+        String reply = CliEngineBridge.chatSync(cli, prompt);
+        byte[] out = ChatCompletionResponse.of(engine, reply)
                 .toJson().getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         ex.sendResponseHeaders(200, out.length);
         ex.getResponseBody().write(out);
+    }
+
+    /** 内置 ReAct 档：session_id 先切会话，FinalDelta 逐个翻成 OpenAI chunk。 */
+    private void v1BuiltinChat(HttpExchange ex, Map<String, Object> parsed, String prompt, boolean stream)
+            throws IOException {
+        if (agent.isRunning()) {
+            json(ex, 409, cliEngineError("上一条消息还在处理中，请稍后再试"));
+            return;
+        }
+        String sessionId = str(parsed.get("session_id"));
+        if (!sessionId.isEmpty() && !sessionId.equals(agent.currentSessionId())) {
+            if (!sessionExists(sessionId)) {
+                json(ex, 404, cliEngineError("未找到会话: " + sessionId));
+                return;
+            }
+            agent.switchSession(sessionId);
+        }
+        if (!stream) {
+            String reply = agent.chat(prompt);
+            byte[] out = ChatCompletionResponse.of("z-bot", displayableReply(reply))
+                    .toJson().getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+            ex.sendResponseHeaders(200, out.length);
+            ex.getResponseBody().write(out);
+            return;
+        }
+
+        ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        ex.getResponseHeaders().set("Connection", "keep-alive");
+        ex.getResponseHeaders().set("X-Accel-Buffering", "no");
+        ex.sendResponseHeaders(200, 0);
+        OutputStream os = ex.getResponseBody();
+        final String completionId = "chatcmpl-bot-" + RandomUtil.uuidCompact();
+        final long created = System.currentTimeMillis() / 1000L;
+        final Object lock = new Object();
+        final boolean[] emitted = {false};
+        StreamListener listener = new StreamListener() {
+            @Override
+            public void onEvent(StreamEvent event) {
+                if (!(event instanceof StreamEvent.FinalDelta)) {
+                    return;
+                }
+                String text = ((StreamEvent.FinalDelta) event).text;
+                if (text == null || text.isEmpty()) {
+                    return;
+                }
+                synchronized (lock) {
+                    try {
+                        write(os, ChatCompletionResponse.sseChunk(completionId, "z-bot", created, text));
+                        emitted[0] = true;
+                    } catch (IOException e) {
+                        throw new IllegalStateException("SSE 连接已断开", e);
+                    }
+                }
+            }
+        };
+        try {
+            String reply = agent.chat(prompt, listener);
+            synchronized (lock) {
+                if (!emitted[0] && reply != null && !reply.isEmpty()) {
+                    write(os, ChatCompletionResponse.sseChunk(completionId, "z-bot", created,
+                            displayableReply(reply)));
+                }
+                write(os, "data: [DONE]\n\n");
+            }
+        } catch (RuntimeException e) {
+            LOG.warn("v1 内置档对话失败: {}", e.getMessage());
+            synchronized (lock) {
+                try {
+                    write(os, "data: " + JsonUtil.toJson(cliEngineError(String.valueOf(e.getMessage()))) + "\n\n");
+                    write(os, "data: [DONE]\n\n");
+                } catch (IOException ignored) {
+                }
+            }
+        } finally {
+            os.close();
+        }
+    }
+
+    /** WAIT_CONFIRM 是内部协议串，桌面端没有确认按钮，翻成可读文本。 */
+    private static String displayableReply(String reply) {
+        if (reply != null && reply.startsWith(BotAgent.WAIT_CONFIRM_PREFIX)) {
+            return confirmData(reply);
+        }
+        return reply != null ? reply : "";
+    }
+
+    /** agent_id 指向的目录条目可覆盖命令/参数/工作目录；没有条目就用 agent.engine 的配置。 */
+    private CliAgentConfig cliConfigFor(String type, Map<String, Object> agentRec) {
+        CliAgentConfig base = CliEngineBridge.buildConfig(agent.getConfig(), type);
+        if (agentRec == null) {
+            return base;
+        }
+        String command = str(agentRec.get("command"));
+        String workingDir = str(agentRec.get("workingDir"));
+        List<String> args = base.getArgs();
+        Object rawArgs = agentRec.get("args");
+        if (rawArgs instanceof List) {
+            args = new ArrayList<String>();
+            for (Object a : (List<?>) rawArgs) {
+                args.add(String.valueOf(a));
+            }
+        }
+        return new CliAgentConfig(str(agentRec.get("id")), str(agentRec.get("name")), type,
+                command.isEmpty() ? base.getCommand() : command, args,
+                workingDir.isEmpty() ? base.getWorkingDir() : workingDir);
+    }
+
+    private AgentCatalog agentCatalog() {
+        AgentCatalog c = agentCatalog;
+        if (c == null) {
+            synchronized (this) {
+                if (agentCatalog == null) {
+                    agentCatalog = new AgentCatalog(agent.getConfig().getConfigDir());
+                }
+                c = agentCatalog;
+            }
+        }
+        return c;
+    }
+
+    /**
+     * 资源级动态段 {@code /v1/agents/{id}}、{@code /v1/sessions/{id}} 的唯一入口。
+     * 台账里同名那几行就是方法分母：GET 读单条、DELETE 删单条，其余方法 405。
+     */
+    private void v1Resource(HttpExchange ex, String method, String path, String ledgerPath)
+            throws IOException {
+        String id = path.substring(ledgerPath.length() + 1);
+        try {
+            id = java.net.URLDecoder.decode(id, "UTF-8").trim();
+        } catch (java.io.UnsupportedEncodingException ignored) {
+        }
+        if (id.isEmpty()) {
+            json(ex, 404, error("not found: " + path));
+            return;
+        }
+        if (!"GET".equals(method) && !"DELETE".equals(method)) {
+            ex.getResponseHeaders().set("Allow", "GET, DELETE, OPTIONS");
+            json(ex, 405, error(method + " 不是登记方法: " + ledgerPath + "/{id}"
+                    + "（登记：GET, DELETE, OPTIONS）"));
+            return;
+        }
+        if ("/v1/agents".equals(ledgerPath)) {
+            v1Agents(ex, method, id);
+        } else {
+            v1Sessions(ex, method, id);
+        }
+    }
+
+    /** 桌面端会话面：形状按 desk 的 {@code SessionInfo}（列表行内嵌 messages，供前端直接还原历史）。 */
+    private void v1Sessions(HttpExchange ex, String method, String id) throws IOException {
+        if ("POST".equals(method)) {
+            String newId = agent.newSession();
+            Map<String, Object> out = null;
+            for (SessionManager.SessionSummary s : agent.listSessions()) {
+                if (newId.equals(s.id)) {
+                    out = v1SessionRow(s);
+                    break;
+                }
+            }
+            json(ex, 201, out != null ? out : v1SessionRow(newId, "新会话", ""));
+            return;
+        }
+        if ("DELETE".equals(method)) {
+            if (id.isEmpty()) {
+                json(ex, 400, cliEngineError("id 不能为空"));
+                return;
+            }
+            if (!sessionExists(id)) {
+                json(ex, 404, cliEngineError("未找到会话: " + id));
+                return;
+            }
+            agent.deleteSession(id);
+            json(ex, 200, deleted(id));
+            return;
+        }
+        if (!id.isEmpty()) {
+            for (SessionManager.SessionSummary s : agent.listSessions()) {
+                if (id.equals(s.id)) {
+                    json(ex, 200, v1SessionRow(s));
+                    return;
+                }
+            }
+            json(ex, 404, cliEngineError("未找到会话: " + id));
+            return;
+        }
+        List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
+        for (SessionManager.SessionSummary s : agent.listSessions()) {
+            out.add(v1SessionRow(s));
+        }
+        json(ex, 200, out);
+    }
+
+    private Map<String, Object> v1SessionRow(SessionManager.SessionSummary s) {
+        return v1SessionRow(s.id, s.createdAt, s.title);
+    }
+
+    private Map<String, Object> v1SessionRow(String id, String createdAt, String title) {
+        long created = epochMillis(createdAt);
+        Map<String, Object> m = new LinkedHashMap<String, Object>();
+        m.put("id", id);
+        m.put("title", title == null || title.isEmpty() ? "新会话" : title);
+        m.put("model", "");
+        // SessionSummary 只有 createdAt（"yyyy-MM-dd HH:mm:ss"），desk 的 SessionInfo 要毫秒数；
+        // updatedAt 没有独立来源，先按 createdAt 近似下发
+        m.put("createdAt", created);
+        m.put("updatedAt", created);
+        List<Map<String, Object>> messages = new ArrayList<Map<String, Object>>();
+        // 必须用 agent 自带的那个 SessionManager：store 模式下消息只在 SQLite 里，
+        // 拿 sessionDir 现造一个（store=null）读出来永远是空历史。
+        for (Msg msg : agent.getSessionManager().loadMessages(id)) {
+            String role = msg.getRole() == null ? "user" : msg.getRole().name().toLowerCase(Locale.ROOT);
+            String content = msg.getContent() == null ? "" : msg.getContent();
+            // desk 的 ChatMessage 只有 user/assistant 两种气泡，工具帧与空内容行还原不了也不该硬塞
+            if (!"user".equals(role) && !"assistant".equals(role)) {
+                continue;
+            }
+            if (content.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> one = new LinkedHashMap<String, Object>();
+            one.put("role", role);
+            one.put("content", content);
+            one.put("timestamp", created);
+            messages.add(one);
+        }
+        m.put("messages", messages);
+        return m;
+    }
+
+    /** SessionSummary.createdAt 是 "yyyy-MM-dd HH:mm:ss" 本地时间串；解不动就退回当下。 */
+    private static long epochMillis(String createdAt) {
+        if (createdAt == null || createdAt.trim().isEmpty()) {
+            return System.currentTimeMillis();
+        }
+        try {
+            return java.time.LocalDateTime.parse(createdAt.trim(),
+                            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                    .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (RuntimeException e) {
+            return System.currentTimeMillis();
+        }
+    }
+
+    /** 桌面端 agent 目录面：内置 default 恒在；自定义条目可带 CLI 的 command/args/workingDir。 */
+    private void v1Agents(HttpExchange ex, String method, String id) throws IOException {
+        AgentCatalog catalog = agentCatalog();
+        if ("POST".equals(method)) {
+            String body = readBody(ex);
+            Map<String, Object> req = body.trim().isEmpty()
+                    ? new LinkedHashMap<String, Object>() : parseObject(body);
+            try {
+                json(ex, 201, catalog.create(req));
+            } catch (IllegalArgumentException e) {
+                json(ex, 400, cliEngineError(e.getMessage()));
+            }
+            return;
+        }
+        if ("DELETE".equals(method)) {
+            if (id.isEmpty()) {
+                json(ex, 400, cliEngineError("id 不能为空"));
+                return;
+            }
+            if (AgentCatalog.DEFAULT_ID.equals(id)) {
+                json(ex, 403, cliEngineError("内置 default agent 不可删"));
+                return;
+            }
+            if (!catalog.delete(id)) {
+                json(ex, 404, cliEngineError("未找到 agent: " + id));
+                return;
+            }
+            json(ex, 200, deleted(id));
+            return;
+        }
+        if (!id.isEmpty()) {
+            Map<String, Object> one = catalog.get(id);
+            if (one == null) {
+                json(ex, 404, cliEngineError("未找到 agent: " + id));
+                return;
+            }
+            json(ex, 200, one);
+            return;
+        }
+        // desk 的 useAgentManager 读 data.agents —— 列表必须包一层，裸数组会让侧栏恒空
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("agents", catalog.list());
+        json(ex, 200, out);
+    }
+
+    private static Map<String, Object> deleted(String id) {
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("deleted", true);
+        out.put("id", id);
+        return out;
+    }
+
+    /** 从 query string 里取 {@code id=...}（台账是字面量口径，动态段走 query，不改路径形态）。 */
+    private static String queryId(String query) {
+        if (query == null || query.isEmpty()) {
+            return "";
+        }
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq > 0 && "id".equals(pair.substring(0, eq))) {
+                try {
+                    return java.net.URLDecoder.decode(pair.substring(eq + 1), "UTF-8").trim();
+                } catch (java.io.UnsupportedEncodingException e) {
+                    return pair.substring(eq + 1).trim();
+                }
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 桌面前端静态面：{@code classpath:/web/workspace} 下是 Vite 产物（build-dmg.sh 拷入）。
+     * 无扩展名的未知路径回落 index.html（SPA 路由）；带扩展名找不到就 404，不伪造 200。
+     */
+    private void serveWorkspace(HttpExchange ex, String path) throws IOException {
+        if (!"GET".equalsIgnoreCase(ex.getRequestMethod())) {
+            ex.getResponseHeaders().set("Allow", "GET");
+            json(ex, 405, error("只支持 GET: " + path));
+            return;
+        }
+        String rel = "/workspace".equals(path) ? "/index.html" : path.substring("/workspace".length());
+        if (rel.contains("..")) {
+            text(ex, 400, "非法路径");
+            return;
+        }
+        if (!rel.startsWith("/")) {
+            rel = "/" + rel;
+        }
+        InputStream is = HttpChannel.class.getResourceAsStream("/web/workspace" + rel);
+        if (is == null) {
+            int slash = rel.lastIndexOf('/');
+            String name = slash >= 0 ? rel.substring(slash + 1) : rel;
+            if (name.contains(".")) {
+                text(ex, 404, "未找到资源 " + rel);
+                return;
+            }
+            rel = "/index.html";
+            is = HttpChannel.class.getResourceAsStream("/web/workspace/index.html");
+            if (is == null) {
+                text(ex, 404, "桌面前端未打包（classpath:/web/workspace/index.html 不存在）");
+                return;
+            }
+        }
+        byte[] data;
+        try {
+            data = readAll(is);
+        } finally {
+            is.close();
+        }
+        ex.getResponseHeaders().set("Content-Type", contentTypeOf(rel));
+        ex.getResponseHeaders().set("Cache-Control",
+                rel.endsWith("index.html") ? "no-store" : "public, max-age=3600");
+        ex.sendResponseHeaders(200, data.length);
+        ex.getResponseBody().write(data);
+    }
+
+    private static String contentTypeOf(String rel) {
+        String p = rel.toLowerCase();
+        if (p.endsWith(".html")) {
+            return "text/html; charset=utf-8";
+        } else if (p.endsWith(".js") || p.endsWith(".mjs")) {
+            return "application/javascript; charset=utf-8";
+        } else if (p.endsWith(".css")) {
+            return "text/css; charset=utf-8";
+        } else if (p.endsWith(".json") || p.endsWith(".map")) {
+            return "application/json; charset=utf-8";
+        } else if (p.endsWith(".svg")) {
+            return "image/svg+xml";
+        } else if (p.endsWith(".png")) {
+            return "image/png";
+        } else if (p.endsWith(".jpg") || p.endsWith(".jpeg")) {
+            return "image/jpeg";
+        } else if (p.endsWith(".ico")) {
+            return "image/x-icon";
+        } else if (p.endsWith(".woff2")) {
+            return "font/woff2";
+        } else if (p.endsWith(".woff")) {
+            return "font/woff";
+        }
+        return "application/octet-stream";
     }
 
     /** OpenAI 惯例的 400 形状（agent.engine=bot 时兼容面的常答；CLI 引擎下 200 形状见台账注释分叉）。 */
@@ -733,7 +1179,7 @@ public final class HttpChannel {
         String id = queryParam(ex, "id");
         List<Msg> messages = id.isEmpty()
                 ? agent.getMemory().getConversationMessages()
-                : new SessionManager(agent.getSessionManager().getSessionDir()).loadMessages(id);
+                : agent.getSessionManager().loadMessages(id);
         List<Map<String, Object>> out = new ArrayList<Map<String, Object>>();
         for (Msg m : messages) {
             Map<String, Object> map = new LinkedHashMap<String, Object>();

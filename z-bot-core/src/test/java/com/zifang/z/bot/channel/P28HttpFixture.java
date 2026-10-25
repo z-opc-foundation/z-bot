@@ -78,6 +78,20 @@ public final class P28HttpFixture implements AutoCloseable {
 
     /** 一个测试里要起两个服务时用不同 ns —— TemporaryFolder 同名目录会给第二次直接拒。 */
     public static P28HttpFixture start(TemporaryFolder tmp, String host, String ns) throws Exception {
+        return build(tmp, host, ns, false);
+    }
+
+    /**
+     * 与生产同形：不注入 {@code SessionManager}，让 {@link BotAgent} 走 {@code state.db}（SQLite）那一档。
+     * <p>缺省的 {@link #start} 注入的是文件档 SessionManager，看不到"读历史时拿 sessionDir 现造
+     * 一个 store=null 的管理器 ⇒ 永远空历史"这类只在 store 模式显形的缺陷。</p>
+     */
+    public static P28HttpFixture startStoreBacked(TemporaryFolder tmp) throws Exception {
+        return build(tmp, null, "-store", true);
+    }
+
+    private static P28HttpFixture build(TemporaryFolder tmp, String host, String ns, boolean storeBacked)
+            throws Exception {
         StubProvider llm = new StubProvider();
         Toolkit toolkit = new Toolkit();
         toolkit.register(Toolkit.of("echo", "回显文本", schema("message"), args ->
@@ -97,19 +111,24 @@ public final class P28HttpFixture implements AutoCloseable {
         File skills = tmp.newFolder("skills" + ns);
         Sandbox sandbox = new Sandbox(tmp.newFolder("sandbox" + ns).getAbsolutePath());
 
-        BotAgent agent = BotAgent.builder(cfg)
+        BotAgent.Builder builder = BotAgent.builder(cfg)
                 .provider(llm)
                 .providerCode("p28stub")
                 .toolkit(toolkit)
                 .sandbox(sandbox)
-                .sessionManager(sessions)
                 .cronScheduler(cron)
                 .skillsRoot(skills)
                 .model("p28-test-model")
                 .withoutCenter()
                 .withoutMcp()
-                .withoutBuiltinTools()
-                .build();
+                .withoutBuiltinTools();
+        if (!storeBacked) {
+            builder.sessionManager(sessions);
+        }
+        BotAgent agent = builder.build();
+        if (storeBacked) {
+            sessions = agent.getSessionManager();
+        }
 
         HttpChannel channel = new HttpChannel(agent, 0, host);
         channel.start();

@@ -64,20 +64,27 @@ public final class CliEngineBridge {
 
     /** 单轮同步：CLI 面用，stdout 只出最终回复。 */
     public static String chatSync(BotConfig config, String type, String prompt) throws IOException {
-        ChatCompletionRequest request = new ChatCompletionRequest();
-        ChatCompletionRequest.ChatMessage user = new ChatCompletionRequest.ChatMessage();
-        user.setRole("user");
-        user.setContent(prompt);
-        List<ChatCompletionRequest.ChatMessage> messages = new ArrayList<ChatCompletionRequest.ChatMessage>();
-        messages.add(user);
-        request.setMessages(messages);
-        request.setModel(type);
-        return newExecutor().executeSync(buildConfig(config, type), request);
+        return chatSync(buildConfig(config, type), prompt);
+    }
+
+    /** 单轮同步（显式 agent 配置，桌面端 /v1/agents 面用）。 */
+    public static String chatSync(CliAgentConfig config, String prompt) throws IOException {
+        return newExecutor().executeSync(config, request(prompt, config.getType(), false));
     }
 
     /** 单轮流式：HTTP 面用，sseOut 收 OpenAI chat.completions 形状的 SSE 帧，返回完整回复。 */
     public static String chatStream(BotConfig config, String type, String prompt, OutputStream sseOut)
             throws IOException {
+        return chatStream(buildConfig(config, type), prompt, sseOut);
+    }
+
+    /** 单轮流式（显式 agent 配置）。 */
+    public static String chatStream(CliAgentConfig config, String prompt, OutputStream sseOut)
+            throws IOException {
+        return newExecutor().executeStream(config, request(prompt, config.getType(), true), sseOut);
+    }
+
+    private static ChatCompletionRequest request(String prompt, String model, boolean stream) {
         ChatCompletionRequest request = new ChatCompletionRequest();
         ChatCompletionRequest.ChatMessage user = new ChatCompletionRequest.ChatMessage();
         user.setRole("user");
@@ -85,9 +92,9 @@ public final class CliEngineBridge {
         List<ChatCompletionRequest.ChatMessage> messages = new ArrayList<ChatCompletionRequest.ChatMessage>();
         messages.add(user);
         request.setMessages(messages);
-        request.setModel(type);
-        request.setStream(true);
-        return newExecutor().executeStream(buildConfig(config, type), request, sseOut);
+        request.setModel(model);
+        request.setStream(stream);
+        return request;
     }
 
     private static String defaultWorkingDir() {

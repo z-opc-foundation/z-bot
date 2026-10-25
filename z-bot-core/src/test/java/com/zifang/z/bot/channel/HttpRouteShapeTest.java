@@ -279,6 +279,170 @@ public class HttpRouteShapeTest {
         assertEquals(400, fx.call("POST", "/api/session/delete", "{}").code);
     }
 
+    // ===== 桌面端（z-bot-desk）适配面：/v1 会话、agent、jar 档对话 =====
+
+    @Test
+    public void v1SessionsCrudRoundtripMatchesDeskContract() throws Exception {
+        P28HttpFixture.Response created = fx.call("POST", "/v1/sessions", "{}");
+        assertEquals(201, created.code);
+        JsonNode row = JSON.readTree(created.body);
+        String id = row.get("id").asText();
+        assertFalse("POST /v1/sessions 必须给 id", id.isEmpty());
+        assertTrue("desk 的 SessionInfo 要 title/model/createdAt/updatedAt",
+                row.has("title") && row.has("model") && row.has("createdAt") && row.has("updatedAt"));
+        assertEquals("新会话的标题要能直接显示在侧栏", "新会话", row.get("title").asText());
+        assertTrue("createdAt 必须是毫秒数（desk 的类型声明是 number），实到 "
+                + row.get("createdAt"), row.get("createdAt").isNumber());
+
+        JsonNode list = JSON.readTree(fx.call("GET", "/v1/sessions", null).body);
+        assertTrue("GET /v1/sessions 顶层必须是数组", list.isArray());
+        boolean found = false;
+        for (JsonNode one : list) {
+            if (id.equals(one.get("id").asText())) {
+                found = true;
+                assertTrue("列表行内嵌 messages（desk 靠它在选中会话时还原历史）", one.has("messages"));
+            }
+        }
+        assertTrue("刚建的会话必须出现在列表里", found);
+
+        // desk 用路径段传 id：GET /v1/sessions/{id} 要回单条
+        P28HttpFixture.Response detail = fx.call("GET", "/v1/sessions/" + id, null);
+        assertEquals(200, detail.code);
+        assertEquals(id, JSON.readTree(detail.body).get("id").asText());
+
+        P28HttpFixture.Response deleted = fx.call("DELETE", "/v1/sessions/" + id, null);
+        assertEquals(200, deleted.code);
+        JsonNode deletedBody = JSON.readTree(deleted.body);
+        assertTrue("删除判词必须是 deleted:true —— " + deleted.body, deletedBody.get("deleted").asBoolean());
+        assertEquals(id, deletedBody.get("id").asText());
+        assertEquals("同一个 id 删第二次必须 404", 404,
+                fx.call("DELETE", "/v1/sessions/" + id, null).code);
+        assertEquals(404, fx.call("GET", "/v1/sessions/session_19700101_not_there", null).code);
+        assertEquals("没带 id 的 DELETE 必须 400", 400, fx.call("DELETE", "/v1/sessions", null).code);
+        assertEquals("路径段上没登记的方法必须 405", 405,
+                fx.call("POST", "/v1/sessions/" + id, "{}").code);
+    }
+
+    @Test
+    public void v1AgentsListsBuiltinAndCrudCustomEntries() throws Exception {
+        JsonNode list = JSON.readTree(fx.call("GET", "/v1/agents", null).body);
+        assertTrue("GET /v1/agents 必须是 {agents:[...]}（desk 读 data.agents，裸数组会让侧栏恒空）",
+                list.isObject() && list.get("agents") != null && list.get("agents").isArray());
+        JsonNode builtin = null;
+        for (JsonNode one : list.get("agents")) {
+            if ("default".equals(one.get("id").asText())) {
+                builtin = one;
+            }
+        }
+        assertNotNull("内置 default（type=jar）必须恒在", builtin);
+        assertEquals("jar", builtin.get("type").asText());
+
+        // 原 z-team-agent 的 body 用 working_dir，这边两套拼写都要收
+        P28HttpFixture.Response created = fx.call("POST", "/v1/agents",
+                "{\"name\":\"p28 hermes\",\"type\":\"hermes\",\"command\":\"/tmp/hermes-fake\","
+                        + "\"working_dir\":\"/tmp/p28-work\"}");
+        assertEquals(201, created.code);
+        JsonNode agent = JSON.readTree(created.body);
+        String id = agent.get("id").asText();
+        assertEquals("hermes", agent.get("type").asText());
+        assertEquals("/tmp/hermes-fake", agent.get("command").asText());
+        assertEquals("/tmp/p28-work", agent.get("workingDir").asText());
+
+        assertTrue(fx.call("GET", "/v1/agents", null).body.contains(id));
+        assertEquals(id, JSON.readTree(fx.call("GET", "/v1/agents/" + id, null).body).get("id").asText());
+
+        P28HttpFixture.Response deleted = fx.call("DELETE", "/v1/agents/" + id, null);
+        assertEquals(200, deleted.code);
+        JsonNode deletedBody = JSON.readTree(deleted.body);
+        assertTrue("删除判词必须是 deleted:true —— " + deleted.body, deletedBody.get("deleted").asBoolean());
+        assertEquals(id, deletedBody.get("id").asText());
+        assertFalse(fx.call("GET", "/v1/agents", null).body.contains(id));
+        assertEquals("内置 default 不可删", 403, fx.call("DELETE", "/v1/agents/default", null).code);
+        assertEquals("未知 id 必须 404", 404, fx.call("DELETE", "/v1/agents/nope-not-there", null).code);
+        assertEquals("未知 type 必须 400", 400, fx.call("POST", "/v1/agents",
+                "{\"name\":\"x\",\"type\":\"nope\"}").code);
+    }
+
+    @Test
+    public void v1ChatCompletionsRunsBuiltinAgentAndRejectsBadInput() throws Exception {
+        assertEquals("ok", fx.call("GET", "/health", null).body);
+
+        P28HttpFixture.Response ok = fx.call("POST", "/v1/chat/completions",
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"v1 内置档\"}]}");
+        assertEquals(200, ok.code);
+        JsonNode body = JSON.readTree(ok.body);
+        assertEquals("chat.completion", body.get("object").asText());
+        String reply = body.get("choices").get(0).get("message").get("content").asText();
+        assertTrue("内置档必须由 agent 真答，实到: " + reply, reply.startsWith("P28-STUB-REPLY"));
+
+        P28HttpFixture.Response bad = fx.call("POST", "/v1/chat/completions", "{\"messages\":[]}");
+        assertEquals(400, bad.code);
+        assertEquals("invalid_request_error",
+                JSON.readTree(bad.body).get("error").get("type").asText());
+
+        assertEquals("不存在的 session_id 必须 404", 404, fx.call("POST", "/v1/chat/completions",
+                "{\"session_id\":\"session_19700101_not_there\","
+                        + "\"messages\":[{\"role\":\"user\",\"content\":\"x\"}]}").code);
+
+        P28HttpFixture.Response streamed = fx.call("POST", "/v1/chat/completions",
+                "{\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"v1 流式\"}]}");
+        assertEquals(200, streamed.code);
+        assertTrue("流式档必须是 text/event-stream，实到 " + streamed.contentType,
+                streamed.contentType != null && streamed.contentType.startsWith("text/event-stream"));
+        assertTrue("流式档必须带 [DONE]", streamed.body.contains("data: [DONE]"));
+        assertTrue("流式档必须至少一帧 chat.completion.chunk",
+                streamed.body.contains("\"object\":\"chat.completion.chunk\""));
+        assertTrue("流式帧必须含内置档的真回复", streamed.body.contains("P28-STUB-REPLY"));
+    }
+
+    @Test
+    public void workspacePrefixIsNotLedgerGatedBut404sMissingAssets() throws Exception {
+        // 带扩展名的资源找不到就 404 —— 不拿 index.html 伪造 200（这条与 dist 在不在无关）
+        assertEquals(404, fx.call("GET", "/workspace/assets/app.js", null).code);
+        assertEquals(405, fx.call("POST", "/workspace", null).code);
+
+        // 打包过 dist 才有 index.html：有就是 SPA 首屏，没有就是明确 404，两种都别静默
+        P28HttpFixture.Response index = fx.call("GET", "/workspace", null);
+        if (HttpChannel.class.getResource("/web/workspace/index.html") != null) {
+            assertEquals(200, index.code);
+            assertTrue("打包档的 /workspace 必须是 HTML，实到 " + index.contentType,
+                    index.contentType != null && index.contentType.startsWith("text/html"));
+            assertTrue("回的得是 Vite 产物那份 index", index.body.contains("<div id=\"root\""));
+        } else {
+            assertEquals("没打包 dist 时 /workspace 必须 404", 404, index.code);
+        }
+    }
+
+    /**
+     * 生产形态（{@code state.db} 档）下历史必须读得回来：会话消息只落在 SQLite 里，
+     * 读历史时若拿 {@code sessionDir} 现造一个 {@code store=null} 的 SessionManager，
+     * 接口会永远回空数组 —— desk 的"选中会话还原历史"就整条失效。
+     */
+    @Test
+    public void v1SessionHistoryIsReadableInStoreBackedProdShape() throws Exception {
+        try (P28HttpFixture store = P28HttpFixture.startStoreBacked(tmp)) {
+            String sid = JSON.readTree(store.call("POST", "/v1/sessions", "{}").body)
+                    .get("id").asText();
+            assertEquals(200, store.call("POST", "/v1/chat/completions",
+                    "{\"session_id\":\"" + sid + "\",\"messages\":[{\"role\":\"user\","
+                            + "\"content\":\"store 档历史\"}]}").code);
+
+            JsonNode row = JSON.readTree(store.call("GET", "/v1/sessions/" + sid, null).body);
+            List<String> roles = new ArrayList<String>();
+            StringBuilder contents = new StringBuilder();
+            for (JsonNode m : row.get("messages")) {
+                roles.add(m.get("role").asText());
+                contents.append(m.get("content").asText());
+                assertTrue("desk 的 ChatMessageInfo 行要带 timestamp —— " + m,
+                        m.get("timestamp") != null && m.get("timestamp").isNumber());
+            }
+            assertTrue("user 那一轮要落库并能读回，实到 " + roles, roles.contains("user"));
+            assertTrue("assistant 回复要落库并能读回，实到 " + roles, roles.contains("assistant"));
+            assertTrue("读回的历史里要有真回复，实到 " + contents,
+                    contents.toString().contains("P28-STUB-REPLY"));
+        }
+    }
+
     // ===== 缺省绑回环：整表的门 =====
 
     @Test
@@ -435,14 +599,38 @@ public class HttpRouteShapeTest {
 
     private String seededSessionId;
 
-    private RequestSpec requestFor(HttpChannel.Route r) {
+    private RequestSpec requestFor(HttpChannel.Route r) throws IOException {
         String path = r.path();
         if ("GET".equals(r.method())) {
             if ("/api/session/messages".equals(path)) {
                 assertNotNull("台账循环没先建会话就读消息，数组必空、列名对不出来", seededSessionId);
                 return new RequestSpec(path + "?id=" + seededSessionId, null, 200, null);
             }
+            if ("/v1/sessions".equals(path)) {
+                assertNotNull("台账循环没先建会话，rowfields 会退化成空跑", seededSessionId);
+                return new RequestSpec(path, null, 200, null);
+            }
             return new RequestSpec(path, null, 200, null);
+        }
+        if ("DELETE".equals(r.method())) {
+            // 写口走路径段 id（desk 的形态）：每次现场造一个再删，
+            // 两轮台账循环各自独立，不碰 seededSessionId
+            if ("/v1/sessions".equals(path)) {
+                String tmp = onlyText(fx.call("POST", "/v1/sessions", "{}").body, "id");
+                return new RequestSpec(path + "/" + tmp, null, 200, "\"deleted\":true");
+            }
+            if ("/v1/agents".equals(path)) {
+                String tmp = onlyText(fx.call("POST", "/v1/agents",
+                        "{\"name\":\"p28 临时 agent\",\"type\":\"jar\"}").body, "id");
+                return new RequestSpec(path + "/" + tmp, null, 200, "\"deleted\":true");
+            }
+            throw new AssertionError("台账新增了 DELETE 行 " + r + "，但这里没给它请求规格");
+        }
+        if ("/v1/sessions".equals(path)) {
+            return new RequestSpec(path, "{}", 201, null);
+        }
+        if ("/v1/agents".equals(path)) {
+            return new RequestSpec(path, "{\"name\":\"p28 形状 agent\",\"type\":\"jar\"}", 201, null);
         }
         if ("/bot/chat".equals(path) || "/bot/chat/stream".equals(path)) {
             return new RequestSpec(path, "{\"message\":\"p28 形状对账\"}", 200, null);
@@ -451,9 +639,9 @@ public class HttpRouteShapeTest {
             return new RequestSpec(path, "{\"toolName\":\"echo\",\"argsJson\":\"{}\"}", 200, null);
         }
         if ("/v1/chat/completions".equals(path)) {
-            // 夹具 agent.engine=bot ⇒ 兼容面按 OpenAI 错误形状显式 400（200 形状分叉记台账注释）
+            // jar 档（未带 agent_type/agent_id）走内置 ReAct，夹具的 StubProvider 必回一条文本
             return new RequestSpec(path, "{\"messages\":[{\"role\":\"user\",\"content\":\"p28 形状对账\"}]}",
-                    400, "invalid_request_error");
+                    200, null);
         }
         if ("/bot/steer".equals(path)) {
             return new RequestSpec(path, "p28 steer", 200, null);

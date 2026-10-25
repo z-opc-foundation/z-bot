@@ -1,6 +1,6 @@
 # p28a 路由台账 —— 由 HttpChannel.routes() 渲染，别手写这一份
 # 复算/再生成: mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.write=true
-# 分母: 27 行 (方法粒度) / 24 条路径 (dispatch 字面量口径)
+# 分母: 34 行 (方法粒度) / 27 条路径 (dispatch 字面量口径)
 method	path	shape	auth	bind_scope	shape_contract	row_count_from	defect
 GET	/	CONSOLE_HTML	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	resource:/web/index.html	-	-
 GET	/index.html	CONSOLE_HTML	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	resource:/web/index.html	-	-
@@ -14,7 +14,14 @@ GET	/bot/tools	JSON_ARRAY	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host
 POST	/bot/chat	PLAIN_TEXT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	nonempty	-	-
 POST	/bot/confirm	PLAIN_TEXT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	nonempty	-	-
 POST	/bot/chat/stream	SSE_STREAM	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	sse-events:step,thought,tool_call,tool_result,steer,compact,final,done,error,confirm	每个 ReAct 步骤一帧	-
-POST	/v1/chat/completions	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:error	-	-
+POST	/v1/chat/completions	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:id,object,created,model,choices	-	-
+GET	/health	PLAIN_TEXT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	literal:ok	-	-
+GET	/v1/sessions	JSON_ARRAY	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	array;rowfields:-:id,title,model,createdAt,updatedAt,messages	-	-
+POST	/v1/sessions	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:id,title,model,createdAt,updatedAt	-	-
+DELETE	/v1/sessions	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:deleted,id	-	-
+GET	/v1/agents	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:agents;rowfields:agents:id,name,type,status,createdAt	-	-
+POST	/v1/agents	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:id,name,type,status,createdAt	-	-
+DELETE	/v1/agents	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:deleted,id	-	-
 GET	/api/sessions	JSON_ARRAY	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	array;rowfields:-:id,title,createdAt,messageCount	sessions/_index.json 的行数	-
 POST	/api/sessions	JSON_OBJECT	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	object;fields:ok,id	-	-
 GET	/api/session/messages	JSON_ARRAY	NONE(loopback-only)	LOOPBACK_DEFAULT(opt-in via --host)	array;rowfields:-:role,content,toolCalls,toolCallId,contentType,toolName,isFinal	sessions/<id>.json 的消息行数	-

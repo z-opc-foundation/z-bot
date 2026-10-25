@@ -38,7 +38,7 @@ MCP（既是 client 也能 `mcp serve` 反当 server）、ACP（IDE 走 stdio �
 | ReAct 循环与预算 | `agent/BotAgent.java`、`agent/BudgetLedger.java` | 迭代/令牌预算、`/steer` 中途改写、中断收口 |
 | 终端 TUI | `ui/TerminalUI.java`、`ui/LineEditor.java`（JLine）、`ui/RawTerminalReader.java`、`ui/MarkdownRenderer.java`、`ui/PasteFolder.java` | ↑↓ 翻历史、Tab 补全、raw 模式与 `stty` 还原 |
 | 一次性提问 / 脚本化 | `cli/ChatCommand.java`、`cli/SendCommand.java` | `z-bot "…"` 等价 `chat`；`send` 把消息外发给某个 channel |
-| HTTP / SSE 与 web 控制台 | `channel/HttpChannel.java` + `src/main/resources/web/index.html` | 27 行路由台账见下文；`POST /bot/chat/stream` 每个 ReAct 步骤一帧 |
+| HTTP / SSE 与 web 控制台 | `channel/HttpChannel.java` + `src/main/resources/web/index.html` | 34 行路由台账见下文；`POST /bot/chat/stream` 每个 ReAct 步骤一帧 |
 | 常驻多通道 gateway | `channel/Gateway.java`、`Supervisor`、`TurnLease`、`DeliveryLedger`、`DeadTargets`、`PairingService` | 租约 + 送达台账 + 投递目标失效兜底；`--pairing` 起配对码授权 |
 | IM 通道 | `channel/FeishuChannel.java`、`DingTalkChannel.java`、`WebhookChannel.java`、`HttpConsoleChannel.java` | 四种内置 kind；IM 通道**缺省 `enabled=false`**，凭据不随包发 |
 | 会话库 | `store/StateStore.java`、`store/SchemaMigrations.java`、`session/SessionManager.java` | SQLite（WAL）；`requiredTables()` 8 张必检表：`sessions`/`messages`/`session_model_usage`/`async_delegations`/schema_version/state_meta/compression_locks/gateway_routing；`sessions search` 走 FTS5，不可用则降级 LIKE |
@@ -298,7 +298,7 @@ z-msg 的地址与 token **只**由 manifest / CLI 注入（`channel.<name>.conf
 ## 🔌 HTTP / SSE 路由台账
 
 路由清单是被跟踪的文件 [`_doc/005_testing/acceptance/p28/ROUTES.tsv`](_doc/005_testing/acceptance/p28/ROUTES.tsv)：
-**27 行（方法粒度）/ 24 条路径（dispatch 字面量口径）**，与代码不同源就红，不用靠人记：
+**34 行（方法粒度）/ 27 条路径（dispatch 字面量口径）**，与代码不同源就红，不用靠人记：
 
 ```bash
 mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.write=true
@@ -311,7 +311,8 @@ mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.
 | 控制台页 | `GET /`、`/index.html`、`/web`、`/console`（同一份 `resource:/web/index.html`） |
 | 运行态 | `GET /bot/status`、`GET /bot/clear`、`GET /bot/tools`、`POST /bot/stop`、`POST /bot/steer`、`POST /bot/chat`、`POST /bot/confirm` |
 | 流式 | `POST /bot/chat/stream`（SSE 帧：`step` `thought` `tool_call` `tool_result` `steer` `compact` `final` `done` `error` `confirm`） |
-| OpenAI 兼容面 | `POST /v1/chat/completions`（CLI wrapper 引擎：`agent.engine` 配了才 200；bot 档显式 400 `{"error":{...}}`） |
+| OpenAI 兼容面 | `POST /v1/chat/completions`（`agent_type`/`agent_id` 缺省走内置 ReAct；`hermes`/`claude-code` 走 CLI wrapper） |
+| 桌面端适配面 | `GET /health`、`GET/POST/DELETE /v1/sessions`（单条走 `GET/DELETE /v1/sessions/{id}`，创建回 201，删除回 `{deleted:true,id}`）、`GET/POST/DELETE /v1/agents`（列表回 `{agents:[...]}`，单条走 `GET/DELETE /v1/agents/{id}`，内置 `default` 不可删）；z-bot-desk 的 `SessionInfo`/`AgentInfo` 契约；`/workspace/**` 前缀面由 classpath `web/workspace` 托管，产物名带哈希故不进字面量台账 |
 | 会话 | `GET/POST /api/sessions`、`GET /api/session/messages`、`POST /api/session/switch`、`POST /api/session/delete` |
 | 模型 | `GET /api/models`（`ModelCatalogCache#catalog()`，供应商 `GET /v1/models`） |
 | 技能 | `GET /api/skill/list`、`GET/POST /api/skill/sync`、`POST /api/skill/push` |
@@ -466,7 +467,7 @@ _Maintained by the z-opc-foundation organization._
 
 - [`_doc/001_arch/`](_doc/001_arch/) — 架构与规划：
   - [`00-overview.md`](_doc/001_arch/00-overview.md) — 项目总览：进程形态与四条对外面（终端 / HTTP-SSE / MCP / ACP）、
-    20 个包的分层、8 张必检表、27 行路由台账、通道注册表缺省档、profile 数据根
+    20 个包的分层、8 张必检表、34 行路由台账、通道注册表缺省档、profile 数据根
   - [`07-roadmap.md`](_doc/001_arch/07-roadmap.md) — 唯一的规划/记账文档（v2，1,405 行）：对标 hermes-agent 的
     22 面能力矩阵、结构性红线（含红线 1 代码/数据分离、缺省绑回环）、P0→P30 分期与 §8 逐期实测读数。
 

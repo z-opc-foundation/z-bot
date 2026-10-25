@@ -60,11 +60,39 @@ public class HttpRouteLedgerTest {
             Pattern.compile("\"(/[A-Za-z0-9_./-]*)\"\\s*\\.equals\\(path\\)");
     private static final Pattern DISPATCH_METHOD = Pattern.compile("private void dispatch\\(HttpExchange");
 
+    /**
+     * 前缀面：路径形态不定（Vite 产物名带哈希），只能按 {@code path.startsWith} 下发，
+     * 没法进"一条路径一行"的字面量台账。它们由 {@link HttpRouteShapeTest} 单独守，
+     * 白名单自身也在这里互验——分支删了就必须同步删名单。
+     */
+    private static final Set<String> PREFIX_FACES = Collections.singleton("/workspace");
+
+    /**
+     * 资源级动态段：{@code /v1/agents/{id}}、{@code /v1/sessions/{id}} —— id 是路径变量，
+     * 同样进不了字面量台账。台账里的同名行就是它的方法分母；这里互验前缀分支还在
+     * dispatch() 里、母行也还在，任一侧删了都要红。
+     */
+    private static final String[][] DYNAMIC_FACES = {
+            {"/v1/agents/", "/v1/agents"},
+            {"/v1/sessions/", "/v1/sessions"},
+    };
+
     @Test
     public void ledgerPathsMatchDispatchLiterals() throws IOException {
         String src = readMainSource("channel/HttpChannel.java");
         Set<String> fromSource = dispatchPathLiterals(src);
+        for (String face : PREFIX_FACES) {
+            assertTrue("前缀面 " + face + " 还在白名单里，dispatch() 却已经没有这个分支 —— 白名单死了",
+                    fromSource.remove(face));
+        }
         List<String> fromLedger = HttpChannel.paths();
+        String dispatch = dispatchBody(src);
+        for (String[] face : DYNAMIC_FACES) {
+            assertTrue("动态段 " + face[0] + " 还在名单里，dispatch() 却没有这个前缀分支 —— 名单死了",
+                    dispatch.contains("\"" + face[0] + "\""));
+            assertTrue("动态段 " + face[0] + " 的台账母行 " + face[1] + " 不见了",
+                    fromLedger.contains(face[1]));
+        }
 
         Set<String> onlyInSource = new LinkedHashSet<String>(fromSource);
         onlyInSource.removeAll(fromLedger);
@@ -223,14 +251,18 @@ public class HttpRouteLedgerTest {
     }
 
     private static Set<String> dispatchPathLiterals(String src) {
-        int start = indexOf(DISPATCH_METHOD, src);
-        String body = src.substring(start, endOfDispatchMethod(src, start));
+        String body = dispatchBody(src);
         Set<String> out = new LinkedHashSet<String>();
         Matcher m = DISPATCH_ROUTE_LITERAL.matcher(body);
         while (m.find()) {
             out.add(m.group(1));
         }
         return out;
+    }
+
+    private static String dispatchBody(String src) {
+        int start = indexOf(DISPATCH_METHOD, src);
+        return src.substring(start, endOfDispatchMethod(src, start));
     }
 
     private static int indexOf(Pattern p, String src) {
