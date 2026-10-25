@@ -450,6 +450,11 @@ public class HttpRouteShapeTest {
         if ("/bot/confirm".equals(path)) {
             return new RequestSpec(path, "{\"toolName\":\"echo\",\"argsJson\":\"{}\"}", 200, null);
         }
+        if ("/v1/chat/completions".equals(path)) {
+            // 夹具 agent.engine=bot ⇒ 兼容面按 OpenAI 错误形状显式 400（200 形状分叉记台账注释）
+            return new RequestSpec(path, "{\"messages\":[{\"role\":\"user\",\"content\":\"p28 形状对账\"}]}",
+                    400, "invalid_request_error");
+        }
         if ("/bot/steer".equals(path)) {
             return new RequestSpec(path, "p28 steer", 200, null);
         }
