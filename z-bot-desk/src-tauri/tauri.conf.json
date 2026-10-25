@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicehash/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "ZTeamAgent",
+  "productName": "Z-Bot",
   "version": "1.0.12",
-  "identifier": "com.zifang.z-team-agent",
+  "identifier": "com.zifang.z-bot",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -36,7 +36,7 @@
       "icons/icon.icns"
     ],
     "resources": [
-      "resources/z-team-agent.jar",
+      "resources/z-bot-core.jar",
       "resources/jre/"
     ],
     "externalBin": [],

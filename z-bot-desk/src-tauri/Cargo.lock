@@ -5286,7 +5286,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "z-team-agent-desk"
+name = "z-bot-desk"
 version = "1.0.0"
 dependencies = [
  "cookie",

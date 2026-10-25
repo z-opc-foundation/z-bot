@@ -147,19 +147,12 @@ fn bind_kill_on_close_job(child: &Child) {
     }
 }
 
-/// 启动 Agent JAR 子进程。
-/// Java 端 AgentRegistry 会自动扫描 ~/.z-team/agents/ 目录并创建默认配置，
-/// Rust 端无需预创建目录或写入配置文件。
-pub fn start_agent_jar(jar_path: &str, agent_name: &str, port: u16) -> Option<Child> {
+/// 启动 z-bot JAR 子进程（`serve` 子命令，HTTP 面在 `--port` 上）。
+pub fn start_agent_jar(jar_path: &str, port: u16) -> Option<Child> {
     let java_bin = resolve_java_bin(jar_path);
 
     let child = hidden_command(&java_bin)
-        .args([
-            "-jar",
-            jar_path,
-            &format!("--agent={}", agent_name),
-            &format!("--port={}", port),
-        ])
+        .args(["-jar", jar_path, "serve", "--port", &port.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
@@ -168,7 +161,7 @@ pub fn start_agent_jar(jar_path: &str, agent_name: &str, port: u16) -> Option<Ch
         Ok(c) => {
             #[cfg(target_os = "windows")]
             bind_kill_on_close_job(&c);
-            println!("Agent JAR started: agent={}, port={}", agent_name, port);
+            println!("z-bot JAR started: port={}", port);
             Some(c)
         }
         Err(e) => {

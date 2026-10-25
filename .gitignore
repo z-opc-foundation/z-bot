@@ -38,6 +38,15 @@ target/
 # 前端 node_modules / dist
 _frontend/**/node_modules/
 _frontend/**/dist/
+
+# 桌面壳（Tauri）：依赖、前端产物、Rust target、打包时拷入的 jar/内嵌 JRE 都不入库
+/z-bot-desk/node_modules/
+/z-bot-desk/dist/
+/z-bot-desk/src-tauri/target/
+/z-bot-desk/src-tauri/gen/
+/z-bot-desk/src-tauri/resources/
+# build-dmg.sh 会把 z-bot-desk 的 dist 拷进 jar classpath（文件名带哈希），不入库
+/z-bot-core/src/main/resources/web/workspace/
 # ===== lead 002 规范：临时/运行态件一律写 <仓>/.cache/，且 .cache 必须被 ignore =====
 /.cache/
 

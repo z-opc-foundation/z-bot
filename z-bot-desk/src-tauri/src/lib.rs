@@ -19,9 +19,11 @@ struct AgentState {
     launcher_focus_lost_at: Mutex<Option<std::time::Instant>>,
 }
 
-const LOCAL_BASE: &str = "http://local.z-team.local:4567";
+/// 本地环境：z-bot 自带的 HTTP 服务（serve 默认端口 28080），
+/// 同一进程/同源提供 `/workspace`（本次 React 前端）与 `/v1/**`（对话与会话面）。
+const LOCAL_BASE: &str = "http://127.0.0.1:28080";
 /// 生产环境：z-opc 主壳（公网域 opc.zopc.top）。
-/// z-team 工作台在主壳里的路由就是 `/workspace`（main.jsx: <Route path="/workspace/*" element={<ZTeam/>/>），
+/// 工作台在主壳里的路由就是 `/workspace`（main.jsx: <Route path="/workspace/*" element={<ZTeam/>/>），
 /// 所以主窗口直接用 `{PROD_BASE}/workspace` 即可命中工作台；
 /// 业务 API 在生产域**直接**走 `/z-team/api/**`（z-team servlet context）。
 /// ⚠ 不要加 `/kapi` 前缀：线上前端用 `NEED_KAPI`（host 正则只认退休的 zteam.local 系）
@@ -66,7 +68,7 @@ fn env_label(env: &str) -> &'static str {
     }
 }
 
-/// 查找 Agent JAR 路径（打包后和开发环境两处候选）
+/// 查找 z-bot JAR 路径（打包后和开发环境两处候选）
 fn find_jar() -> Option<String> {
     let mut jar_candidates: Vec<Option<std::path::PathBuf>> = Vec::new();
     #[cfg(target_os = "macos")]
@@ -76,7 +78,7 @@ fn find_jar() -> Option<String> {
             .ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .map(|p| p.join("Resources/resources/z-team-agent.jar")),
+            .map(|p| p.join("Resources/resources/z-bot-core.jar")),
     );
     #[cfg(target_os = "windows")]
     {
@@ -86,15 +88,15 @@ fn find_jar() -> Option<String> {
             .ok()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         {
-            jar_candidates.push(Some(exe_dir.join("resources/z-team-agent.jar")));
-            jar_candidates.push(Some(exe_dir.join("z-team-agent.jar")));
+            jar_candidates.push(Some(exe_dir.join("resources/z-bot-core.jar")));
+            jar_candidates.push(Some(exe_dir.join("z-bot-core.jar")));
         }
     }
     jar_candidates.push(
         // 开发环境：src-tauri/resources/
         {
             let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let jar = manifest_dir.join("resources/z-team-agent.jar");
+            let jar = manifest_dir.join("resources/z-bot-core.jar");
             if jar.exists() { Some(jar) } else { None }
         },
     );
@@ -105,28 +107,12 @@ fn find_jar() -> Option<String> {
         .map(|p| p.to_string_lossy().to_string())
 }
 
-/// 拉取 OSS latest.json（ureq 原生 HTTP，跨平台；替代原 /usr/bin/curl 方案）
+/// 检查更新。
+/// z-bot 桌面端尚无独立发布通道：原 z-team OSS 的 latest.json 递的是 z-team-agent 的
+/// DMG，装下去会把本壳替换掉，故显式拒绝而不是让存量地址继续生效。
 #[tauri::command]
 fn check_for_update() -> Result<serde_json::Value, String> {
-    let url = "http://oss.z-team.local-cn-hangzhou.aliyuncs.com/z-team/sandbox/z_dmg/latest.json";
-    let resp = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(10))
-        .set("Cache-Control", "no-cache")
-        .call()
-        .map_err(|e| format!("latest.json 请求失败: {}", e))?;
-    let body = resp
-        .into_string()
-        .map_err(|e| format!("latest.json 读取失败: {}", e))?;
-    let json = serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|e| format!("json parse failed: {}", e))?;
-    // Windows 客户端改读 windows 子对象（顶层字段保留给存量 mac 客户端），
-    // 字段结构与 mac 一致，前端更新逻辑无需区分平台
-    #[cfg(target_os = "windows")]
-    let json = match json.get("windows").cloned() {
-        Some(win) if win.is_object() => win,
-        _ => json,
-    };
-    Ok(json)
+    Err("z-bot 桌面端尚未配置更新通道".to_string())
 }
 
 /// 下载更新安装包：macOS 拉 DMG 并挂载打开；Windows 拉 NSIS 安装器后静默升级
@@ -143,7 +129,7 @@ fn download_and_install_dmg_impl(url: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         let home = std::env::var("USERPROFILE").map_err(|_| "no USERPROFILE env".to_string())?;
-        let dest = format!("{}\\Downloads\\ZTeamAgent_update.exe", home);
+        let dest = format!("{}\\Downloads\\ZBot_update.exe", home);
         let resp = ureq::get(&url)
             .timeout(std::time::Duration::from_secs(600))
             .call()
@@ -165,7 +151,7 @@ fn download_and_install_dmg_impl(url: String) -> Result<String, String> {
     #[cfg(not(target_os = "windows"))]
     {
         let home = std::env::var("HOME").map_err(|_| "no HOME env".to_string())?;
-        let dest = format!("{}/Downloads/ZTeamAgent_update.dmg", home);
+        let dest = format!("{}/Downloads/ZBot_update.dmg", home);
         let status = std::process::Command::new("/usr/bin/curl")
             .args(["-L", "-o", &dest, &url])
             .status()
@@ -313,7 +299,7 @@ fn ensure_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
             format!("{}/workspace?client=desktop&_v={}", base, version).parse().unwrap(),
         ),
     )
-    .title(&format!("Z-Team Agent v{}", version))
+    .title(&format!("Z-Bot v{}", version))
     .inner_size(1200.0, 800.0)
     .min_inner_size(800.0, 600.0)
     .resizable(true)
@@ -1558,7 +1544,7 @@ fn build_tray_menu(app: &tauri::AppHandle, show_env: bool) -> tauri::Result<taur
 
     let tray_sep3 = PredefinedMenuItem::separator(app)?;
     let tray_quit =
-        MenuItem::with_id(app, "quit", "退出 Z-Team Agent", true, None::<&str>)?;
+        MenuItem::with_id(app, "quit", "退出 Z-Bot", true, None::<&str>)?;
 
     let env_submenu = if show_env {
         let tray_local = MenuItem::with_id(app, "env-local", "本地环境", true, None::<&str>)?;
@@ -1697,7 +1683,7 @@ fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
                 ));
                 window
                     .set_title(&format!(
-                        "Z-Team Agent v{} - {}",
+                        "Z-Bot v{} - {}",
                         env!("CARGO_PKG_VERSION"),
                         env_label(env)
                     ))
@@ -1743,7 +1729,7 @@ fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
                 if let Some(jar) = find_jar() {
                     // 新句柄存回 state：原先 let _ 丢弃导致重启后 state 里
                     // 一直是已死的旧句柄，后续退出兜底杀不到新 agent
-                    if let Some(new_child) = agent_process::start_agent_jar(&jar, "default", 28080) {
+                    if let Some(new_child) = agent_process::start_agent_jar(&jar, 28080) {
                         if let Ok(mut child_guard) = app.state::<AgentState>().child.lock() {
                             *child_guard = Some(new_child);
                         }
@@ -1753,7 +1739,7 @@ fn handle_menu_action(app: &tauri::AppHandle, id: &str) {
             });
         }
         "quit" => {
-            println!("Quitting Z-Team Agent...");
+            println!("Quitting Z-Bot...");
             // 退出前保存 SSO 登录态（下次启动注入恢复，免重复登录）。
             // 这里同样**不能**同步调 cookies()：主窗口正在导航提交时，
             // 同步 cookies() 的嵌套 run loop 会把那条提交也派发掉 →
@@ -1800,10 +1786,10 @@ pub fn run() {
 
     // 2. 查找并启动 Agent JAR
     let agent_child = if let Some(ref jar) = find_jar() {
-        println!("Using Agent JAR: {}", jar);
-        agent_process::start_agent_jar(jar, "default", 28080)
+        println!("Using z-bot JAR: {}", jar);
+        agent_process::start_agent_jar(jar, 28080)
     } else {
-        eprintln!("Agent JAR not found!");
+        eprintln!("z-bot JAR not found!");
         None
     };
 
@@ -1868,12 +1854,16 @@ pub fn run() {
             // macOS：WKWebView 的 Caches/<bundle_id> 整目录。
             #[cfg(target_os = "macos")]
             if let Ok(home) = std::env::var("HOME") {
-                let cache_dir = std::path::Path::new(&home)
-                    .join("Library/Caches/com.zifang.z-team-agent");
-                if cache_dir.exists() {
-                    match std::fs::remove_dir_all(&cache_dir) {
-                        Ok(_) => println!("[desk] cleared webview disk cache"),
-                        Err(e) => eprintln!("[desk] clear cache failed: {}", e),
+                // 新 identifier 的缓存目录 + 旧 z-team 壳的遗留目录都清一遍
+                for bundle in ["com.zifang.z-bot", "com.zifang.z-team-agent"] {
+                    let cache_dir = std::path::Path::new(&home)
+                        .join("Library/Caches")
+                        .join(bundle);
+                    if cache_dir.exists() {
+                        match std::fs::remove_dir_all(&cache_dir) {
+                            Ok(_) => println!("[desk] cleared webview disk cache: {}", bundle),
+                            Err(e) => eprintln!("[desk] clear cache failed ({}): {}", bundle, e),
+                        }
                     }
                 }
             }
@@ -1890,7 +1880,7 @@ pub fn run() {
                 }
                 if let Ok(local) = std::env::var("LOCALAPPDATA") {
                     let local = std::path::PathBuf::from(local);
-                    roots.push(local.join("ZTeamAgent.exe.WebView2"));
+                    roots.push(local.join("Z-Bot.exe.WebView2"));
                     roots.push(local.join("com.zifang.z-team-agent"));
                 }
                 for root in roots {
@@ -1935,7 +1925,7 @@ pub fn run() {
 
             TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Z-Team Agent")
+                .tooltip("Z-Bot")
                 .menu(&tray_menu)
                 .on_menu_event(|app, event| {
                     handle_menu_action(app, event.id().as_ref());
@@ -1994,7 +1984,7 @@ pub fn run() {
                                         let _ = app_handle.run_on_main_thread(move || {
                                             if let Some(window) = ah.get_webview_window("main") {
                                                 let _ = window.set_title(&format!(
-                                                    "Z-Team Agent v{}  ✨ 发现新版本 v{} → 点 Agent 菜单更新",
+                                                    "Z-Bot v{}  ✨ 发现新版本 v{} → 点 Agent 菜单更新",
                                                     current_version, remote_ver_owned
                                                 ));
                                             }
@@ -2072,7 +2062,7 @@ pub fn run() {
                     {
                         // macOS 标准行为：点叉仅隐藏窗口面板，不退出应用、不杀 Agent。
                         // 主窗口 / 群聊 / 笔记 一律隐藏，托盘菜单点击对应项即可恢复。
-                        // 真正退出走托盘「退出 Z-Team Agent」（quit），由该处统一杀 Agent + exit。
+                        // 真正退出走托盘「退出 Z-Bot」（quit），由该处统一杀 Agent + exit。
                         api.prevent_close();
                         let _ = window.hide();
                     }

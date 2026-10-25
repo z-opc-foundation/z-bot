@@ -1,12 +1,12 @@
 [package]
-name = "z-team-agent-desk"
+name = "z-bot-desk"
 version = "1.0.0"
-description = "Z Team Agent Desktop"
+description = "Z-Bot Desktop"
 authors = ["zifang"]
 edition = "2021"
 
 [lib]
-name = "z_team_agent_desk_lib"
+name = "z_bot_desk_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

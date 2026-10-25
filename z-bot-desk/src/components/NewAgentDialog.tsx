@@ -120,7 +120,7 @@ export const NewAgentDialog: React.FC<NewAgentDialogProps> = ({onClose, onCreate
                                         type="text"
                                         value={workingDir}
                                         onChange={(e) => setWorkingDir(e.target.value)}
-                                        placeholder="~/.z-team/agents/{name}"
+                                        placeholder="~/.zbot/agents/{name}"
                                     />
                                 </div>
                             </>

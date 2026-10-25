@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    z_team_agent_desk_lib::run()
+    z_bot_desk_lib::run()
 }

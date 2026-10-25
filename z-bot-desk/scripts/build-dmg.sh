@@ -24,7 +24,7 @@ REPO_ROOT="$(cd "$AGENT_DIR/../.." && pwd)"
 source "$HOME/.cargo/env"
 
 echo "=========================================="
-echo "  Building ZTeamAgent (.dmg) [Tauri]"
+echo "  Building Z-Bot (.dmg) [Tauri]"
 echo "=========================================="
 
 # ── 1. 构建前端 ──
@@ -36,7 +36,7 @@ npm run build 2>&1 | tail -5
 # ── 2. 拷贝前端到 JAR classpath ──
 echo ""
 echo "[2/6] Copying frontend to JAR classpath..."
-STATIC_DIR="$AGENT_DIR/z-team-agent-starter/src/main/resources/static/workspace"
+STATIC_DIR="$AGENT_DIR/z-bot-core/src/main/resources/web/workspace"
 rm -rf "$STATIC_DIR"
 mkdir -p "$STATIC_DIR"
 cp -R dist/* "$STATIC_DIR/"
@@ -46,24 +46,24 @@ echo "  Copied dist/ → $STATIC_DIR"
 echo ""
 echo "[3/6] Building fat JAR..."
 cd "$AGENT_DIR"
-mvn package -pl z-team-agent-starter -am -DskipTests 2>&1 | tail -10
+mvn package -pl z-bot-core -am -DskipTests 2>&1 | tail -10
 
 # fat JAR 名字带版本号，不写死版本 —— 取 target 下最新的非 original-* 的主构件
-JAR_PATH=$(ls -t "$AGENT_DIR"/z-team-agent-starter/target/z-team-agent-starter-*.jar 2>/dev/null \
+JAR_PATH=$(ls -t "$AGENT_DIR"/z-bot-core/target/z-bot-core*.jar 2>/dev/null \
     | grep -v '/original-' | head -1)
 if [ -z "$JAR_PATH" ] || [ ! -f "$JAR_PATH" ]; then
-    echo "ERROR: fat JAR not found under $AGENT_DIR/z-team-agent-starter/target/" >&2
+    echo "ERROR: fat JAR not found under $AGENT_DIR/z-bot-core/target/" >&2
     exit 1
 fi
 JAR_SIZE=$(ls -lh "$JAR_PATH" | awk '{print $5}')
 echo "  JAR: $JAR_PATH ($JAR_SIZE)"
 
 # 拷贝 JAR 到 src-tauri/resources/（Tauri 打包需要）
-# 名字必须与 tauri.conf.json 的 bundle.resources 一致（resources/z-team-agent.jar），
+# 名字必须与 tauri.conf.json 的 bundle.resources 一致（resources/z-bot-core.jar），
 # 且 Rust 侧 find_jar() 也按这个名字找
 mkdir -p "$DESK_DIR/src-tauri/resources"
-cp "$JAR_PATH" "$DESK_DIR/src-tauri/resources/z-team-agent.jar"
-echo "  Copied JAR → src-tauri/resources/z-team-agent.jar"
+cp "$JAR_PATH" "$DESK_DIR/src-tauri/resources/z-bot-core.jar"
+echo "  Copied JAR → src-tauri/resources/z-bot-core.jar"
 
 # ── 4. 构建嵌入式 JRE ──
 echo ""
@@ -166,7 +166,7 @@ if [ -n "$DMG_PATH" ]; then
 
     # 生成安装引导脚本：清除 quarantine + 打开 DMG
     # 使用英文文件名避免 zip 中文编码问题
-    # 产品名不写死：运行时从同目录的 dmg 文件名反推（ZTeamAgent_1.0.12_aarch64.dmg → ZTeamAgent.app）
+    # 产品名不写死：运行时从同目录的 dmg 文件名反推（Z-Bot_1.0.12_aarch64.dmg → Z-Bot.app）
     cat > "$STAGING_DIR/install.command" << 'INSTALL_EOF'
 #!/bin/bash
 # 安装引导脚本
@@ -220,7 +220,7 @@ INSTALL_EOF
     echo "  直接分发 DMG：双击 dmg → 拖拽 app 到 Applications"
     echo "  通过 zip 分发：解压后双击 install.command 即可"
     echo "  运行方式：双击 ${PRODUCT_NAME}.app"
-    echo "  Tauri 窗口自动打开 http://127.0.0.1:28080/workspace"
+    echo "  Tauri 窗口自动打开 http://127.0.0.1:28080/workspace（z-bot serve 自托管）"
 else
     echo ""
     echo "  DMG not found in src-tauri/target/release/bundle/dmg/"
