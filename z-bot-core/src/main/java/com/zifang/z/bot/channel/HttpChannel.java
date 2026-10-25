@@ -9,6 +9,7 @@ import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
+import com.zifang.z.bot.cliwrap.CliEngineBridge;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.cron.CronJob;
 import com.zifang.z.bot.cron.CronScheduler;
@@ -256,6 +257,11 @@ public final class HttpChannel {
             new Route("POST", "/bot/chat/stream", BodyShape.SSE_STREAM,
                     "sse-events:step,thought,tool_call,tool_result,steer,compact,final,done,error,confirm",
                     "每个 ReAct 步骤一帧", ""),
+            // ---- OpenAI 兼容面（CLI wrapper 引擎，见 v1ChatCompletions） ----
+            // 顶层字段按状态分叉：engine=bot 时 400 {"error":{...}}；CLI 引擎下 200 回
+            // chat.completions 全形状（id,object,created,model,choices）。分叉记 EVIDENCE §1.1 同款。
+            new Route("POST", "/v1/chat/completions", BodyShape.JSON_OBJECT,
+                    "object;fields:error", "", ""),
             // ---- 会话 ----
             new Route("GET", "/api/sessions", BodyShape.JSON_ARRAY,
                     "array;rowfields:-:id,title,createdAt,messageCount",
@@ -386,6 +392,8 @@ public final class HttpChannel {
             } else if ("/bot/chat/stream".equals(path)) {
                 String streamBody = readBody(ex);
                 busyGuard(ex, () -> chatStream(ex, streamBody));
+            } else if ("/v1/chat/completions".equals(path)) {
+                v1ChatCompletions(ex, readBody(ex));
             } else if ("/bot/confirm".equals(path)) {
                 String confirmBody = readBody(ex);
                 busyGuard(ex, () -> confirm(ex, confirmBody));
@@ -459,6 +467,69 @@ public final class HttpChannel {
 
     private interface RequestHandler {
         void handle() throws IOException;
+    }
+
+    /**
+     * OpenAI chat completions 兼容面：{@code agent.engine} 配成 CLI 引擎时由此应答。
+     * wrapper 是无状态 one-shot，上下文由 messages 传入，不读写 agent 会话记忆，
+     * 也不进 busyGuard（不走 agent 运行态）。
+     */
+    private void v1ChatCompletions(HttpExchange ex, String body) throws IOException {
+        BotConfig config = agent.getConfig();
+        String engine = CliEngineBridge.engineType(config);
+        if (CliEngineBridge.ENGINE_BOT.equals(engine)) {
+            json(ex, 400, cliEngineError("agent.engine 未配置 CLI 引擎（claude-code / hermes / opencode）"));
+            return;
+        }
+        Map<String, Object> parsed = parseObject(body);
+        String prompt = "";
+        Object messagesObj = parsed.get("messages");
+        if (messagesObj instanceof List) {
+            for (Object o : (List<?>) messagesObj) {
+                if (o instanceof Map) {
+                    Map<?, ?> m = (Map<?, ?>) o;
+                    if ("user".equals(String.valueOf(m.get("role"))) && m.get("content") != null) {
+                        prompt = String.valueOf(m.get("content"));
+                    }
+                }
+            }
+        }
+        if (prompt.trim().isEmpty()) {
+            json(ex, 400, cliEngineError("messages 里没有 user 内容"));
+            return;
+        }
+        boolean stream = Boolean.TRUE.equals(parsed.get("stream"))
+                || "true".equalsIgnoreCase(String.valueOf(parsed.get("stream")));
+        if (stream) {
+            ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+            ex.getResponseHeaders().set("Cache-Control", "no-cache");
+            ex.getResponseHeaders().set("Connection", "keep-alive");
+            ex.getResponseHeaders().set("X-Accel-Buffering", "no");
+            ex.sendResponseHeaders(200, 0);
+            OutputStream os = ex.getResponseBody();
+            try {
+                CliEngineBridge.chatStream(config, engine, prompt, os);
+            } finally {
+                os.close();
+            }
+            return;
+        }
+        String reply = CliEngineBridge.chatSync(config, engine, prompt);
+        byte[] out = com.zifang.z.bot.cliwrap.dto.ChatCompletionResponse.of(engine, reply)
+                .toJson().getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        ex.sendResponseHeaders(200, out.length);
+        ex.getResponseBody().write(out);
+    }
+
+    /** OpenAI 惯例的 400 形状（agent.engine=bot 时兼容面的常答；CLI 引擎下 200 形状见台账注释分叉）。 */
+    private static Map<String, Object> cliEngineError(String message) {
+        Map<String, Object> err = new LinkedHashMap<String, Object>();
+        err.put("message", message);
+        err.put("type", "invalid_request_error");
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("error", err);
+        return out;
     }
 
     private void chat(HttpExchange ex, String body) throws IOException {

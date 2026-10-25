@@ -81,12 +81,12 @@
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
         </dependency>
-        <!-- 生产代码零 Jackson；剩下的 8 个 src/test 类仍按 Jackson 树断言报文/账本形态，
-             降到 test 域，等测试也迁完再整条删掉。 -->
+        <!-- z-bot 自己的生产代码零 Jackson（8 个 src/test 类按 Jackson 树断言报文/账本形态）。
+             但 kernel-llm 0.2.1 的 LlmHttp 运行期要 databind 而自身未声明（上游缺陷），
+             这里必须 compile 域进 shade，否则 serve 一连真 provider 就 NoClassDefFoundError。 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <scope>test</scope>
         </dependency>
         <!-- state.db 会话持久化 (SQLite WAL) -->
         <dependency>
@@ -112,6 +112,12 @@
         <dependency>
             <groupId>io.github.yuku123</groupId>
             <artifactId>z-util-parser-json</artifactId>
+        </dependency>
+
+        <!-- cliwrap 迁移件用 RandomUtil（com.zifang.util.core.lang）；root DM 已钉 -->
+        <dependency>
+            <groupId>io.github.yuku123</groupId>
+            <artifactId>z-util-core</artifactId>
         </dependency>
 
         <!-- CLI 命令解析（地板与 fleet 都不管 info.picocli ⇒ 面值 4.7.6 留着） -->

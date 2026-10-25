@@ -93,6 +93,11 @@ public final class BotConfig {
     private double temperature = 0.7;
     private String toolChoice = "required";
     private String execConfirmMode = "dangerous";
+    /** 对话引擎：bot（缺省，内置 ReAct）或 CLI wrapper 类型（claude-code / hermes / opencode）。 */
+    private String cliEngine = "bot";
+    private String cliEngineCommand = "";
+    private java.util.List<String> cliEngineArgs;
+    private String cliEngineWorkingDir = "";
     /** exec 免确认命令前缀白名单（用户逐条授权的持久化产物，来自 agent.exec.confirm.whitelist）。 */
     private List<String> execConfirmWhitelist = new ArrayList<String>();
     /**
@@ -204,6 +209,25 @@ public final class BotConfig {
         String toolChoice = trim(props.getProperty("agent.tool.choice"));
         if (!toolChoice.isEmpty()) {
             this.toolChoice = toolChoice;
+        }
+        String cliEngine = trim(props.getProperty("agent.engine"));
+        if (!cliEngine.isEmpty()) {
+            this.cliEngine = cliEngine;
+        }
+        String cliEngineCmd = System.getProperty("zbot.engine.command", "");
+        if (cliEngineCmd.isEmpty()) {
+            cliEngineCmd = trim(props.getProperty("agent.engine.command"));
+        }
+        if (!cliEngineCmd.isEmpty()) {
+            this.cliEngineCommand = cliEngineCmd;
+        }
+        java.util.List<String> cliEngineArgs = splitList(props.getProperty("agent.engine.args"));
+        if (!cliEngineArgs.isEmpty()) {
+            this.cliEngineArgs = cliEngineArgs;
+        }
+        String cliEngineWorkDir = trim(props.getProperty("agent.engine.working-dir"));
+        if (!cliEngineWorkDir.isEmpty()) {
+            this.cliEngineWorkingDir = cliEngineWorkDir;
         }
         String execConfirm = trim(props.getProperty("agent.exec.confirm"));
         if (!execConfirm.isEmpty()) {
@@ -409,6 +433,23 @@ public final class BotConfig {
 
     public String getToolChoice() {
         return toolChoice;
+    }
+
+    /** {@code agent.engine}：bot（缺省）或 CLI wrapper 类型。 */
+    public String getCliEngine() {
+        return cliEngine;
+    }
+
+    public String getCliEngineCommand() {
+        return cliEngineCommand;
+    }
+
+    public java.util.List<String> getCliEngineArgs() {
+        return cliEngineArgs;
+    }
+
+    public String getCliEngineWorkingDir() {
+        return cliEngineWorkingDir;
     }
 
     /** {@code agent.exec.confirm}：off / dangerous / all，决定 exec 工具何时要求人工确认。 */

@@ -3,11 +3,14 @@ package com.zifang.z.bot.cli;
 import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
+import com.zifang.z.bot.cliwrap.CliEngineBridge;
+import com.zifang.z.bot.config.BotConfig;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
+import java.io.IOException;
 import java.util.concurrent.Callable;
 
 /**
@@ -24,12 +27,32 @@ public class ChatCommand implements Callable<Integer> {
     @Option(names = {"-v", "--verbose"}, description = "把 step / 工具调用打到 stderr")
     boolean verbose;
 
+    @Option(names = {"-e", "--engine"}, paramLabel = "ENGINE",
+            description = "对话引擎：bot（缺省，内置 ReAct）或 claude-code / hermes / opencode（CLI wrapper）")
+    String engine;
+
     @Parameters(index = "0", paramLabel = "PROMPT", description = "要问的内容")
     public String prompt;
 
     @Override
     public Integer call() {
+        BotConfig config = options.loadConfig();
+        String type = engine != null && !engine.trim().isEmpty() ? engine.trim() : config.getCliEngine();
+        if (type != null && !type.trim().isEmpty() && !CliEngineBridge.ENGINE_BOT.equals(type.trim())) {
+            return runCliEngine(config, type.trim(), prompt);
+        }
         return run(options, prompt, verbose);
+    }
+
+    static int runCliEngine(BotConfig config, String engine, String prompt) {
+        try {
+            String reply = CliEngineBridge.chatSync(config, engine, prompt);
+            System.out.println(reply);
+            return 0;
+        } catch (IOException e) {
+            System.err.println("✗ " + e.getMessage());
+            return 4;
+        }
     }
 
     static int run(AgentOptions options, String prompt, boolean verbose) {
