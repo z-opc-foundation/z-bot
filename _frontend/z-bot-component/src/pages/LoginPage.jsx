@@ -8,13 +8,14 @@ import { LockOutlined, UserOutlined } from '@ant-design/icons'
  * mock 账号不写死在仓里（001_凭证管理规范）：宿主在构建期注入
  * VITE_MOCK_USER / VITE_MOCK_PASSWORD，未注入时页面直接说明「未配置 mock 账号」。
  */
-const MOCK_AUTH = {
-    username: import.meta.env.VITE_MOCK_USER || '',
-    password: import.meta.env.VITE_MOCK_PASSWORD || '',
-    user: { name: import.meta.env.VITE_MOCK_USER || '', role: '管理员' },
-}
-
-export default function LoginPage() {
+export default function LoginPage({mockAuth} = {}) {
+    // mock 账号由宿主（suit）在构建期取自 env 后经 prop 注入：组件包以 library 模式构建时
+    // import.meta.env 会被内联成空串，故 prop 优先、env 兜底。
+    const MOCK_AUTH = mockAuth || {
+        username: import.meta.env.VITE_MOCK_USER || '',
+        password: import.meta.env.VITE_MOCK_PASSWORD || '',
+        user: { name: import.meta.env.VITE_MOCK_USER || '', role: '管理员' },
+    }
     const [loading, setLoading] = useState(false)
 
     const handleSubmit = async (values) => {

@@ -1,6 +1,6 @@
 {
   "name": "@yuku123/z-bot-component",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "z-bot 可复用前端组件：CLI agent 能力地图（z-bot-core 无 REST 层，预留 configureBot 接入）（lead 005 §9）",
   "type": "module",
   "main": "./dist/index.js",
