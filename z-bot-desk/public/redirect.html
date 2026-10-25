@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Z-Team Agent</title>
+<style>
+  body { margin:0; display:flex; align-items:center; justify-content:center; height:100vh; background:#1a1a2e; color:#888; font-family:-apple-system,sans-serif; }
+  .spinner { width:32px; height:32px; border:3px solid #333; border-top-color:#4a7fff; border-radius:50%; animation:spin 0.8s linear infinite; margin-right:12px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div><div class="spinner" style="display:inline-block;vertical-align:middle"></div> 正在加载 Z-Team Agent…</div>
+<script>
+(function() {
+  // 默认加载本地 Agent 服务 UI（http://127.0.0.1:28080/workspace）
+  // 通过 ?env=prod 可切换到生产环境前端（z-opc 主壳公网域，z-team 工作台路由 /workspace）
+  var params = new URLSearchParams(window.location.search);
+  var env = params.get('env');
+  var url;
+  if (env === 'prod') {
+    url = 'https://opc.zopc.top/workspace?client=desktop';
+  } else {
+    url = 'http://127.0.0.1:28080/workspace';
+  }
+  window.location.replace(url);
+})();
+</script>
+</body>
+</html>

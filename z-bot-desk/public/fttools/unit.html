@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>单位换算 · FT 工具</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 16px 20px 24px; color: #1f2329; background: #fff; font-size: 13px; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .desc { color: #7a8199; font-size: 12px; margin-bottom: 12px; }
+  .sec { margin-top: 12px; }
+  label.fl { display: block; font-size: 12px; color: #5a6478; margin-bottom: 4px; font-weight: 500; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; border: 1px solid #dfe3ec; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; outline: none; background: #fff;
+  }
+  textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+  textarea:focus, input:focus, select:focus { border-color: #2f6bff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .row > * { flex: 0 0 auto; }
+  .grow { flex: 1 1 160px !important; }
+  button {
+    border: none; border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+    background: #eef1f7; color: #2a3245; font-family: inherit;
+  }
+  button:hover { background: #e2e7f2; }
+  button.primary { background: #2f6bff; color: #fff; }
+  button.primary:hover { background: #2559e0; }
+  .out {
+    margin-top: 10px; background: #f6f8fb; border: 1px solid #e8ecf4; border-radius: 8px;
+    padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap;
+    word-break: break-all; max-height: 300px; overflow: auto; line-height: 1.55;
+  }
+  .out:empty { display: none; }
+  .out.dln { white-space: pre; }
+  .ok { color: #16a34a; } .bad { color: #dc2626; } .muted { color: #8a92a6; }
+  .kv { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+  .kv div { background: #f6f8fb; border-radius: 8px; padding: 6px 10px; font-size: 12px; }
+  .kv b { display: block; font-size: 15px; font-weight: 600; }
+  .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-right: 10px; }
+  .swatch { width: 88px; height: 44px; border-radius: 8px; border: 1px solid #e2e6ef; vertical-align: middle; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { border: 1px solid #e8ecf4; padding: 5px 8px; text-align: left; }
+  th { background: #f6f8fb; }
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: #1f2329; color: #fff; font-size: 12px; padding: 7px 14px; border-radius: 16px;
+    opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99;
+  }
+  .toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<h1>📐 单位换算</h1>
+<div class="desc">长度 / 重量 / 温度 / 面积 / 体积 / 速度 / 数据 / 时间</div>
+
+<div class="row">
+  <select id="cat" class="grow"></select>
+  <input type="number" id="v" value="1" class="grow" style="flex:1">
+  <select id="fu" class="grow"></select>
+  <span>→</span>
+  <select id="tu" class="grow"></select>
+</div>
+<div class="out" id="out" style="font-size:14px"></div>
+
+<div class="toast" id="toast"></div>
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+var _tt;
+function toast(m) { var t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(_tt); _tt = setTimeout(function () { t.classList.remove("show"); }, 1600); }
+function copy(t, m) {
+  var done = function () { toast(m || "已复制"); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(done, function () { legacy(); });
+  } else { legacy(); }
+  function legacy() {
+    var ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand("copy"); done(); } catch (e) { toast("复制失败"); } ta.remove();
+  }
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function download(name, text) {
+  var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = name; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+}
+try { var __T = window.parent && window.parent.__TAURI__; if (__T) window.__TAURI__ = __T; } catch (e) {}
+</script>
+<script>
+
+var CATS = {
+  "长度": { m: 1, km: 1000, dm: 0.1, cm: 0.01, mm: 0.001, mi: 1609.344, yd: 0.9144, ft: 0.3048, in: 0.0254, nmi: 1852 },
+  "重量": { kg: 1, g: 0.001, mg: 1e-6, t: 1000, lb: 0.45359237, oz: 0.028349523, 斤: 0.5 },
+  "面积": { "m2": 1, "km2": 1e6, "cm2": 1e-4, 亩: 666.6667, 公顷: 10000, "ft2": 0.092903 },
+  "体积": { L: 1, mL: 0.001, "m3": 1000, gal: 3.785412, qt: 0.9463529 },
+  "速度": { "m/s": 1, "km/h": 1 / 3.6, mph: 0.44704, kn: 0.5144444 },
+  "数据": { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776, bit: 0.125 },
+  "时间": { s: 1, ms: 0.001, min: 60, h: 3600, 天: 86400, 周: 604800 }
+};
+var catSel = $("#cat");
+catSel.innerHTML = Object.keys(CATS).map(function (k) { return "<option>" + k + "</option>"; }).join("") + "<option>温度</option>";
+function fillUnits() {
+  var c = catSel.value;
+  var us = c === "温度" ? ["°C", "°F", "K"] : Object.keys(CATS[c]);
+  $("#fu").innerHTML = us.map(function (u) { return "<option>" + u + "</option>"; }).join("");
+  $("#tu").innerHTML = us.map(function (u) { return "<option" + (u === us[1] ? " selected" : "") + ">" + u + "</option>"; }).join("");
+  calc();
+}
+function toBase(c, v, u) {
+  if (c === "温度") {
+    if (u === "°C") return v;
+    if (u === "°F") return (v - 32) * 5 / 9;
+    return v - 273.15;
+  }
+  return v * CATS[c][u];
+}
+function calc() {
+  var c = catSel.value, v = parseFloat($("#v").value || "0"), f = $("#fu").value, t = $("#tu").value;
+  var base = toBase(c, v, f), res;
+  if (c === "温度") {
+    if (t === "°C") res = base;
+    else if (t === "°F") res = base * 9 / 5 + 32;
+    else res = base + 273.15;
+  } else res = base / CATS[c][t];
+  $("#out").textContent = v + " " + f + " = " + (Math.round(res * 1e8) / 1e8).toLocaleString(undefined, { maximumFractionDigits: 8 }) + " " + t;
+}
+catSel.onchange = fillUnits;
+$("#fu").onchange = calc; $("#tu").onchange = calc; $("#v").oninput = calc;
+fillUnits();
+
+</script>
+</body>
+</html>

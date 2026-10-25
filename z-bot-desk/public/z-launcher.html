@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<title>FT 功能面板</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* 透明窗口：仅中央面板可见（Tauri 窗口 transparent(true)） */
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  .panel {
+    width: 100%; height: 100%;
+    background: #f7f8fb; border-radius: 14px;
+    box-shadow: 0 12px 48px rgba(31, 51, 102, 0.22);
+    display: flex; flex-direction: column;
+    padding: 16px 20px 10px;
+    animation: panel-in 0.18s ease-out;
+    overflow: hidden;
+  }
+  @keyframes panel-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
+
+  /* ── 搜索行：搜索框 + 头像（顶栏为 FT 专属） ── */
+  .searchrow { display: flex; align-items: center; gap: 12px; }
+  .search {
+    flex: 1; height: 40px; border: none; outline: none; border-radius: 10px;
+    background: #ffffff; padding: 0 14px; font-size: 14px; color: #2b3654;
+    box-shadow: inset 0 0 0 1px #e8ecf4;
+  }
+  .search::placeholder { color: #b6bfd4; }
+  .search:focus { box-shadow: inset 0 0 0 2px #7fa4ff; }
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%; flex: none;
+    background: linear-gradient(135deg, #2f6bff 0%, #7b5cff 100%);
+    color: #fff; font-size: 13px; font-weight: 800; letter-spacing: 0.4px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+
+  .scroll { flex: 1; overflow-y: auto; margin-top: 12px; padding-bottom: 6px; }
+  .scroll::-webkit-scrollbar { width: 6px; }
+  .scroll::-webkit-scrollbar-thumb { background: #dde2ee; border-radius: 3px; }
+
+  /* ── 分区标题 ── */
+  .sec { display: flex; align-items: baseline; margin: 10px 2px 8px; }
+  .sec__title { font-size: 13px; font-weight: 700; color: #3d4a6b; }
+  .sec__more {
+    margin-left: auto; font-size: 12px; color: #8794b3; cursor: pointer; border: none; background: none;
+  }
+  .sec__more:hover { color: #2f6bff; }
+
+  /* ── 图标卡片网格：图标在上文字在下 ── */
+  .grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px 6px; }
+  .card {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 10px 2px 8px; border-radius: 10px; cursor: pointer;
+    transition: background 0.14s;
+  }
+  .card:hover { background: #eef1f8; }
+  .card:active { transform: scale(0.95); }
+  .card__icon {
+    position: relative;
+    width: 44px; height: 44px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: #fff;
+    box-shadow: 0 3px 8px rgba(31, 51, 102, 0.12);
+  }
+  .card__icon img { width: 100%; height: 100%; object-fit: cover; border-radius: 12px; display: block; }
+  /* 本地插件安装角标（图标右下角）：已安装=绿✓ / 未安装=蓝↓ / 安装中=spinner */
+  .badge {
+    position: absolute; right: -4px; bottom: -4px;
+    width: 17px; height: 17px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 800; color: #fff;
+    box-shadow: 0 0 0 2px #f7f8fb;
+    line-height: 1;
+  }
+  .badge--ok { background: #22b07d; }
+  .badge--no { background: #4f8cff; }
+  .badge--busy { background: #8794b3; }
+  .badge--busy::after {
+    content: ""; width: 9px; height: 9px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff;
+    animation: badge-spin 0.8s linear infinite;
+  }
+  @keyframes badge-spin { to { transform: rotate(360deg); } }
+  .card__label {
+    font-size: 11px; color: #3d4a6b; max-width: 84px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  }
+  .tone-0 { background: linear-gradient(135deg, #4f8cff, #6f6bff); }
+  .tone-1 { background: linear-gradient(135deg, #22b07d, #4fd1a5); }
+  .tone-2 { background: linear-gradient(135deg, #ff9f43, #ffbe76); }
+  .tone-3 { background: linear-gradient(135deg, #5f6bff, #9b6bff); }
+  .tone-4 { background: linear-gradient(135deg, #ff6b8a, #ff9bb3); }
+  .tone-5 { background: linear-gradient(135deg, #00b8d9, #4dd0e1); }
+  .tone-6 { background: linear-gradient(135deg, #7b5cff, #b06bff); }
+  .tone-7 { background: linear-gradient(135deg, #f5726b, #ff9e8f); }
+  .tone-8 { background: linear-gradient(135deg, #3aa8ff, #74c6ff); }
+  .tone-9 { background: linear-gradient(135deg, #2f6bff, #7b5cff); }
+
+  .empty-hint { font-size: 12px; color: #b6bfd4; padding: 4px 2px; }
+  .empty-hint.link { color: #4f8cff; cursor: pointer; }
+
+  /* 轻量 toast（安装结果反馈） */
+  .toast {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: rgba(43, 54, 84, 0.92); color: #fff; font-size: 12px;
+    padding: 7px 14px; border-radius: 8px; pointer-events: none;
+    opacity: 0; transition: opacity 0.2s; z-index: 99; max-width: 80%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .toast.show { opacity: 1; }
+
+  /* 确认弹层：Tauri WKWebView 不支持 JS 原生 confirm（恒返回 false 不弹框），
+     卸载等危险操作改用自制模态（若无此弹层，确认永远无法通过） */
+  .confirm-mask {
+    position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .confirm-mask[hidden] { display: none; }
+  .confirm-box {
+    background: #fff; border-radius: 12px; padding: 18px 16px 12px;
+    width: 260px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.25);
+  }
+  .confirm-msg { font-size: 13px; color: #2b3654; line-height: 1.6; text-align: center; }
+  .confirm-actions { display: flex; gap: 10px; margin-top: 14px; }
+  .cbtn {
+    flex: 1; height: 30px; border-radius: 8px; border: 1px solid #dfe4ef;
+    background: #fff; color: #4a5673; font-size: 12px; cursor: pointer;
+  }
+  .cbtn:hover { background: #f5f7fb; }
+  .cbtn--danger { background: #ff4d4f; border-color: #ff4d4f; color: #fff; }
+  .cbtn--danger:hover { background: #e64340; }
+
+  /* ══ 插件运行视图（FT 自身运行本地插件，与工具箱应用无关） ══ */
+  #view-plugin { display: none; flex-direction: column; flex: 1; min-height: 0; margin-top: 12px; }
+  .plugin-top { display: flex; align-items: center; gap: 10px; }
+  .plugin-tool {
+    border: none; background: #ffffff; height: 28px; padding: 0 12px; border-radius: 14px;
+    font-size: 12px; color: #5a6788; cursor: pointer; box-shadow: inset 0 0 0 1px #e8ecf4; margin-left: auto;
+  }
+  .plugin-tool:hover { color: #2f6bff; }
+  #plugin-frame { flex: 1; min-height: 0; border: none; background: #ffffff; border-radius: 12px; margin-top: 10px;
+    box-shadow: inset 0 0 0 1px #e8ecf4; }
+
+  /* ══ 插件中心视图（面板内二级页，参考 z-biz-tool-box 插件应用市场布局） ══ */
+  #view-center { display: none; flex-direction: column; flex: 1; min-height: 0; margin-top: 12px; }
+  .center-top { display: flex; align-items: center; gap: 10px; }
+  .center-back {
+    border: none; background: #ffffff; width: 32px; height: 32px; border-radius: 9px;
+    font-size: 15px; color: #3d4a6b; cursor: pointer; box-shadow: inset 0 0 0 1px #e8ecf4; flex: none;
+  }
+  .center-back:hover { color: #2f6bff; }
+  .center-title { font-size: 15px; font-weight: 800; color: #2b3654; flex: none; }
+    .center-skill {
+      border: none; background: #eef3ff; height: 32px; border-radius: 9px;
+      font-size: 12px; font-weight: 700; color: #2f6bff; cursor: pointer;
+      padding: 0 12px; flex: none;
+    }
+    .center-skill:hover { background: #dfe9ff; }
+  .center-body { display: flex; flex: 1; min-height: 0; margin-top: 12px; gap: 14px; }
+  .center-side {
+    width: 190px; flex: none; display: flex; flex-direction: column; min-height: 0;
+    background: #ffffff; border-radius: 12px; padding: 10px 8px;
+    box-shadow: inset 0 0 0 1px #e8ecf4;
+  }
+  .side-title { font-size: 12px; font-weight: 700; color: #3d4a6b; padding: 2px 6px 8px; }
+  .side-list { flex: 1; overflow-y: auto; }
+  .side-list::-webkit-scrollbar, .center-main::-webkit-scrollbar { width: 6px; }
+  .side-list::-webkit-scrollbar-thumb, .center-main::-webkit-scrollbar-thumb { background: #dde2ee; border-radius: 3px; }
+  .side-item {
+    display: flex; align-items: center; gap: 9px; padding: 8px 6px;
+    border-radius: 9px; cursor: pointer; position: relative;
+  }
+  .side-item__del {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    border: none; background: transparent; color: #b3bdd6; font-size: 12px;
+    cursor: pointer; display: none; padding: 4px 6px; border-radius: 6px;
+  }
+  .side-item:hover .side-item__del { display: block; }
+  .side-item:hover .side-item__del:hover { color: #e05a5a; background: #fdecec; }
+  .side-item:hover { background: #eef1f8; }
+  .side-item__icon {
+    width: 32px; height: 32px; border-radius: 8px; flex: none; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; color: #fff;
+  }
+  .side-item__icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .side-item__name {
+    font-size: 12px; color: #3d4a6b; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .center-main { flex: 1; min-width: 0; overflow-y: auto; padding-bottom: 6px; }
+  .tabs { display: flex; gap: 6px; margin: 0 0 10px; }
+  .tab {
+    border: none; background: #ffffff; height: 28px; padding: 0 13px; border-radius: 14px;
+    font-size: 12px; color: #5a6788; cursor: pointer; box-shadow: inset 0 0 0 1px #e8ecf4;
+  }
+  .tab.on { background: #2f6bff; color: #fff; box-shadow: none; }
+  .center-list { display: flex; flex-direction: column; gap: 8px; }
+  .row-card {
+    display: flex; align-items: center; gap: 11px;
+    background: #ffffff; border-radius: 12px; padding: 10px 12px; cursor: pointer;
+    box-shadow: inset 0 0 0 1px #e8ecf4; transition: box-shadow 0.14s;
+  }
+  .row-card:hover { box-shadow: inset 0 0 0 1px #c9d6f5, 0 3px 10px rgba(31, 51, 102, 0.08); }
+  .row-card__icon {
+    width: 42px; height: 42px; border-radius: 11px; flex: none; overflow: hidden; position: relative;
+    display: flex; align-items: center; justify-content: center; font-size: 20px; color: #fff;
+  }
+  .row-card__icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .row-card__text { flex: 1; min-width: 0; }
+  .row-card__name { font-size: 13px; font-weight: 600; color: #2b3654; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-card__desc { font-size: 11px; color: #8794b3; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .actbtn {
+    border: none; height: 28px; padding: 0 14px; border-radius: 14px; flex: none;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    background: #4f8cff; color: #fff;
+  }
+  .actbtn:hover { background: #3a7bf0; }
+  .actbtn--ghost { background: #eef1f8; color: #5a6788; }
+  .actbtn--ghost:hover { background: #e2e8f5; color: #2f6bff; }
+  .actbtn--danger { background: #eef1f8; color: #e05a5a; margin-left: 6px; }
+  .actbtn--danger:hover { background: #fdecec; color: #c73e3e; }
+  .actbtn--busy { background: #8794b3; pointer-events: none; }
+  .actbtn--busy::after {
+    content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff;
+    animation: badge-spin 0.8s linear infinite; vertical-align: -1px;
+  }
+</style>
+</head>
+<body>
+<div class="panel">
+
+  <!-- ═══ 主页视图 ═══ -->
+  <div id="view-home" style="display:flex; flex-direction:column; flex:1; min-height:0;">
+    <div class="searchrow">
+      <input class="search" id="search" type="text" placeholder="搜索功能 / 应用" autocomplete="off">
+      <div class="avatar" id="avatar" title="Z-Team">ZT</div>
+    </div>
+
+    <div class="scroll">
+      <div class="sec" id="sec-recent" hidden>
+        <span class="sec__title">最近使用</span>
+      </div>
+      <div class="grid" id="grid-recent" hidden></div>
+
+      <div class="sec" id="sec-builtin">
+        <span class="sec__title">内置功能</span>
+      </div>
+      <div class="grid" id="grid-builtin"></div>
+
+      <div class="sec" id="sec-tools">
+        <span class="sec__title">工具集</span>
+      </div>
+      <div class="grid" id="grid-tools"></div>
+
+      <div class="sec" id="sec-ztools" hidden>
+        <span class="sec__title">本地插件</span>
+        <button class="sec__more center-go">插件中心 &gt;</button>
+      </div>
+      <div class="grid" id="grid-ztools" hidden></div>
+      <div class="empty-hint link" id="ztools-empty" hidden>安装本地插件后将展示在这里，打开插件中心 &gt;</div>
+
+      <div class="sec" id="sec-market" hidden>
+        <span class="sec__title">市场精选</span>
+        <button class="sec__more center-go">插件中心 &gt;</button>
+      </div>
+      <div class="grid" id="grid-market" hidden></div>
+      <div class="empty-hint" id="market-hint" hidden>登录后可见市场资源</div>
+    </div>
+  </div>
+
+  <!-- ═══ 插件运行视图：FT 自身加载本地 main.html（asset:// iframe），不拉起工具箱 ═══ -->
+  <div id="view-plugin">
+    <div class="plugin-top">
+      <button class="center-back" id="btn-plugin-back" title="返回">&#8592;</button>
+      <span class="center-title" id="plugin-title">插件</span>
+      <button class="plugin-tool" id="btn-plugin-reload">重新加载</button>
+    </div>
+    <iframe id="plugin-frame" title="插件"></iframe>
+  </div>
+
+  <!-- ═══ 插件中心视图（面板内展开，不跳转 FT web） ═══ -->
+  <div id="view-center">
+    <div class="center-top">
+      <button class="center-back" id="btn-back" title="返回">&#8592;</button>
+      <span class="center-title">插件中心</span>
+      <input class="search" id="search-center" type="text" placeholder="搜索插件应用" autocomplete="off">
+      <button class="center-skill" id="btn-skill" title="下载「插件制造 Skill」：交给 AI 按 FT 规约造一个可上架的本地插件 zip（含体系说明/规约/模板/自检）">⚡ 制造 Skill</button>
+    </div>
+    <div class="center-body">
+      <div class="center-side">
+        <div class="side-title">已安装插件应用 (<span id="side-n">0</span>)</div>
+        <div class="side-list" id="side-list"></div>
+        <div class="empty-hint" id="side-empty" hidden>还没有已安装的插件</div>
+      </div>
+      <div class="center-main">
+        <div class="tabs" id="tabs">
+          <button class="tab on" data-cat="">精选</button>
+          <button class="tab" data-cat="browser-plugin">浏览器插件</button>
+          <button class="tab" data-cat="ztools-plugin">本地插件</button>
+          <button class="tab" data-cat="software">软件资源</button>
+        </div>
+        <div class="center-list" id="center-list"></div>
+        <div class="empty-hint" id="center-hint" hidden>登录后可见市场资源</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 卸载确认弹层：替代 window.confirm（Tauri WKWebView 不弹 JS 原生确认框） -->
+<div class="confirm-mask" id="confirm-mask" hidden>
+  <div class="confirm-box">
+    <div class="confirm-msg" id="confirm-msg"></div>
+    <div class="confirm-actions">
+      <button class="cbtn" id="confirm-cancel">取消</button>
+      <button class="cbtn cbtn--danger" id="confirm-ok">卸载</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var tauri = window.__TAURI__ || {};
+  var invoke = tauri.core && tauri.core.invoke;
+  var RECENT_KEY = "ft_launcher_recent";
+  var RECENT_MAX = 8;
+
+  /** 内置功能（tool-box 式内置工具）：action/path 与 Rust launcher_action 约定一致 */
+  var BUILTIN = [
+    { icon: "💬", tone: 0, label: "发起群聊", action: "quick-chat" },
+    { icon: "📝", tone: 1, label: "个人笔记", action: "quick-note" },
+    { icon: "🕘", tone: 2, label: "历史群聊", action: "quick-history" },
+    { icon: "🏠", tone: 3, label: "主面板", action: "show-main" },
+    { icon: "🧩", tone: 4, label: "场景实例", action: "open-path", path: "/scenario" },
+    { icon: "🛡️", tone: 5, label: "后台管理", action: "open-path", path: "/admin" },
+    { icon: "📘", tone: 6, label: "操作手册", action: "open-path", path: "/docs/" },
+    { icon: "📜", tone: 7, label: "迭代日志", action: "open-path", path: "/change-log" },
+    { icon: "⬇️", tone: 8, label: "下载中心", action: "open-path", path: "/download" },
+  ];
+
+  function act(action, path) {
+    if (!invoke) return;
+    invoke("launcher_action", { action: action, path: path || null })
+      .catch(function (e) { console.error("[ft-launcher] invoke failed:", e); });
+  }
+  /* 市场资源分类已迁到「生活」之下（生活 = 学习专栏 | 技术社区 | 市场资源分类），
+   * 顶栏不再有独立「市场」入口 —— 跳转地址按分类落到对应子菜单。 */
+  function marketPath(category) {
+    var cat = (category || "browser-plugin");
+    if (cat !== "ztools-plugin" && cat !== "software") cat = "browser-plugin";
+    return "/workspace?mode=life&lifeTab=" + cat;
+  }
+  /* ══ 视图切换：主页 / 插件中心 / 插件运行（均面板内展开，不跳 FT web、不拉起工具箱） ══ */
+  var viewHome = document.getElementById("view-home");
+  var viewCenter = document.getElementById("view-center");
+  var viewPlugin = document.getElementById("view-plugin");
+  function showView(v) {
+    viewHome.style.display = v === "home" ? "flex" : "none";
+    viewCenter.style.display = v === "center" ? "flex" : "none";
+    viewPlugin.style.display = v === "plugin" ? "flex" : "none";
+    if (v === "center") {
+      renderSideList();
+      renderCenterList();
+      var sc = document.getElementById("search-center");
+      if (sc.value) { sc.value = ""; }
+    }
+  }
+
+  /* ── FT 自身运行本地插件：asset:// 协议 iframe 加载 main.html ──
+     与 z-biz-tool-box PluginIframe 同模式（同源目录互认，运行体系独立）。
+     插件 bootstrap 发 __zbiz_hello 无宿主应答时自动走原生兜底，核心功能不受影响。 */
+  var pluginReturnView = "home";
+  function openPluginIframe(p) {
+    document.getElementById("plugin-title").textContent = p.name || "插件";
+    var frame = document.getElementById("plugin-frame");
+    try {
+      var cfs = tauri.core && tauri.core.convertFileSrc;
+      // convertFileSrc 把 '/' 也编码为 %2F，会让相对子资源解析到根目录；还原为字面量 '/'
+      frame.src = cfs ? cfs(p.mainPath).replace(/%2F/gi, "/") : "file://" + p.mainPath;
+    } catch (e) { frame.src = "file://" + p.mainPath; }
+    showView("plugin");
+  }
+  /* 主路径：独立窗口多开。iframe 里点上传（file input）会触发 WKWebView 原生
+     文件选择框导致插件页重载消失，独立窗口不受影响；窗口创建失败才回退 iframe。 */
+  function openPlugin(p) {
+    if (!p || !p.mainPath) {
+      toast("插件文件缺失，请到插件中心重新安装");
+      return;
+    }
+    pluginReturnView = viewCenter.style.display === "flex" ? "center" : "home";
+    if (invoke) {
+      invoke("ztool_open", { mainPath: p.mainPath, name: p.name || "插件" })
+        .then(function () {
+          toast("已在独立窗口打开「" + (p.name || "插件") + "」");
+        })
+        .catch(function (err) {
+          console.warn("ztool_open 失败，回退 iframe:", err);
+          openPluginIframe(p);
+        });
+    } else {
+      openPluginIframe(p);
+    }
+  }
+  document.getElementById("btn-plugin-back").addEventListener("click", function () {
+    document.getElementById("plugin-frame").src = "about:blank";
+    showView(pluginReturnView);
+  });
+  document.getElementById("btn-plugin-reload").addEventListener("click", function () {
+    var f = document.getElementById("plugin-frame");
+    var s = f.src;
+    f.src = "about:blank";
+    setTimeout(function () { f.src = s; }, 60);
+  });
+
+  /* ── 最近使用：本地点击记录（localStorage，跨启动保留） ── */
+  function loadRecent() {
+    try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]") || []; }
+    catch (e) { return []; }
+  }
+  function saveRecent(item) {
+    var list = loadRecent().filter(function (it) {
+      return !(it.action === item.action && (it.path || "") === (item.path || ""));
+    });
+    list.unshift(item);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX))); }
+    catch (e) { /* 存储满/隐私模式忽略 */ }
+    renderRecent();
+  }
+  function iconHtml(item) {
+    /* icon 形如 "img:<url>" / dataURL / emoji：URL 类渲染 img，失败回退占位 */
+    var ic = item.icon || "🛍️";
+    if (ic.indexOf("img:") === 0) {
+      return '<img src="' + ic.slice(4) + '" onerror="this.remove();this.parentElement.appendChild(document.createTextNode(\'🛍️\'));">';
+    }
+    if (ic.indexOf("data:") === 0) {
+      return '<img src="' + ic + '">';
+    }
+    return ic;
+  }
+  function cardEl(item, clickable) {
+    var el = document.createElement("div");
+    el.className = "card";
+    el.setAttribute("data-keywords", (item.label || item.name || "").toLowerCase());
+    el.innerHTML =
+      '<div class="card__icon tone-' + (item.tone != null ? item.tone : 9) + '">' + iconHtml(item) + '</div>' +
+      '<div class="card__label" title="' + (item.label || item.name || "") + '">' + (item.label || item.name || "") + '</div>';
+    if (clickable) {
+      el.addEventListener("click", function () {
+        item.onClick ? item.onClick() : act(item.action, item.path);
+        if (item.action) saveRecent({ icon: item.icon, tone: item.tone, label: item.label, action: item.action, path: item.path });
+      });
+    }
+    return el;
+  }
+  function renderRecent() {
+    var grid = document.getElementById("grid-recent");
+    var sec = document.getElementById("sec-recent");
+    grid.innerHTML = "";
+    var list = loadRecent();
+    if (!list.length) { grid.hidden = true; sec.hidden = true; return; }
+    list.forEach(function (it) { grid.appendChild(cardEl(it, true)); });
+    grid.hidden = false; sec.hidden = false;
+  }
+
+  BUILTIN.forEach(function (it) {
+    document.getElementById("grid-builtin").appendChild(cardEl(it, true));
+  });
+  renderRecent();
+
+  /* ── 工具集：搬运自 z-biz-tool-box 内置插件（public/fttools/，iframe 面板内运行） ── */
+  var FTTOOLS = [
+    { key: "base64", icon: "🔤", title: "Base64" },
+    { key: "hash", icon: "#️⃣", title: "哈希计算" },
+    { key: "hex", icon: "🔣", title: "Hex 编解码" },
+    { key: "html-entity", icon: "📝", title: "HTML 实体" },
+    { key: "image-base64", icon: "🖼️", title: "图片 Base64" },
+    { key: "url", icon: "🔗", title: "URL 编解码" },
+    { key: "case", icon: "🔠", title: "大小写转换" },
+    { key: "dedup", icon: "🧹", title: "文本去重" },
+    { key: "diff", icon: "⚖️", title: "文本对比" },
+    { key: "json", icon: "🧾", title: "JSON 工具" },
+    { key: "lorem", icon: "📄", title: "Lorem 生成" },
+    { key: "reverse", icon: "🔁", title: "文本翻转" },
+    { key: "sort", icon: "🔽", title: "文本排序" },
+    { key: "wordcount", icon: "📊", title: "字数统计" },
+    { key: "jwt", icon: "🔑", title: "JWT 解码" },
+    { key: "pwdgen", icon: "🎲", title: "密码生成" },
+    { key: "pwdstr", icon: "🛡️", title: "密码强度" },
+    { key: "uuid", icon: "🆔", title: "UUID 生成" },
+    { key: "color", icon: "🎨", title: "颜色转换" },
+    { key: "cron", icon: "⏰", title: "Cron 解析" },
+    { key: "exchange", icon: "💱", title: "汇率换算" },
+    { key: "numberbase", icon: "🔢", title: "进制转换" },
+    { key: "timestamp", icon: "⏱️", title: "时间戳" },
+    { key: "unit", icon: "📐", title: "单位换算" },
+    { key: "http", icon: "⚡", title: "HTTP 测试" },
+    { key: "ip", icon: "🌐", title: "IP 工具" }
+  ];
+  function openTool(t) {
+    pluginReturnView = "home";
+    document.getElementById("plugin-title").textContent = t.title;
+    document.getElementById("plugin-frame").src = "fttools/" + t.key + ".html";
+    showView("plugin");
+  }
+  FTTOOLS.forEach(function (t, i) {
+    document.getElementById("grid-tools").appendChild(cardEl({
+      label: t.title,
+      icon: t.icon,
+      tone: i % 9,
+      onClick: function () { openTool(t); }
+    }, true));
+  });
+
+  document.getElementById("avatar").addEventListener("click", function () { act("show-main"); });
+  Array.prototype.forEach.call(document.querySelectorAll(".center-go"), function (b) {
+    b.addEventListener("click", function () { showView("center"); });
+  });
+  document.getElementById("ztools-empty").addEventListener("click", function () { showView("center"); });
+  document.getElementById("btn-back").addEventListener("click", function () { showView("home"); });
+
+  /* ── 插件制造 Skill：运行时解析最新前端版本号后交系统浏览器下载 zip ── */
+  document.getElementById("btn-skill").addEventListener("click", function () {
+    if (!invoke) { act("open-path", marketPath("browser-plugin")); return; }
+    invoke("open_skill_package")
+      .then(function () { toast("已打开浏览器下载「插件制造 Skill」"); })
+      .catch(function (e) { toast("下载失败：" + (e && e.toString ? e.toString() : e)); });
+  });
+
+  /* ── 轻量确认弹层：替代 window.confirm（Tauri WKWebView 下恒返回 false，
+     点击"卸载"永远走不到 invoke —— 无任何反应的根因） ── */
+  function confirmBox(msg, onOk) {
+    var mask = document.getElementById("confirm-mask");
+    if (!mask) { if (onOk) onOk(); return; } /* 兕底：无弹层 DOM 时直接执行 */
+    document.getElementById("confirm-msg").textContent = msg;
+    mask.hidden = false;
+    var ok = document.getElementById("confirm-ok");
+    var cancel = document.getElementById("confirm-cancel");
+    function close() {
+      mask.hidden = true;
+      ok.onclick = null;
+      cancel.onclick = null;
+    }
+    ok.onclick = function () { close(); if (onOk) onOk(); };
+    cancel.onclick = close;
+  }
+
+  /* ── 已安装本地工具（~/.z-biz-tools/plugins 与工具箱 scanner 同源） ── */
+  var installedList = [];   /* [{id(pluginId), marketId, name, description, version, logoDataUrl}] */
+  var installedMap = {};    /* marketId → item（市场角标判定） */
+  function toast(msg) {
+    var t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function () { t.classList.remove("show"); }, 2200);
+  }
+  function applyBadge(card, zid) {
+    if (!card || zid == null) return;
+    var ph = card.querySelector(".card__icon");
+    if (!ph) return;
+    var old = ph.querySelector(".badge");
+    if (old) old.remove();
+    var b = document.createElement("div");
+    b.className = "badge " + (installedMap[zid] ? "badge--ok" : "badge--no");
+    b.textContent = installedMap[zid] ? "✓" : "↓";
+    ph.appendChild(b);
+  }
+  function renderInstalled() {
+    /* 主页「本地插件」行：已装插件直接展开为图标卡片，点击面板内直接运行 */
+    var grid = document.getElementById("grid-ztools");
+    var sec = document.getElementById("sec-ztools");
+    var empty = document.getElementById("ztools-empty");
+    grid.innerHTML = "";
+    if (!installedList.length) {
+      grid.hidden = true; sec.hidden = true;
+      empty.hidden = false; /* 未装任何插件时给出引导入口 */
+      return;
+    }
+    empty.hidden = true; sec.hidden = false; grid.hidden = false;
+    installedList.forEach(function (p, i) {
+      var item = {
+        name: p.name || "未命名",
+        icon: p.logoDataUrl || "🧰", /* logoDataUrl 即 data:image/png;base64,...，iconHtml 直接作 src */
+        tone: i % 9,
+        onClick: function () { openPlugin(p); }, /* FT 面板内直接运行插件 */
+      };
+      grid.appendChild(cardEl(item, true));
+    });
+  }
+  function renderSideList() {
+    /* 插件中心左栏：已安装列表 */
+    var list = document.getElementById("side-list");
+    var empty = document.getElementById("side-empty");
+    list.innerHTML = "";
+    document.getElementById("side-n").textContent = String(installedList.length);
+    if (!installedList.length) { empty.hidden = false; return; }
+    empty.hidden = true;
+    installedList.forEach(function (p, i) {
+      var el = document.createElement("div");
+      el.className = "side-item";
+      el.title = (p.name || "") + (p.version ? "  v" + p.version : "");
+      el.innerHTML =
+        '<div class="side-item__icon tone-' + (i % 9) + '">' + (p.logoDataUrl ? '<img src="' + p.logoDataUrl + '">' : "🧰") + '</div>' +
+        '<div class="side-item__name">' + (p.name || "未命名") + '</div>' +
+        '<button class="side-item__del" title="卸载">✕</button>';
+      el.querySelector(".side-item__del").addEventListener("click", function (e) {
+        e.stopPropagation();
+        confirmBox("确定卸载「" + (p.name || "该插件") + "」吗？", function () { uninstallZtool(p.marketId); });
+      });
+      el.addEventListener("click", function () { openPlugin(p); });
+      list.appendChild(el);
+    });
+  }
+  function refreshInstalled() {
+    if (!invoke) return;
+    invoke("ztool_installed_list")
+      .then(function (raw) {
+        try {
+          installedList = JSON.parse(raw) || [];
+        } catch (e) { installedList = []; }
+        installedMap = {};
+        installedList.forEach(function (it) {
+          if (it && it.marketId != null) installedMap[it.marketId] = it;
+        });
+        renderInstalled();
+        renderSideList();
+        document.querySelectorAll("#grid-market .card").forEach(function (card) {
+          applyBadge(card, card.getAttribute("data-zid"));
+        });
+        renderCenterList(); /* 已装状态变化后重绘右列表按钮 */
+      })
+      .catch(function () { });
+  }
+
+  /* ── 本地插件安装：下载市场 zip 包→解压生效（幂等覆盖更新） ── */
+  function installZtool(r) {
+    if (!invoke) { act("open-path", marketPath("ztools-plugin")); return; }
+    var btn = document.querySelector('#center-list .actbtn[data-zid="' + r.id + '"]');
+    if (btn) { btn.className = "actbtn actbtn--busy"; btn.textContent = ""; }
+    invoke("ztool_install", {
+      id: r.id,
+      name: r.name || "未命名",
+      version: r.version || null,
+      summary: r.summary || null,
+      author: r.creatorName || null,
+      coverUrl: r.coverUrl || null,
+      manifestJson: r.manifestJson || null
+    })
+      .then(function () {
+        toast("「" + (r.name || "插件") + "」已安装完成，打开即可使用");
+        refreshInstalled();
+      })
+      .catch(function (e) {
+        toast("安装失败：" + (e && e.toString ? e.toString() : e));
+        refreshInstalled();
+      });
+  }
+
+  /* 版本比较：a<b 返回负数（任一缺省视为相等，不提示升级） */
+  function verCmp(a, b) {
+    if (!a || !b) return 0;
+    var pa = String(a).split("."), pb = String(b).split(".");
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var xa = parseInt(pa[i], 10) || 0, xb = parseInt(pb[i], 10) || 0;
+      if (xa !== xb) return xa - xb;
+    }
+    return 0;
+  }
+  function uninstallZtool(mid) {
+    if (!invoke) return;
+    invoke("ztool_uninstall", { id: String(mid) })
+      .then(function () {
+        toast("已卸载");
+        refreshInstalled();
+      })
+      .catch(function (e) {
+        toast("卸载失败：" + (e && e.toString ? e.toString() : e));
+      });
+  }
+
+  /* ── 市场资源：Rust 代理拉取（带 SSO token），主页精选行 + 插件中心列表共用 ── */
+  var marketRows = [];      /* 原始资源列表 */
+  var centerCat = "";       /* 插件中心当前分类 tab（""=精选） */
+  function marketIconEl(ph, coverUrl, fallbackEmoji) {
+    if (!coverUrl) { ph.textContent = fallbackEmoji || "🛍️"; return; }
+    var img = document.createElement("img");
+    img.src = coverUrl;
+    /* 加载失败仅移除 img 并补占位 emoji，不能清空 ph（会连安装角标一起清掉） */
+    img.onerror = function () { img.remove(); ph.appendChild(document.createTextNode(fallbackEmoji || "🛍️")); };
+    ph.appendChild(img);
+  }
+  /* 市场资源点击行为：本地工具未装=安装 / 已装=面板内直接运行；其他类=打开 web 市场详情 */
+  function marketItemClick(r) {
+    if ((r.category || "") === "ztools-plugin") {
+      if (installedMap[r.id]) { openPlugin(installedMap[r.id]); } else { installZtool(r); }
+    } else {
+      act("open-path", marketPath(r.category));
+    }
+  }
+  function marketCardEl(r, toneIdx) {
+    var item = { name: r.name || "未命名", icon: r.coverUrl ? "img:" + r.coverUrl : "🛍️", tone: toneIdx };
+    var el = cardEl(item, false); /* 点击行为在下方自行绑定（安装/打开工具箱/跳市场） */
+    el.addEventListener("click", function () { marketItemClick(r); });
+    var ph = el.querySelector(".card__icon");
+    ph.innerHTML = "";
+    marketIconEl(ph, r.coverUrl, "🛍️");
+    ph.style.overflow = "hidden";
+    if ((r.category || "") === "ztools-plugin") {
+      el.setAttribute("data-zid", r.id);
+      applyBadge(el, r.id);
+    }
+    return el;
+  }
+  function renderMarket() {
+    /* 主页「市场精选」行：跨分类按下载量 Top8 */
+    var grid = document.getElementById("grid-market");
+    var sec = document.getElementById("sec-market");
+    grid.innerHTML = "";
+    var top = marketRows
+      .slice()
+      .sort(function (a, b) { return (b.downloadCount || 0) - (a.downloadCount || 0); })
+      .slice(0, 8);
+    if (!top.length) { sec.hidden = true; grid.hidden = true; return; }
+    top.forEach(function (r, i) { grid.appendChild(marketCardEl(r, i % 9)); });
+    sec.hidden = false; grid.hidden = false;
+  }
+
+  /* ── 插件中心右列表：分类 tab + 行卡片（图标/名称/简介/操作按钮） ── */
+  document.getElementById("tabs").addEventListener("click", function (e) {
+    var b = e.target.closest(".tab");
+    if (!b) return;
+    centerCat = b.getAttribute("data-cat") || "";
+    Array.prototype.forEach.call(document.querySelectorAll("#tabs .tab"), function (t) {
+      t.classList.toggle("on", t === b);
+    });
+    renderCenterList();
+  });
+  function centerRowEl(r) {
+    var isLocal = (r.category || "") === "ztools-plugin";
+    var installed = isLocal && !!installedMap[r.id];
+    var el = document.createElement("div");
+    el.className = "row-card";
+    el.setAttribute("data-keywords", ((r.name || "") + " " + (r.summary || "")).toLowerCase());
+    el.innerHTML =
+      '<div class="row-card__icon tone-' + ((r.id || 0) % 9) + '"></div>' +
+      '<div class="row-card__text">' +
+        '<div class="row-card__name">' + (r.name || "未命名") + '</div>' +
+        '<div class="row-card__desc">' + (r.summary || (isLocal ? "本地插件 zip 包，下载解压安装后即可运行" : "点击查看详情与下载")) + '</div>' +
+      '</div>' +
+      '<button class="actbtn" data-zid="' + r.id + '"></button>' +
+      '<button class="actbtn actbtn--danger" data-zdel="' + r.id + '" hidden>卸载</button>';
+    marketIconEl(el.querySelector(".row-card__icon"), r.coverUrl, isLocal ? "🧰" : "🛍️");
+    var btn = el.querySelector(".actbtn");
+    var delBtn = el.querySelector("[data-zdel]");
+    function syncBtn() {
+      var inst = isLocal && !!installedMap[r.id];
+      delBtn.hidden = !inst;
+      if (inst) {
+        var canUp = verCmp(installedMap[r.id].version, r.version) < 0;
+        btn.className = canUp ? "actbtn" : "actbtn actbtn--ghost";
+        btn.textContent = canUp ? "升级" : "打开";
+      } else if (isLocal) {
+        btn.className = "actbtn";
+        btn.textContent = "安装 ↓";
+      } else {
+        btn.className = "actbtn actbtn--ghost";
+        btn.textContent = "查看 ↗";
+      }
+    }
+    syncBtn();
+    el.addEventListener("click", function () { marketItemClick(r); });
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (isLocal && installedMap[r.id]) {
+        /* 已装：有新版本→覆盖升级（幂等安装），否则直接打开 */
+        if (verCmp(installedMap[r.id].version, r.version) < 0) { installZtool(r); }
+        else { openPlugin(installedMap[r.id]); }
+      }
+      else if (isLocal) { installZtool(r); }
+      else { act("open-path", marketPath(r.category)); }
+    });
+    delBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var p = installedMap[r.id];
+      if (!p) return;
+      confirmBox("确定卸载「" + (p.name || r.name || "该插件") + "」吗？", function () { uninstallZtool(r.id); });
+    });
+    return el;
+  }
+  function renderCenterList() {
+    var list = document.getElementById("center-list");
+    var hint = document.getElementById("center-hint");
+    list.innerHTML = "";
+    var q = (document.getElementById("search-center").value || "").trim().toLowerCase();
+    var rows = marketRows
+      .filter(function (r) { return !centerCat || (r.category || "") === centerCat; })
+      .filter(function (r) { return !q || ((r.name || "") + " " + (r.summary || "")).toLowerCase().indexOf(q) !== -1; })
+      .sort(function (a, b) { return (b.downloadCount || 0) - (a.downloadCount || 0); });
+    if (!rows.length) {
+      hint.textContent = marketRows.length ? "没有匹配的插件应用" : "登录后可见市场资源";
+      hint.hidden = false;
+      return;
+    }
+    hint.hidden = true;
+    rows.forEach(function (r) { list.appendChild(centerRowEl(r)); });
+  }
+  document.getElementById("search-center").addEventListener("input", renderCenterList);
+
+  /* ── 主页搜索：匹配各分区卡片关键词，无匹配分区隐藏 ── */
+  document.getElementById("search").addEventListener("input", function (e) {
+    var q = e.target.value.trim().toLowerCase();
+    var any = false;
+    [["grid-recent", "sec-recent"], ["grid-builtin", "sec-builtin"], ["grid-tools", "sec-tools"], ["grid-ztools", "sec-ztools"], ["grid-market", "sec-market"]].forEach(function (pair) {
+      var grid = document.getElementById(pair[0]);
+      var sec = document.getElementById(pair[1]);
+      if (grid.hidden && q) { sec.style.display = "none"; return; }
+      var cards = grid.querySelectorAll(".card");
+      var visible = 0;
+      cards.forEach(function (c) {
+        var hit = !q || (c.getAttribute("data-keywords") || "").indexOf(q) !== -1;
+        c.style.display = hit ? "" : "none";
+        if (hit) visible++;
+      });
+      var show = visible > 0;
+      grid.style.display = show ? "" : "none";
+      sec.style.display = show ? "" : "none";
+      if (show) any = true;
+    });
+    document.getElementById("ztools-empty").style.display = q ? "none" : "";
+    document.getElementById("market-hint").style.display = q ? "none" : "";
+  });
+
+  /* ── 面板拖动：与 ft-badge 同款 JS 判定（不用 data-tauri-drag-region，macOS 上会吞点击）。
+     按住面板空白处（区块标题、行间空隙、搜索行两侧空隙）拖动；位移≤6px 视为单击不拖。
+     交互元素（输入框/按钮/图标卡片）上按下不触发拖动，保证点击与滚动体验不受影响。 ── */
+  var dragDown = null, dragMoving = false;
+  function startPanelDrag() {
+    try { if (tauri && tauri.window) tauri.window.getCurrentWindow().startDragging(); }
+    catch (e) { /* 拖动失败不影响点击 */ }
+  }
+  document.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    if (e.target.closest("input, button, select, textarea, a, .card, .row-card, .side-item, .actbtn, .tab, .avatar, .badge, #toast")) return;
+    dragDown = { x: e.screenX, y: e.screenY };
+    dragMoving = false;
+  });
+  document.addEventListener("mousemove", function (e) {
+    if (!dragDown || dragMoving) return;
+    var dx = e.screenX - dragDown.x, dy = e.screenY - dragDown.y;
+    if (Math.sqrt(dx * dx + dy * dy) > 6) { dragMoving = true; startPanelDrag(); }
+  });
+  document.addEventListener("mouseup", function () { dragDown = null; dragMoving = false; });
+
+  refreshInstalled();
+
+  if (invoke) {
+    invoke("market_resources")
+      .then(function (raw) {
+        try {
+          var r = JSON.parse(raw);
+          if (r && (r.success === true || r.code === 0 || r.code === 200)) {
+            marketRows = (r.data || []).filter(function (x) { return x && (x.status === 1 || x.status === undefined); });
+            renderMarket();
+            renderCenterList();
+            document.getElementById("market-hint").hidden = true;
+          } else {
+            var hint = document.getElementById("market-hint");
+            hint.textContent = "登录后可见市场资源";
+            hint.hidden = false;
+          }
+        } catch (e) { document.getElementById("market-hint").hidden = true; }
+      })
+      .catch(function () { document.getElementById("market-hint").hidden = true; });
+  }
+})();
+</script>
+</body>
+</html>

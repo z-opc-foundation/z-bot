@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicehash/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "ZTeamAgent",
+  "version": "1.0.12",
+  "identifier": "com.zifang.z-team-agent",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "futureteam"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "resources": [
+      "resources/z-team-agent.jar",
+      "resources/jre/"
+    ],
+    "externalBin": [],
+    "copyright": "© 2026 zifang",
+    "macOS": {
+      "exceptionDomain": "opc.zopc.top"
+    }
+  }
+}

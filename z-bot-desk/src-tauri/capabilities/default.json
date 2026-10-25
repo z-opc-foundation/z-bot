@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicehash/tauri/dev/crates/tauri-config-schema/schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "https://opc.zopc.top/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "deep-link:default",
+    "allow-check-for-update",
+    "allow-download-and-install-dmg"
+  ]
+}

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>密码强度 · FT 工具</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 16px 20px 24px; color: #1f2329; background: #fff; font-size: 13px; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .desc { color: #7a8199; font-size: 12px; margin-bottom: 12px; }
+  .sec { margin-top: 12px; }
+  label.fl { display: block; font-size: 12px; color: #5a6478; margin-bottom: 4px; font-weight: 500; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; border: 1px solid #dfe3ec; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; outline: none; background: #fff;
+  }
+  textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+  textarea:focus, input:focus, select:focus { border-color: #2f6bff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .row > * { flex: 0 0 auto; }
+  .grow { flex: 1 1 160px !important; }
+  button {
+    border: none; border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+    background: #eef1f7; color: #2a3245; font-family: inherit;
+  }
+  button:hover { background: #e2e7f2; }
+  button.primary { background: #2f6bff; color: #fff; }
+  button.primary:hover { background: #2559e0; }
+  .out {
+    margin-top: 10px; background: #f6f8fb; border: 1px solid #e8ecf4; border-radius: 8px;
+    padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap;
+    word-break: break-all; max-height: 300px; overflow: auto; line-height: 1.55;
+  }
+  .out:empty { display: none; }
+  .out.dln { white-space: pre; }
+  .ok { color: #16a34a; } .bad { color: #dc2626; } .muted { color: #8a92a6; }
+  .kv { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+  .kv div { background: #f6f8fb; border-radius: 8px; padding: 6px 10px; font-size: 12px; }
+  .kv b { display: block; font-size: 15px; font-weight: 600; }
+  .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-right: 10px; }
+  .swatch { width: 88px; height: 44px; border-radius: 8px; border: 1px solid #e2e6ef; vertical-align: middle; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { border: 1px solid #e8ecf4; padding: 5px 8px; text-align: left; }
+  th { background: #f6f8fb; }
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: #1f2329; color: #fff; font-size: 12px; padding: 7px 14px; border-radius: 16px;
+    opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99;
+  }
+  .toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<h1>🛡️ 密码强度</h1>
+<div class="desc">评分 + 常见弱密码检查 + 改进建议</div>
+
+<div class="sec"><label class="fl">密码（仅本地计算，不上传）</label>
+<input type="text" id="in" placeholder="输入密码…" autocomplete="off"></div>
+<div class="kv" id="kv"></div>
+<div class="out" id="sug"></div>
+
+<div class="toast" id="toast"></div>
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+var _tt;
+function toast(m) { var t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(_tt); _tt = setTimeout(function () { t.classList.remove("show"); }, 1600); }
+function copy(t, m) {
+  var done = function () { toast(m || "已复制"); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(done, function () { legacy(); });
+  } else { legacy(); }
+  function legacy() {
+    var ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand("copy"); done(); } catch (e) { toast("复制失败"); } ta.remove();
+  }
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function download(name, text) {
+  var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = name; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+}
+try { var __T = window.parent && window.parent.__TAURI__; if (__T) window.__TAURI__ = __T; } catch (e) {}
+</script>
+<script>
+
+var COMMON = ["123456","password","123456789","12345678","12345","qwerty","111111","1234567","admin","letmein","iloveyou","000000","666666","888888","abc123","password1","a123456","123123","qwertyuiop","superman","1qaz2wsx","test123","guest","root"];
+$("#in").addEventListener("input", function () {
+  var p = this.value, out = $("#kv"), sug = $("#sug");
+  if (!p) { out.innerHTML = ""; sug.textContent = ""; return; }
+  var score = 0, tips = [];
+  var sets = [/[a-z]/.test(p), /[A-Z]/.test(p), /[0-9]/.test(p), /[^a-zA-Z0-9]/.test(p)].filter(Boolean).length;
+  score += Math.min(40, p.length * 3);
+  score += sets * 12;
+  if (p.length >= 12) score += 10;
+  if (COMMON.indexOf(p.toLowerCase()) >= 0) { score = Math.min(score, 15); tips.push("是常见弱密码"); }
+  if (/^(\d+)\1*$/.test(p) && p.length > 3) { score = Math.min(score, 20); tips.push("是重复数字"); }
+  if (/^[a-z]+$/i.test(p)) { score -= 10; tips.push("只含字母"); }
+  if (/^[0-9]+$/.test(p)) { score = Math.min(score, 20); tips.push("纯数字"); }
+  if (/(0123|1234|2345|3456|4567|5678|6789|abcd|qwer|asdf)/i.test(p)) { score = Math.min(score, 25); tips.push("含连续序列"); }
+  score = Math.max(0, Math.min(100, score));
+  var label = score >= 80 ? "极强" : score >= 60 ? "强" : score >= 40 ? "中等" : score >= 20 ? "弱" : "极弱";
+  var color = score >= 80 ? "#16a34a" : score >= 60 ? "#65a30d" : score >= 40 ? "#d97706" : "#dc2626";
+  out.innerHTML =
+    '<div>强度<b style="color:' + color + '">' + label + " " + score + "/100</b></div>" +
+    "<div>字符种类<b>" + sets + "/4</b></div>" +
+    "<div>长度<b>" + p.length + "</b></div>";
+  if (sets < 4) tips.push("混合大小写 / 数字 / 符号");
+  if (p.length < 12) tips.push("长度加到 12 位以上");
+  sug.innerHTML = tips.length ? '<span class="bad">建议：</span>' + tips.map(esc).join("；") : '<span class="ok">很棒，没有明显短板</span>';
+});
+
+</script>
+</body>
+</html>

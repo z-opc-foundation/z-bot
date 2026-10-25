@@ -1,0 +1,13 @@
+[default]
+description = "Default permissions for custom commands"
+permissions = ["allow-check-for-update", "allow-download-and-install-dmg"]
+
+[[permission]]
+identifier = "allow-check-for-update"
+description = "Allow check_for_update command"
+commands.allow = ["check_for_update"]
+
+[[permission]]
+identifier = "allow-download-and-install-dmg"
+description = "Allow download_and_install_dmg command"
+commands.allow = ["download_and_install_dmg"]

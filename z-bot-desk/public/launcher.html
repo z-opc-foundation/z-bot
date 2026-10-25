@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Z-Team Agent</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+  /* ── 顶部工具栏 ── */
+  #toolbar {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    background: #1a1a2e;
+    border-bottom: 1px solid #333;
+    gap: 8px;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #toolbar .logo {
+    font-size: 13px;
+    font-weight: 600;
+    color: #e0e0e0;
+    margin-right: 8px;
+    white-space: nowrap;
+  }
+  #toolbar .env-group {
+    display: flex;
+    background: #16213e;
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  #toolbar .env-btn {
+    padding: 4px 14px;
+    font-size: 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    background: transparent;
+    color: #888;
+    transition: all 0.15s;
+  }
+  #toolbar .env-btn:hover { color: #ccc; }
+  #toolbar .env-btn.active {
+    background: #4a7fff;
+    color: #fff;
+    font-weight: 500;
+  }
+  #toolbar .spacer { flex: 1; }
+  #toolbar .agent-status {
+    font-size: 11px;
+    color: #666;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  #toolbar .agent-status .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #555;
+  }
+  #toolbar .agent-status .dot.ok { background: #4caf50; }
+  #toolbar .agent-status .dot.err { background: #f44336; }
+  #toolbar .open-ext {
+    font-size: 12px;
+    color: #6a9fff;
+    cursor: pointer;
+    text-decoration: none;
+    margin-left: 8px;
+  }
+  #toolbar .open-ext:hover { text-decoration: underline; }
+
+  /* ── iframe 区域 ── */
+  #frame-wrapper {
+    height: calc(100% - 40px);
+    width: 100%;
+    position: relative;
+  }
+  #content-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #fff;
+  }
+
+  /* iframe 加载失败时的遮罩 */
+  #fallback {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #f5f5f5;
+    color: #666;
+    gap: 12px;
+  }
+  #fallback.show { display: flex; }
+  #fallback .msg { font-size: 14px; }
+  #fallback .link {
+    padding: 8px 20px;
+    background: #4a7fff;
+    color: #fff;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span class="logo">FT Agent</span>
+  <div class="env-group">
+    <button class="env-btn active" data-env="local">本地环境</button>
+    <button class="env-btn" data-env="production">生产环境</button>
+  </div>
+  <span class="spacer"></span>
+  <span class="agent-status">
+    <span class="dot" id="agent-dot"></span>
+    <span id="agent-text">Agent: 检测中...</span>
+  </span>
+  <a class="open-ext" id="open-external" title="在浏览器中打开">↗ 外部打开</a>
+</div>
+
+<div id="frame-wrapper">
+  <iframe id="content-frame" src=""></iframe>
+  <div id="fallback">
+    <div class="msg">无法在内嵌窗口中加载此页面</div>
+    <a class="link" id="fallback-link" href="#" target="_blank">在浏览器中打开 →</a>
+  </div>
+</div>
+
+<script>
+(function() {
+  const URLS = {
+    local: 'http://127.0.0.1:4567/workspace',
+    production: 'https://opc.zopc.top/workspace'
+  };
+
+  const frame = document.getElementById('content-frame');
+  const fallback = document.getElementById('fallback');
+  const fallbackLink = document.getElementById('fallback-link');
+  const buttons = document.querySelectorAll('.env-btn');
+  const agentDot = document.getElementById('agent-dot');
+  const agentText = document.getElementById('agent-text');
+  const openExternal = document.getElementById('open-external');
+
+  let currentEnv = localStorage.getItem('ft-env') || 'local';
+  if (!URLS[currentEnv]) currentEnv = 'local';
+
+  function navigate(env) {
+    currentEnv = env;
+    localStorage.setItem('ft-env', env);
+
+    // 更新按钮状态
+    buttons.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.env === env);
+    });
+
+    const url = URLS[env];
+    frame.src = url;
+    fallback.classList.remove('show');
+    fallbackLink.href = url;
+    openExternal.href = url;
+
+    // 3 秒后检查 iframe 是否加载成功
+    let loaded = false;
+    frame.onload = function() { loaded = true; };
+    setTimeout(function() {
+      if (!loaded) {
+        // 可能被 X-Frame-Options 阻止，显示 fallback
+        // 注意：跨域 iframe 无法检测 onload，这里只是兜底
+      }
+    }, 3000);
+  }
+
+  // 按钮点击
+  buttons.forEach(btn => {
+    btn.addEventListener('click', function() {
+      navigate(btn.dataset.env);
+    });
+  });
+
+  // 外部打开链接
+  openExternal.addEventListener('click', function(e) {
+    e.preventDefault();
+    window.open(URLS[currentEnv], '_blank');
+  });
+
+  // 检测 Agent 后端健康状态
+  function checkAgent() {
+    fetch('http://127.0.0.1:28080/health')
+      .then(r => {
+        if (r.ok) {
+          agentDot.className = 'dot ok';
+          agentText.textContent = 'Agent: 运行中 (:28080)';
+        } else {
+          agentDot.className = 'dot err';
+          agentText.textContent = 'Agent: 异常';
+        }
+      })
+      .catch(() => {
+        agentDot.className = 'dot err';
+        agentText.textContent = 'Agent: 未启动';
+      });
+  }
+  checkAgent();
+  setInterval(checkAgent, 5000);
+
+  // 初始导航
+  navigate(currentEnv);
+})();
+</script>
+
+</body>
+</html>

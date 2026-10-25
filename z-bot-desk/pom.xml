@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xmlns="http://maven.apache.org/POM/4.0.0"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.yuku123</groupId>
+        <artifactId>z-team-agent</artifactId>
+        <version>${revision}</version>
+    </parent>
+    <name>z-team-agent —— 本地 Agent 域聚合（core / wrapper / starter / desk 四子模块）</name>
+
+
+    <artifactId>z-team-agent-desk</artifactId>
+    <packaging>pom</packaging>
+
+    <description>Web 前端：React + Vite，构建产物输出到 starter classpath，通过浏览器访问 /workspace</description>
+
+    <!--
+        本模块为纯前端工程（React + Vite），不包含 Java 源码。
+        构建产物直接输出到 z-team-agent-starter 的 classpath：
+          src/main/resources/static/workspace/
+
+        开发模式：
+          1. 启动 Agent 后端：mvn exec:java -pl z-team-agent/z-team-agent-starter
+          2. 启动前端 dev server：cd z-team-agent-desk && npm run dev
+          3. 浏览器访问 http://localhost:5173/workspace （API 自动代理到 4567）
+
+        生产模式：
+          1. cd z-team-agent-desk && npm install && npm run build
+          2. 静态文件自动输出到 starter classpath
+          3. 启动 Agent：java -jar z-team-agent-starter.jar
+          4. 浏览器访问 http://localhost:4567/workspace
+    -->
+
+    <build>
+        <plugins>
+            <!-- 前端构建触发器：在 Maven prepare-package 阶段触发 npm build -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>npm-install</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>npm</executable>
+                            <arguments>
+                                <argument>install</argument>
+                            </arguments>
+                            <skip>true</skip>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>npm-build</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>npm</executable>
+                            <arguments>
+                                <argument>run</argument>
+                                <argument>build</argument>
+                            </arguments>
+                            <skip>true</skip>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

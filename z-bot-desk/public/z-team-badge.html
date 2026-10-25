@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>FT</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* 透明窗口：仅吉祥物与卡片栈可见。窗口尺寸随卡片数量伸缩（badge_resize）。 */
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column; align-items: flex-end; justify-content: flex-end;
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+
+  /* ── 头顶群聊执行情况卡片栈：最新群聊贴头顶（column-reverse） ── */
+  #stack {
+    display: none; flex-direction: column-reverse; align-items: flex-end;
+    gap: 6px; padding-right: 2px; margin-bottom: 3px;
+  }
+  #stack.on { display: flex; }
+  .card {
+    width: 232px;
+    background: #1b1d22; border-radius: 12px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.35);
+    padding: 8px 10px; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    animation: card-in 0.18s ease-out;
+  }
+  @keyframes card-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .card__text { flex: 1; min-width: 0; }
+  .card__name {
+    font-size: 13px; font-weight: 600; color: #fff; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card__sub {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 11px; color: #9aa0ab; margin-top: 3px; line-height: 1.2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .dot--active { background: #34c77b; box-shadow: 0 0 5px rgba(52, 199, 123, 0.8); }
+  .dot--closed { background: #6b7280; }
+  .dot--err { background: #ff4d4f; }
+
+  /* 卡片右缘操作钮：白=打开群聊 / 红=一键关单（参考桌面通知卡样式） */
+  .card__acts { display: flex; gap: 5px; flex: none; }
+  .cbtn {
+    width: 18px; height: 18px; border-radius: 5px; border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; line-height: 1; padding: 0;
+  }
+  .cbtn--open { background: #fff; color: #2b3654; }
+  .cbtn--open:hover { background: #e8ecf4; }
+  .cbtn--close { background: #ff4d4f; color: #fff; }
+  .cbtn--close:hover { background: #e64340; }
+  /* 两段式确认：首次点击进入待确认态（变黄显示 ?），3s 内再点才真正关单，防误触 */
+  .cbtn--arm { background: #ff9f43; color: #fff; font-weight: 800; }
+  .cbtn--busy { background: #8794b3; pointer-events: none; }
+
+  /* 迷你控制卡：运行中数量一览 + 收起/展开开关；收起时它是整栈唯一卡片 */
+  .card--mini {
+    width: 158px;
+    padding: 6px 10px;
+    border-radius: 10px;
+    gap: 6px;
+  }
+  .card--mini .mini__label {
+    flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: #fff;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card--mini .mini__chev {
+    flex: none; width: 16px; height: 16px; border-radius: 50%;
+    background: #2b2f38; color: #9aa0ab; font-size: 9px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card--mini:hover .mini__chev { background: #3a404c; color: #fff; }
+
+  /* ── 吉祥物本体：点击开关面板，按住拖动 ── */
+  #mascot {
+    width: 72px; height: 72px; flex: none;
+    cursor: pointer; display: block;
+    transition: transform 0.16s ease;
+  }
+  #mascot:hover { transform: scale(1.06); }
+  #mascot:active { transform: scale(0.95); }
+</style>
+</head>
+<body>
+<!-- 头顶卡片栈（最新群聊贴头顶）+ 吉祥物本体。
+     不使用 data-tauri-drag-region：macOS 上该属性吞点击（见 git 历史），
+     统一 JS 判定：位移≤6px 视为单击，>6px 交 startDragging。 -->
+<div id="stack"></div>
+<img id="mascot" src="mascot/mascot-idle.png" alt="FT" draggable="false">
+
+<script>
+(function () {
+  var tauri = window.__TAURI__ || null;
+  var invoke = tauri && tauri.core && tauri.core.invoke
+    ? function (cmd, args) { return tauri.core.invoke(cmd, args); }
+    : null;
+
+  /* 浏览器直接打开（无 Tauri）时自动 mock，便于视觉联调与回归截图 */
+  var MOCK = !invoke;
+  var MOCK_BRIEFS = [
+    { id: 101, name: "z-script", status: "ACTIVE", createdAt: "2026-09-21 09:12:00" },
+    { id: 102, name: "z-opcs 构建排查", status: "ACTIVE", createdAt: "2026-09-21 08:40:00" },
+    { id: 103, name: "print-knowledge 蒸馏", status: "ACTIVE", createdAt: "2026-09-20 18:05:00" },
+    { id: 104, name: "医院数据对齐", status: "CLOSED", createdAt: "2026-09-19 15:30:00" },
+    { id: 105, name: "SEP_20 变更日志", status: "CLOSED", createdAt: "2026-09-19 10:00:00" },
+    { id: 106, name: "夜间 fork 回归", status: "CLOSED", createdAt: "2026-09-18 22:10:00" }
+  ];
+  function mockInvoke(cmd, args) {
+    return new Promise(function (resolve, reject) {
+      setTimeout(function () {
+        if (cmd === "badge_briefs") resolve(JSON.stringify(MOCK_BRIEFS));
+        else if (cmd === "badge_close") {
+          MOCK_BRIEFS = MOCK_BRIEFS.filter(function (b) { return b.id !== args.id; });
+          resolve("{\"success\":true}");
+        } else if (cmd === "badge_resize") resolve();
+        else reject(new Error("mock: unknown " + cmd));
+      }, 120);
+    });
+  }
+  function call(cmd, args) {
+    return invoke ? invoke(cmd, args) : mockInvoke(cmd, args || {});
+  }
+
+  var stack = document.getElementById("stack");
+  var mascot = document.getElementById("mascot");
+  var BASE = 72;            /* 吉祥物本体边长 = 窗口基础尺寸（与 Rust FT_BADGE_SIZE 一致） */
+  var CARD_W = 240;         /* 有卡片时窗口宽度 */
+  var MAX_CARDS = 6;        /* 最多展示卡片数（ACTIVE 优先，其余折叠） */
+  var POLL_MS = 60 * 1000;  /* 群聊状态轮询周期 */
+
+  var mood = "idle";        /* 当前基础表情：idle / thinking / sleep / confused */
+  var briefs = [];          /* 最近一次拉取的群聊列表 */
+  var lastIds = null;       /* 上次 ACTIVE id 集合（检测新群聊 → 惊讶） */
+  var hadError = false;
+  var lastErrReason = "";    /* 最近一次失败的原始原因（错误卡展示用） */
+  /* 收起态记忆：收起后整栈只剩迷你汇总卡，重启后保持上次的收起偏好 */
+  var collapsed = false;
+  try { collapsed = localStorage.getItem("ft-badge-collapsed") === "1"; } catch (e) {}
+
+  function setFace(name) { mascot.src = "mascot/mascot-" + name + ".png"; }
+
+  function relTime(createdAt) {
+    var ts = Date.parse(String(createdAt).replace(" ", "T"));
+    if (!Number.isFinite(ts)) return "";
+    var m = Math.floor((Date.now() - ts) / 60000);
+    if (m < 1) return "刚刚";
+    if (m < 60) return m + " 分钟前";
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + " 小时前";
+    return Math.floor(h / 24) + " 天前";
+  }
+
+  /* ── 窗口随内容伸缩：右缘/底端锚定由 Rust badge_resize 保证 ── */
+  function fitWindow() {
+    var h = Math.max(BASE, Math.ceil(stack.getBoundingClientRect().height) + BASE + 5);
+    var w = !stack.classList.contains("on")
+      ? BASE
+      : (collapsed ? 172 : CARD_W);
+    call("badge_resize", { width: w, height: h }).catch(function () {});
+  }
+
+  function cardEl(b) {
+    var el = document.createElement("div");
+    el.className = "card";
+    el.title = b.name + "（点击打开群聊）";
+    var active = String(b.status).toUpperCase() === "ACTIVE";
+    el.innerHTML =
+      '<div class="card__text">' +
+        '<div class="card__name"></div>' +
+        '<div class="card__sub"><i class="dot ' + (active ? "dot--active" : "dot--closed") + '"></i><span></span></div>' +
+      '</div>' +
+      '<div class="card__acts">' +
+        '<button class="cbtn cbtn--open" title="打开群聊">↗</button>' +
+        '<button class="cbtn cbtn--close" title="' + (active ? "一键关单" : "已关单") + '">■</button>' +
+      '</div>';
+    el.querySelector(".card__name").textContent = b.name || "未命名群聊";
+    el.querySelector(".card__sub span").textContent =
+      (active ? "运行中 · " : "已完成 · ") + relTime(b.createdAt);
+    el.addEventListener("click", function () {
+      call("launcher_action", { action: "open-path", path: "/workspace?projectId=" + b.id })
+        .catch(function () {});
+    });
+    el.querySelector(".cbtn--open").addEventListener("click", function (e) {
+      e.stopPropagation();
+      call("launcher_action", { action: "open-path", path: "/workspace?projectId=" + b.id })
+        .catch(function () {});
+    });
+    var closeBtn = el.querySelector(".cbtn--close");
+    var armTimer = null;
+    closeBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (!active || closeBtn.classList.contains("cbtn--busy")) return;
+      /* 两段式确认：首点进入待确认态，3s 内再点才真正关单 */
+      if (!closeBtn.classList.contains("cbtn--arm")) {
+        closeBtn.classList.add("cbtn--arm");
+        closeBtn.textContent = "?";
+        clearTimeout(armTimer);
+        armTimer = setTimeout(function () {
+          closeBtn.classList.remove("cbtn--arm");
+          closeBtn.textContent = "■";
+        }, 3000);
+        return;
+      }
+      clearTimeout(armTimer);
+      closeBtn.classList.remove("cbtn--arm");
+      closeBtn.classList.add("cbtn--busy");
+      closeBtn.textContent = "■";
+      call("badge_close", { id: b.id })
+        .then(function () {
+          briefs = briefs.filter(function (x) { return x.id !== b.id; });
+          render(briefs);
+          flashFace("happy", 1800); /* 关单成功：庆祝一下 */
+        })
+        .catch(function () {
+          closeBtn.classList.remove("cbtn--busy");
+          flashFace("error", 1500); /* 关单失败：委屈 */
+        });
+    });
+    return el;
+  }
+
+  function errorCard(reason) {
+    var el = document.createElement("div");
+    el.className = "card";
+    /* 具体失败原因直接展示（超长截断），不再一律写"未登录"误导排查 */
+    var msg = String(reason || "未登录或网络异常，点击主面板登录");
+    el.title = msg;
+    el.innerHTML =
+      '<div class="card__text">' +
+        '<div class="card__name">群聊状态获取失败</div>' +
+        '<div class="card__sub"><i class="dot dot--err"></i><span></span></div>' +
+      '</div>';
+    var span = el.querySelector(".card__sub span");
+    span.textContent = msg.length > 46 ? msg.slice(0, 46) + "…" : msg;
+    el.addEventListener("click", function () {
+      call("launcher_action", { action: "show-main" }).catch(function () {});
+    });
+    return el;
+  }
+
+  /* 迷你控制卡：展开/收起开关 + 运行中数量一览（DOM 末尾 = column-reverse 视觉最顶） */
+  function miniEl(activeN) {
+    var el = document.createElement("div");
+    el.className = "card card--mini";
+    el.title = collapsed ? "点击展开群聊状态卡片栈" : "点击收起卡片栈";
+    var txt = hadError
+      ? "群聊状态获取失败"
+      : activeN > 0
+        ? activeN + " 个群聊运行中"
+        : "暂无运行中的群聊";
+    var dotCls = hadError ? "dot--err" : activeN > 0 ? "dot--active" : "dot--closed";
+    el.innerHTML =
+      '<i class="dot ' + dotCls + '"></i>' +
+      '<span class="mini__label"></span>' +
+      '<span class="mini__chev">' + (collapsed ? "▾" : "▴") + "</span>";
+    el.querySelector(".mini__label").textContent = txt;
+    el.addEventListener("click", function (e) {
+      e.stopPropagation();
+      setCollapsed(!collapsed);
+    });
+    return el;
+  }
+
+  function setCollapsed(v) {
+    collapsed = v;
+    try { localStorage.setItem("ft-badge-collapsed", v ? "1" : "0"); } catch (e) {}
+    render(briefs);
+  }
+
+  /* ACTIVE 优先、时间倒序（后端已倒序，这里仅做 ACTIVE 前置稳定排序） */
+  function render(list) {
+    stack.innerHTML = "";
+    var active = list.filter(function (b) { return String(b.status).toUpperCase() === "ACTIVE"; });
+    var closed = list.filter(function (b) { return String(b.status).toUpperCase() !== "ACTIVE"; });
+    if (collapsed) {
+      /* 收起态：仅一张迷你汇总卡（有运行中/有异常才出现，无动态时整栈隐藏安静待机） */
+      if (hadError || active.length > 0) stack.appendChild(miniEl(active.length));
+      stack.classList.toggle("on", stack.children.length > 0);
+      fitWindow();
+      return;
+    }
+    if (hadError) {
+      stack.appendChild(errorCard(lastErrReason));
+    } else {
+      var show = active.slice(0, MAX_CARDS);
+      if (active.length > MAX_CARDS) {
+        var more = document.createElement("div");
+        more.className = "card";
+        more.innerHTML = '<div class="card__text"><div class="card__name"></div>' +
+          '<div class="card__sub"><i class="dot dot--active"></i><span></span></div></div>';
+        more.querySelector(".card__name").textContent = "还有 " + (active.length - MAX_CARDS) + " 个运行中的群聊";
+        more.querySelector(".card__sub span").textContent = "点击悬浮球打开工作台查看";
+        more.addEventListener("click", function () {
+          call("launcher_action", { action: "open-path", path: "/workspace" }).catch(function () {});
+        });
+        stack.appendChild(more);
+      }
+      show.forEach(function (b) { stack.appendChild(cardEl(b)); });
+      /* 无运行中但历史里有刚完成的：展示最近 2 张已完成卡 */
+      if (!show.length) closed.slice(0, 2).forEach(function (b) { stack.appendChild(cardEl(b)); });
+    }
+    /* 迷你控制卡（视觉最顶）：点击收起；无内容时整栈隐藏 */
+    if (stack.children.length > 0) stack.appendChild(miniEl(active.length));
+    stack.classList.toggle("on", stack.children.length > 0);
+    fitWindow();
+  }
+
+  /* ── 表情状态机：执行中=思考 / 全完成=打盹 / 空闲=微笑(偶尔眨眼) / 失败=困惑 ── */
+  function applyMood() {
+    if (hadError) { mood = "confused"; setFace("confused"); return; }
+    var activeN = briefs.filter(function (b) { return String(b.status).toUpperCase() === "ACTIVE"; }).length;
+    if (activeN > 0) { mood = "thinking"; setFace("thinking"); return; }
+    if (briefs.length > 0) { mood = "sleep"; setFace("sleep"); return; }
+    mood = "idle"; setFace("idle");
+  }
+
+  var flashTimer = null;
+  function flashFace(name, ms) {
+    clearTimeout(flashTimer);
+    setFace(name);
+    flashTimer = setTimeout(applyMood, ms);
+  }
+
+  /* 新群聊出现 → 惊讶 1.5s */
+  function detectNew(prevIds) {
+    if (!prevIds) return;
+    var fresh = briefs.some(function (b) {
+      return String(b.status).toUpperCase() === "ACTIVE" && prevIds.indexOf(b.id) === -1;
+    });
+    if (fresh) flashFace("alert", 1500);
+  }
+
+  function refresh() {
+    call("badge_briefs", {})
+      .then(function (raw) {
+        var list = JSON.parse(raw) || [];
+        hadError = false;
+        var prevIds = lastIds;
+        briefs = list.filter(function (b) { return b && b.id; });
+        lastIds = briefs
+          .filter(function (b) { return String(b.status).toUpperCase() === "ACTIVE"; })
+          .map(function (b) { return b.id; });
+        render(briefs);
+        detectNew(prevIds);
+        applyMood();
+      })
+      .catch(function (err) {
+        lastErrReason =
+          typeof err === "string"
+            ? err
+            : (err && err.message) || "未登录或网络异常";
+        hadError = true;
+        render([]);
+        applyMood();
+      });
+  }
+
+  /* ── 拖动/单击判定：整个窗口可拖，单击吉祥物开关面板（卡片点击由各自 click 处理）。
+     startDragging 接管后 mouseup 不再派发，click 天然不触发（拖动不误开群聊）。 ── */
+  var down = null, dragging = false;
+  function startDrag() {
+    try { (tauri.window.getCurrentWindow()).startDragging(); }
+    catch (e) { /* 拖动失败不影响点击 */ }
+  }
+  document.addEventListener("mousedown", function (e) {
+    down = { x: e.screenX, y: e.screenY };
+    dragging = false;
+  });
+  document.addEventListener("mousemove", function (e) {
+    if (!down || dragging) return;
+    var dx = e.screenX - down.x, dy = e.screenY - down.y;
+    if (Math.sqrt(dx * dx + dy * dy) > 6) { dragging = true; startDrag(); }
+  });
+  document.addEventListener("mouseup", function (e) {
+    if (!down) return;
+    var dx = e.screenX - down.x, dy = e.screenY - down.y;
+    var wasDragging = dragging;
+    down = null; dragging = false;
+    if (!wasDragging && Math.sqrt(dx * dx + dy * dy) <= 6 && e.target === mascot) {
+      call("launcher_action", { action: "toggle" }).catch(function () {});
+    }
+  });
+
+  /* 空闲状态随机眨眼（5-9s），仅 mood=idle 时生效 */
+  (function blinkLoop() {
+    setTimeout(function () {
+      if (mood === "idle") {
+        setFace("wink");
+        setTimeout(function () { if (mood === "idle") setFace("idle"); }, 800);
+      }
+      blinkLoop();
+    }, 5000 + Math.floor(Math.random() * 4000));
+  })();
+
+  /* 启动即拉一次（延迟 1s 等 SSO Cookie 注入），之后 60s 轮询 */
+  setTimeout(refresh, 1000);
+  setInterval(refresh, POLL_MS);
+})();
+</script>
+</body>
+</html>

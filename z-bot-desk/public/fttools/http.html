@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>HTTP 测试 · FT 工具</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 16px 20px 24px; color: #1f2329; background: #fff; font-size: 13px; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .desc { color: #7a8199; font-size: 12px; margin-bottom: 12px; }
+  .sec { margin-top: 12px; }
+  label.fl { display: block; font-size: 12px; color: #5a6478; margin-bottom: 4px; font-weight: 500; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; border: 1px solid #dfe3ec; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; outline: none; background: #fff;
+  }
+  textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+  textarea:focus, input:focus, select:focus { border-color: #2f6bff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .row > * { flex: 0 0 auto; }
+  .grow { flex: 1 1 160px !important; }
+  button {
+    border: none; border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+    background: #eef1f7; color: #2a3245; font-family: inherit;
+  }
+  button:hover { background: #e2e7f2; }
+  button.primary { background: #2f6bff; color: #fff; }
+  button.primary:hover { background: #2559e0; }
+  .out {
+    margin-top: 10px; background: #f6f8fb; border: 1px solid #e8ecf4; border-radius: 8px;
+    padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap;
+    word-break: break-all; max-height: 300px; overflow: auto; line-height: 1.55;
+  }
+  .out:empty { display: none; }
+  .out.dln { white-space: pre; }
+  .ok { color: #16a34a; } .bad { color: #dc2626; } .muted { color: #8a92a6; }
+  .kv { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+  .kv div { background: #f6f8fb; border-radius: 8px; padding: 6px 10px; font-size: 12px; }
+  .kv b { display: block; font-size: 15px; font-weight: 600; }
+  .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-right: 10px; }
+  .swatch { width: 88px; height: 44px; border-radius: 8px; border: 1px solid #e2e6ef; vertical-align: middle; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { border: 1px solid #e8ecf4; padding: 5px 8px; text-align: left; }
+  th { background: #f6f8fb; }
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: #1f2329; color: #fff; font-size: 12px; padding: 7px 14px; border-radius: 16px;
+    opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99;
+  }
+  .toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<h1>⚡ HTTP 测试</h1>
+<div class="desc">GET/POST/PUT/DELETE/PATCH 调试（Rust 后端转发，忽略证书校验）</div>
+
+<div class="row">
+  <select id="method" style="flex:0 0 96px"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option><option>HEAD</option></select>
+  <input type="text" id="url" class="grow" placeholder="https://…" value="https://httpbin.org/get">
+  <button class="primary" id="send">发送</button>
+</div>
+<div class="sec"><label class="fl">Headers（每行一个，Key: Value）</label>
+<textarea id="headers" style="min-height:52px" placeholder="Content-Type: application/json"></textarea></div>
+<div class="sec"><label class="fl">Body（非 GET/HEAD）</label>
+<textarea id="body" style="min-height:70px" placeholder='{"key":"value"}'></textarea></div>
+<div class="sec"><label class="fl">响应 <span class="muted" id="meta"></span></label>
+<div class="out dln" id="out" style="max-height:300px"></div>
+<div class="row"><button id="cp">复制响应体</button></div></div>
+
+<div class="toast" id="toast"></div>
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+var _tt;
+function toast(m) { var t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(_tt); _tt = setTimeout(function () { t.classList.remove("show"); }, 1600); }
+function copy(t, m) {
+  var done = function () { toast(m || "已复制"); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(done, function () { legacy(); });
+  } else { legacy(); }
+  function legacy() {
+    var ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand("copy"); done(); } catch (e) { toast("复制失败"); } ta.remove();
+  }
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function download(name, text) {
+  var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = name; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+}
+try { var __T = window.parent && window.parent.__TAURI__; if (__T) window.__TAURI__ = __T; } catch (e) {}
+</script>
+<script>
+
+$("#send").onclick = function () {
+  var T = window.__TAURI__;
+  if (!T || !T.core) { toast("宿主环境不可用"); return; }
+  var hs = {}, raw = $("#headers").value;
+  raw.split(/\r?\n/).forEach(function (l) {
+    var i = l.indexOf(":");
+    if (i > 0) hs[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+  });
+  var method = $("#method").value;
+  $("#send").disabled = true;
+  $("#out").textContent = "请求中…";
+  T.core.invoke("http_request", {
+    url: $("#url").value.trim(), method: method,
+    body: method !== "GET" && method !== "HEAD" ? $("#body").value || null : null,
+    headers: Object.keys(hs).length ? hs : null
+  }).then(function (r) {
+    $("#send").disabled = false;
+    $("#meta").textContent = "HTTP " + r.status + " " + r.statusText + " · " + r.elapsed_ms + "ms";
+    var hl = Object.keys(r.headers || {}).map(function (k) { return k + ": " + r.headers[k]; }).join("\n");
+    $("#out").innerHTML = '<span class="' + (r.success && r.status < 400 ? "ok" : "bad") + '">' + esc(hl ? hl + "\n\n" + r.body : r.body) + "</span>";
+  }).catch(function (e) {
+    $("#send").disabled = false;
+    $("#out").innerHTML = '<span class="bad">' + esc(String(e)) + "</span>";
+  });
+};
+$("#cp").onclick = function () { copy($("#out").textContent); };
+
+</script>
+</body>
+</html>

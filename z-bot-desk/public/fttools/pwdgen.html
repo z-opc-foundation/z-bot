@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>密码生成 · FT 工具</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 16px 20px 24px; color: #1f2329; background: #fff; font-size: 13px; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .desc { color: #7a8199; font-size: 12px; margin-bottom: 12px; }
+  .sec { margin-top: 12px; }
+  label.fl { display: block; font-size: 12px; color: #5a6478; margin-bottom: 4px; font-weight: 500; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; border: 1px solid #dfe3ec; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; outline: none; background: #fff;
+  }
+  textarea { min-height: 96px; resize: vertical; line-height: 1.5; }
+  textarea:focus, input:focus, select:focus { border-color: #2f6bff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .row > * { flex: 0 0 auto; }
+  .grow { flex: 1 1 160px !important; }
+  button {
+    border: none; border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+    background: #eef1f7; color: #2a3245; font-family: inherit;
+  }
+  button:hover { background: #e2e7f2; }
+  button.primary { background: #2f6bff; color: #fff; }
+  button.primary:hover { background: #2559e0; }
+  .out {
+    margin-top: 10px; background: #f6f8fb; border: 1px solid #e8ecf4; border-radius: 8px;
+    padding: 10px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap;
+    word-break: break-all; max-height: 300px; overflow: auto; line-height: 1.55;
+  }
+  .out:empty { display: none; }
+  .out.dln { white-space: pre; }
+  .ok { color: #16a34a; } .bad { color: #dc2626; } .muted { color: #8a92a6; }
+  .kv { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+  .kv div { background: #f6f8fb; border-radius: 8px; padding: 6px 10px; font-size: 12px; }
+  .kv b { display: block; font-size: 15px; font-weight: 600; }
+  .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-right: 10px; }
+  .swatch { width: 88px; height: 44px; border-radius: 8px; border: 1px solid #e2e6ef; vertical-align: middle; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { border: 1px solid #e8ecf4; padding: 5px 8px; text-align: left; }
+  th { background: #f6f8fb; }
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    background: #1f2329; color: #fff; font-size: 12px; padding: 7px 14px; border-radius: 16px;
+    opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99;
+  }
+  .toast.show { opacity: .92; }
+</style>
+</head>
+<body>
+<h1>🎲 密码生成</h1>
+<div class="desc">随机密码生成器（字符集可控 + 熵提示）</div>
+
+<div class="sec"><label class="fl">长度 <span id="lv">16</span></label>
+<input type="range" id="len" min="6" max="64" value="16" style="width:100%"></div>
+<div class="row">
+  <label class="chk"><input type="checkbox" id="up" checked> A-Z</label>
+  <label class="chk"><input type="checkbox" id="lo" checked> a-z</label>
+  <label class="chk"><input type="checkbox" id="di" checked> 0-9</label>
+  <label class="chk"><input type="checkbox" id="sy" checked> !@#$%</label>
+  <label class="chk"><input type="checkbox" id="nosim"> 去易混 0O1lI</label>
+</div>
+<div class="row"><button class="primary" id="go">生成</button><button id="cp">复制</button></div>
+<div class="out" id="out" style="font-size:15px"></div>
+<div class="muted" id="ent"></div>
+
+<div class="toast" id="toast"></div>
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+var _tt;
+function toast(m) { var t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(_tt); _tt = setTimeout(function () { t.classList.remove("show"); }, 1600); }
+function copy(t, m) {
+  var done = function () { toast(m || "已复制"); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(done, function () { legacy(); });
+  } else { legacy(); }
+  function legacy() {
+    var ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+    ta.select(); try { document.execCommand("copy"); done(); } catch (e) { toast("复制失败"); } ta.remove();
+  }
+}
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function download(name, text) {
+  var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = name; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 500);
+}
+try { var __T = window.parent && window.parent.__TAURI__; if (__T) window.__TAURI__ = __T; } catch (e) {}
+</script>
+<script>
+
+$("#len").oninput = function () { $("#lv").textContent = this.value; };
+$("#go").onclick = function () {
+  var U = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", L = "abcdefghijklmnopqrstuvwxyz", D = "0123456789", S = "!@#$%^&*()-_=+[]{};:,.<>?";
+  var pool = "";
+  if ($("#up").checked) pool += U; if ($("#lo").checked) pool += L;
+  if ($("#di").checked) pool += D; if ($("#sy").checked) pool += S;
+  if (!pool) { toast("请至少选择一个字符集"); return; }
+  if ($("#nosim").checked) pool = pool.replace(/[0O1lI]/g, "");
+  var n = parseInt($("#len").value, 10), r = "", buf = new Uint32Array(n);
+  crypto.getRandomValues(buf);
+  for (var i = 0; i < n; i++) r += pool[buf[i] % pool.length];
+  $("#out").textContent = r;
+  var bits = Math.round(n * Math.log2(pool.length));
+  $("#ent").textContent = "熵 约 " + bits + " bits（" + (bits >= 100 ? "极强" : bits >= 75 ? "强" : bits >= 50 ? "中等" : "偏弱") + "）· 字符集 " + pool.length;
+};
+$("#cp").onclick = function () { copy($("#out").textContent); };
+
+</script>
+</body>
+</html>
