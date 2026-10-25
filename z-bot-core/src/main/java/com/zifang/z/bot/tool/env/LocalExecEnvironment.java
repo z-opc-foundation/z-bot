@@ -1,5 +1,6 @@
 package com.zifang.z.bot.tool.env;
 
+import com.zifang.z.bot.sandbox.SandboxConfig;
 import com.zifang.z.bot.tool.Sandbox;
 
 import java.io.File;
@@ -101,6 +102,26 @@ public final class LocalExecEnvironment implements ExecEnvironment {
         }
     }
 
+    /**
+     * OS 级沙箱包装（exec.env.os.sandbox=auto 时生效）：命令闸门仍归 ExecGuard，
+     * 这里只在 spawn 前把 argv 套进 Seatbelt/bwrap；可写根 = 本次 cwd（缺省回沙箱根）。
+     */
+    private java.util.List<String> wrapWithOsSandbox(ExecRequest req, java.util.List<String> argv) throws IOException {
+        String workDir = req.cwd() != null ? req.cwd().getPath()
+                : (sandbox != null ? sandbox.root().getPath()
+                        : new File(com.zifang.z.bot.config.BotConfig.defaultConfigDir(), "workspace").getPath());
+        SandboxConfig.Builder b = SandboxConfig.builder()
+                .workingDirectory(workDir)
+                .networkRestricted(config.osSandboxNetworkRestricted())
+                .agentCode("z-bot")
+                .allowedCommands(null)
+                .enabled(true);
+        for (String extra : config.osSandboxAdditionalWritePaths()) {
+            b.additionalWritePath(extra);
+        }
+        return com.zifang.z.bot.sandbox.OsSandboxWrap.wrap(b.build(), argv);
+    }
+
     /** 请求没给上界/超时时才套配置值；给过的一个都不改（回归要用调用方自己的口径）。 */
     private ExecRequest applyDefaults(ExecRequest req) {
         if (req.timeoutMillis() > 0 && req.maxOutputBytes() > 0) {
@@ -122,7 +143,11 @@ public final class LocalExecEnvironment implements ExecEnvironment {
     }
 
     private ExecResult doExec(final ExecRequest req) throws IOException {
-        ProcessBuilder pb = new ProcessBuilder(req.argv());
+        java.util.List<String> argv = req.argv();
+        if (config.osSandboxEnabled()) {
+            argv = wrapWithOsSandbox(req, argv);
+        }
+        ProcessBuilder pb = new ProcessBuilder(argv);
         if (req.cwd() != null) {
             pb.directory(req.cwd());
         }

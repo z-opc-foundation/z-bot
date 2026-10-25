@@ -5,6 +5,7 @@ import com.zifang.z.bot.config.BotConfig;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.util.Locale;
 import java.util.Properties;
 
 /**
@@ -28,6 +29,13 @@ public final class ExecEnvConfig {
     public static final String KEY_DEFAULT_TIMEOUT_MS = "exec.env.default.timeout.ms";
     public static final String KEY_OUTPUT_MAX_BYTES = "exec.env.output.max.bytes";
     public static final String KEY_OUTPUT_POLICY = "exec.env.output.policy";
+
+    /** OS 级沙箱开关：off（缺省）/ auto（macOS=Seatbelt，Linux=bwrap）。 */
+    public static final String KEY_OS_SANDBOX = "exec.env.os.sandbox";
+    /** OS 沙箱内是否禁出站网络，缺省 true。 */
+    public static final String KEY_OS_SANDBOX_NETWORK = "exec.env.os.sandbox.network";
+    /** 沙箱额外可写路径，逗号分隔。 */
+    public static final String KEY_OS_SANDBOX_WRITE = "exec.env.os.sandbox.write";
 
     public static final String KEY_DOCKER_HOST = "exec.env.docker.host";
     public static final String KEY_DOCKER_API_VERSION = "exec.env.docker.api.version";
@@ -127,8 +135,49 @@ public final class ExecEnvConfig {
         return "";
     }
 
-    public String backend() {
-        String v = raw(KEY_BACKEND);
+    /** off / auto（大小写不敏感）；缺省 off。system property &gt; config.properties &gt; env。 */
+    public boolean osSandboxEnabled() {
+        String v = firstNonEmpty(System.getProperty(KEY_OS_SANDBOX), props.getProperty(KEY_OS_SANDBOX),
+                System.getenv("ZBOT_EXEC_ENV_OS_SANDBOX"));
+        v = trim(v).toLowerCase(Locale.ROOT);
+        return "auto".equals(v) || "on".equals(v) || "true".equals(v);
+    }
+
+    /** 沙箱内禁出站网络？缺省 true；显式 false/off/0 才放网。 */
+    public boolean osSandboxNetworkRestricted() {
+        String v = firstNonEmpty(System.getProperty(KEY_OS_SANDBOX_NETWORK), props.getProperty(KEY_OS_SANDBOX_NETWORK),
+                System.getenv("ZBOT_EXEC_ENV_OS_SANDBOX_NETWORK"));
+        v = trim(v).toLowerCase(Locale.ROOT);
+        return !"false".equals(v) && !"off".equals(v) && !"0".equals(v);
+    }
+
+    public java.util.List<String> osSandboxAdditionalWritePaths() {
+        String v = firstNonEmpty(System.getProperty(KEY_OS_SANDBOX_WRITE), props.getProperty(KEY_OS_SANDBOX_WRITE),
+                System.getenv("ZBOT_EXEC_ENV_OS_SANDBOX_WRITE"));
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        if (v == null) {
+            return out;
+        }
+        for (String p : v.split(",")) {
+            String t = trim(p);
+            if (!t.isEmpty()) {
+                out.add(t);
+            }
+        }
+        return out;
+    }
+
+    private static String firstNonEmpty(String... candidates) {
+        for (String c : candidates) {
+            String t = trim(c);
+            if (!t.isEmpty()) {
+                return t;
+            }
+        }
+        return "";
+    }
+
+    public String backend() {        String v = raw(KEY_BACKEND);
         return v.isEmpty() ? DEFAULT_BACKEND : v.toLowerCase();
     }
 
