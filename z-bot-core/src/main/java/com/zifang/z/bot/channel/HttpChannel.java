@@ -11,12 +11,15 @@ import com.zifang.z.bot.agent.BotAgent;
 import com.zifang.z.bot.agent.StreamEvent;
 import com.zifang.z.bot.agent.StreamListener;
 import com.zifang.z.bot.center.BotCenterClient;
+import com.zifang.z.bot.cli.AgentOptions;
 import com.zifang.z.bot.cliwrap.CliAgentConfig;
 import com.zifang.z.bot.cliwrap.CliEngineBridge;
 import com.zifang.z.bot.cliwrap.dto.ChatCompletionResponse;
 import com.zifang.z.bot.config.BotConfig;
 import com.zifang.z.bot.cron.CronJob;
 import com.zifang.z.bot.cron.CronScheduler;
+import com.zifang.z.bot.local.DirAgentPool;
+import com.zifang.z.bot.local.LocalProjectStore;
 import com.zifang.z.bot.session.SessionManager;
 import com.zifang.z.bot.slash.CommandCatalog;
 import com.zifang.z.bot.slash.SlashCommand;
@@ -35,9 +38,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
@@ -77,7 +82,11 @@ public final class HttpChannel {
     private final CountDownLatch termination = new CountDownLatch(1);
     /** 模型目录缓存（懒建；文件在 configDir/models-cache.json）。 */
     private volatile com.zifang.z.bot.llm.ModelCatalogCache modelCatalog;
-    /** 桌面端 /v1/agents 面的目录（懒建；文件在 configDir/agents.json）。 */
+    /** 本地执行模式的项目目录（懒建；文件在 configDir/projects.json）。 */
+    private LocalProjectStore projectStore;
+    /** 本地执行模式的目录 agent 池（懒建；key=目录绝对路径，""=默认沙箱根）。 */
+    private DirAgentPool dirPool;
+
     private volatile AgentCatalog agentCatalog;
 
     public HttpChannel(BotAgent agent, int port) {
@@ -290,6 +299,17 @@ public final class HttpChannel {
                     "object;fields:id,name,type,status,createdAt", "", ""),
             new Route("DELETE", "/v1/agents", BodyShape.JSON_OBJECT,
                     "object;fields:deleted,id", "", ""),
+            // ---- 本地执行模式（桌面端本地项目/目录 agent/模型自配） ----
+            new Route("GET", "/v1/local/projects", BodyShape.JSON_OBJECT,
+                    "object;fields:projects;rowfields:projects:id,name,dir,createdAt,sessions", "", ""),
+            new Route("POST", "/v1/local/projects", BodyShape.JSON_OBJECT,
+                    "object;fields:id,name,dir,createdAt", "", ""),
+            new Route("DELETE", "/v1/local/projects", BodyShape.JSON_OBJECT,
+                    "object;fields:deleted,id", "", ""),
+            new Route("GET", "/api/local/model-config", BodyShape.JSON_OBJECT,
+                    "object;fields:provider,model,baseUrl,hasApiKey,configDir", "", ""),
+            new Route("PUT", "/api/local/model-config", BodyShape.JSON_OBJECT,
+                    "object;fields:ok,provider,model,baseUrl,applied", "", ""),
             // ---- 会话 ----
             new Route("GET", "/api/sessions", BodyShape.JSON_ARRAY,
                     "array;rowfields:-:id,title,createdAt,messageCount",
@@ -410,6 +430,10 @@ public final class HttpChannel {
                 v1Resource(ex, method, path, "/v1/sessions");
                 return;
             }
+            if (path.startsWith("/v1/local/projects/")) {
+                v1LocalProjectResource(ex, method, path);
+                return;
+            }
             // 台账是唯一的门：不在表里的路径 404，在表里但方法没登记的回 405 + Allow。
             if (routesOf(path).isEmpty()) {
                 json(ex, 404, error("not found: " + path));
@@ -443,6 +467,25 @@ public final class HttpChannel {
                 v1Sessions(ex, method, queryId(ex.getRequestURI().getQuery()));
             } else if ("/v1/agents".equals(path)) {
                 v1Agents(ex, method, queryId(ex.getRequestURI().getQuery()));
+            } else if ("/v1/local/projects".equals(path)) {
+                if ("POST".equals(method)) {
+                    v1LocalProjectCreate(ex, readBody(ex));
+                } else if ("DELETE".equals(method)) {
+                    String qid = queryId(ex.getRequestURI().getQuery());
+                    if (qid.isEmpty()) {
+                        json(ex, 400, error("DELETE /v1/local/projects 需要 ?id=<项目id>（或走 /v1/local/projects/{id}）"));
+                    } else {
+                        deleteLocalProject(ex, qid);
+                    }
+                } else {
+                    v1LocalProjectsList(ex);
+                }
+            } else if ("/api/local/model-config".equals(path)) {
+                if ("PUT".equals(method)) {
+                    apiLocalModelConfigPut(ex, readBody(ex));
+                } else {
+                    apiLocalModelConfigGet(ex);
+                }
             } else if ("/bot/confirm".equals(path)) {
                 String confirmBody = readBody(ex);
                 busyGuard(ex, () -> confirm(ex, confirmBody));
@@ -555,8 +598,36 @@ public final class HttpChannel {
         boolean stream = Boolean.TRUE.equals(parsed.get("stream"))
                 || "true".equalsIgnoreCase(String.valueOf(parsed.get("stream")));
 
-        if (CliEngineBridge.ENGINE_BOT.equals(engine) || "jar".equals(engine)) {
-            v1BuiltinChat(ex, parsed, prompt, stream);
+        boolean builtinEngine = CliEngineBridge.ENGINE_BOT.equals(engine) || "jar".equals(engine);
+        String projectId = str(parsed.get("project_id"));
+        if (projectId.isEmpty()) {
+            projectId = str(parsed.get("projectId"));
+        }
+        if (builtinEngine && !projectId.isEmpty()) {
+            // 本地执行模式：project_id 把这轮对话路由进目录专属 agent（沙箱困在绑定文件夹里）
+            Map<String, Object> project = projectStore().get(projectId);
+            if (project == null) {
+                json(ex, 404, cliEngineError("本地项目不存在: " + projectId));
+                return;
+            }
+            String sid = str(parsed.get("session_id"));
+            if (sid.isEmpty()) {
+                sid = str(parsed.get("sessionId"));
+            }
+            if (!sid.isEmpty()) {
+                projectStore().bindSession(projectId, sid);
+            }
+            BotAgent target = dirPool().forDir(str(project.get("dir")));
+            v1BuiltinChat(ex, parsed, prompt, stream, target);
+            // 本地玩法首轮不带 session_id，会话在 chat 内部新建 —— chat 同步跑完后才能拿到真 id
+            String realSid = target.currentSessionId();
+            if (realSid != null && !realSid.isEmpty()) {
+                projectStore().bindSession(projectId, realSid);
+            }
+            return;
+        }
+        if (builtinEngine) {
+            v1BuiltinChat(ex, parsed, prompt, stream, agent);
             return;
         }
 
@@ -583,23 +654,27 @@ public final class HttpChannel {
         ex.getResponseBody().write(out);
     }
 
-    /** 内置 ReAct 档：session_id 先切会话，FinalDelta 逐个翻成 OpenAI chunk。 */
-    private void v1BuiltinChat(HttpExchange ex, Map<String, Object> parsed, String prompt, boolean stream)
+    /** 内置 ReAct 档：session_id 先切会话，FinalDelta 逐个翻成 OpenAI chunk。target=承接本轮的 agent（全局单例或目录专属实例）。 */
+    private void v1BuiltinChat(HttpExchange ex, Map<String, Object> parsed, String prompt, boolean stream,
+            BotAgent target)
             throws IOException {
-        if (agent.isRunning()) {
+        if (target.isRunning()) {
             json(ex, 409, cliEngineError("上一条消息还在处理中，请稍后再试"));
             return;
         }
         String sessionId = str(parsed.get("session_id"));
-        if (!sessionId.isEmpty() && !sessionId.equals(agent.currentSessionId())) {
+        if (sessionId.isEmpty()) {
+            sessionId = str(parsed.get("sessionId"));
+        }
+        if (!sessionId.isEmpty() && !sessionId.equals(target.currentSessionId())) {
             if (!sessionExists(sessionId)) {
                 json(ex, 404, cliEngineError("未找到会话: " + sessionId));
                 return;
             }
-            agent.switchSession(sessionId);
+            target.switchSession(sessionId);
         }
         if (!stream) {
-            String reply = agent.chat(prompt);
+            String reply = target.chat(prompt);
             byte[] out = ChatCompletionResponse.of("z-bot", displayableReply(reply))
                     .toJson().getBytes(StandardCharsets.UTF_8);
             ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
@@ -639,7 +714,7 @@ public final class HttpChannel {
             }
         };
         try {
-            String reply = agent.chat(prompt, listener);
+            String reply = target.chat(prompt, listener);
             synchronized (lock) {
                 if (!emitted[0] && reply != null && !reply.isEmpty()) {
                     write(os, ChatCompletionResponse.sseChunk(completionId, "z-bot", created,
@@ -703,6 +778,32 @@ public final class HttpChannel {
         return c;
     }
 
+    private LocalProjectStore projectStore() {
+        LocalProjectStore s = projectStore;
+        if (s == null) {
+            synchronized (this) {
+                if (projectStore == null) {
+                    projectStore = new LocalProjectStore(agent.getConfig().getConfigDir());
+                }
+                s = projectStore;
+            }
+        }
+        return s;
+    }
+
+    private DirAgentPool dirPool() {
+        DirAgentPool p = dirPool;
+        if (p == null) {
+            synchronized (this) {
+                if (dirPool == null) {
+                    dirPool = new DirAgentPool(agent);
+                }
+                p = dirPool;
+            }
+        }
+        return p;
+    }
+
     /**
      * 资源级动态段 {@code /v1/agents/{id}}、{@code /v1/sessions/{id}} 的唯一入口。
      * 台账里同名那几行就是方法分母：GET 读单条、DELETE 删单条，其余方法 405。
@@ -755,6 +856,7 @@ public final class HttpChannel {
                 return;
             }
             agent.deleteSession(id);
+            projectStore().unbindSession(id);
             json(ex, 200, deleted(id));
             return;
         }
@@ -824,6 +926,205 @@ public final class HttpChannel {
         } catch (RuntimeException e) {
             return System.currentTimeMillis();
         }
+    }
+
+    // ===== 本地执行模式（桌面端本地项目 + 目录 agent + 模型自配） =====
+
+    /** GET /v1/local/projects — 项目列表，名下会话以轻量行内嵌（正文仍走 /v1/sessions/{id}）。 */
+    private void v1LocalProjectsList(HttpExchange ex) throws IOException {
+        Map<String, SessionManager.SessionSummary> all = new LinkedHashMap<String, SessionManager.SessionSummary>();
+        for (SessionManager.SessionSummary s : agent.listSessions()) {
+            all.put(s.id, s);
+        }
+        // 目录 agent 与全局 agent 各持 SessionManager 内存缓存，目录实例新建的会话只进共享库
+        // 不进全局内存 —— 分母必须并上库直查，否则本地项目的会话列表永远缺首轮
+        com.zifang.z.bot.store.StateStore store = agent.getSessionManager().getStore();
+        if (store != null) {
+            for (com.zifang.z.bot.store.StateStore.SessionRow row : store.listSessions()) {
+                if (!all.containsKey(row.id)) {
+                    SessionManager.SessionSummary s = new SessionManager.SessionSummary();
+                    s.id = row.id;
+                    s.title = row.title;
+                    s.createdAt = row.createdAt;
+                    s.messageCount = row.messageCount;
+                    all.put(row.id, s);
+                }
+            }
+        }
+        List<Map<String, Object>> projects = new ArrayList<Map<String, Object>>();
+        for (Map<String, Object> p : projectStore().list()) {
+            Map<String, Object> row = new LinkedHashMap<String, Object>();
+            row.put("id", p.get("id"));
+            row.put("name", p.get("name"));
+            if (p.get("dir") != null) {
+                row.put("dir", p.get("dir"));
+            }
+            row.put("createdAt", p.get("createdAt"));
+            List<Map<String, Object>> sessions = new ArrayList<Map<String, Object>>();
+            Object raw = p.get("sessions");
+            if (raw instanceof List) {
+                for (Object sid : (List<?>) raw) {
+                    SessionManager.SessionSummary s = all.get(String.valueOf(sid));
+                    if (s != null) {
+                        sessions.add(lightSessionRow(s));
+                    }
+                }
+            }
+            row.put("sessions", sessions);
+            projects.add(row);
+        }
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("projects", projects);
+        json(ex, 200, out);
+    }
+
+    /** POST /v1/local/projects — {name, dir?}；dir 缺省 = 默认沙箱根。 */
+    private void v1LocalProjectCreate(HttpExchange ex, String body) throws IOException {
+        Map<String, Object> req = parseObject(body);
+        try {
+            json(ex, 201, projectStore().create(str(req.get("name")), str(req.get("dir"))));
+        } catch (IllegalArgumentException e) {
+            json(ex, 400, cliEngineError(e.getMessage()));
+        } catch (java.io.IOException e) {
+            json(ex, 500, cliEngineError("projects.json 写失败: " + e.getMessage()));
+        }
+    }
+
+    /** DELETE /v1/local/projects/{id} — 删项目（名下会话保留在会话库里，只是摘掉归属）。 */
+    private void v1LocalProjectResource(HttpExchange ex, String method, String path) throws IOException {
+        String id = path.substring("/v1/local/projects/".length());
+        try {
+            id = java.net.URLDecoder.decode(id, "UTF-8").trim();
+        } catch (java.io.UnsupportedEncodingException ignored) {
+        }
+        if (id.isEmpty()) {
+            json(ex, 404, error("not found: " + path));
+            return;
+        }
+        if (!"DELETE".equals(method)) {
+            ex.getResponseHeaders().set("Allow", "DELETE, OPTIONS");
+            json(ex, 405, error(method + " 不是登记方法: /v1/local/projects/{id}（登记：DELETE, OPTIONS）"));
+            return;
+        }
+        deleteLocalProject(ex, id);
+    }
+
+    /** 项目删除的唯一实现：?id= 查询形态与 /{id} 路径段形态共用。 */
+    private void deleteLocalProject(HttpExchange ex, String id) throws IOException {
+        if (projectStore().delete(id)) {
+            json(ex, 200, deleted(id));
+        } else {
+            json(ex, 404, cliEngineError("本地项目不存在: " + id));
+        }
+    }
+
+    private Map<String, Object> lightSessionRow(SessionManager.SessionSummary s) {
+        long created = epochMillis(s.createdAt);
+        Map<String, Object> m = new LinkedHashMap<String, Object>();
+        m.put("id", s.id);
+        m.put("title", s.title == null || s.title.isEmpty() ? "新会话" : s.title);
+        m.put("createdAt", created);
+        m.put("updatedAt", created);
+        return m;
+    }
+
+    /** GET /api/local/model-config — 当前生效的本地模型配置（apiKey 只回有无不回明文）。 */
+    private void apiLocalModelConfigGet(HttpExchange ex) throws IOException {
+        BotConfig cfg = agent.getConfig();
+        BotConfig.Provider p = cfg.activeProvider();
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("provider", p.getCode());
+        out.put("model", cfg.getModel());
+        out.put("baseUrl", p.getBaseUrl() == null ? "" : p.getBaseUrl());
+        out.put("hasApiKey", p.getApiKey() != null && !p.getApiKey().trim().isEmpty());
+        out.put("configDir", cfg.getConfigDir() == null
+                ? BotConfig.defaultConfigDir().getAbsolutePath() : cfg.getConfigDir().getAbsolutePath());
+        json(ex, 200, out);
+    }
+
+    /**
+     * PUT /api/local/model-config — 自配模型落 {@code config.properties}（重启可重载），
+     * 同时热清目录 agent 池：本地任务下一轮对话即用新配置重建；
+     * 全局单例 agent 的模型客户端是构建期冻结的，重启客户端后才换。
+     */
+    private void apiLocalModelConfigPut(HttpExchange ex, String body) throws IOException {
+        Map<String, Object> req = parseObject(body);
+        String code = str(req.get("provider"));
+        String model = str(req.get("model"));
+        String baseUrl = str(req.get("baseUrl"));
+        String apiKey = str(req.get("apiKey"));
+        BotConfig cfg = agent.getConfig();
+        if (code.isEmpty()) {
+            code = cfg.getActiveProviderCode() == null ? "openai" : cfg.getActiveProviderCode();
+        }
+        File configDir = cfg.getConfigDir() != null ? cfg.getConfigDir() : BotConfig.defaultConfigDir();
+        try {
+            File propFile = new File(configDir, "config.properties");
+            Properties props = new Properties();
+            if (propFile.exists()) {
+                java.io.FileInputStream fis = new java.io.FileInputStream(propFile);
+                try {
+                    props.load(fis);
+                } finally {
+                    fis.close();
+                }
+            }
+            LinkedHashSet<String> codes = new LinkedHashSet<String>();
+            for (String c : str(props.getProperty("providers")).split(",")) {
+                if (!c.trim().isEmpty()) {
+                    codes.add(c.trim());
+                }
+            }
+            codes.add(code);
+            StringBuilder joined = new StringBuilder();
+            for (String c : codes) {
+                if (joined.length() > 0) {
+                    joined.append(",");
+                }
+                joined.append(c);
+            }
+            props.setProperty("providers", joined.toString());
+            props.setProperty(code + ".type", AgentOptions.typeOf(code));
+            if (!apiKey.isEmpty()) {
+                props.setProperty(code + ".api.key", apiKey);
+            }
+            if (!baseUrl.isEmpty()) {
+                props.setProperty(code + ".base.url", baseUrl);
+            }
+            if (!model.isEmpty()) {
+                props.setProperty(code + ".model", model);
+                props.setProperty("llm.model", model);
+            }
+            props.setProperty("llm.provider", code);
+            if (!configDir.exists()) {
+                configDir.mkdirs();
+            }
+            File tmp = new File(configDir, "config.properties.tmp");
+            java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp);
+            try {
+                props.store(fos, "z-bot local model config");
+            } finally {
+                fos.close();
+            }
+            java.nio.file.Files.move(tmp.toPath(), propFile.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.io.IOException e) {
+            json(ex, 500, cliEngineError("config.properties 写失败: " + e.getMessage()));
+            return;
+        }
+        cfg.useProvider(code, AgentOptions.typeOf(code),
+                apiKey.isEmpty() ? null : apiKey,
+                baseUrl.isEmpty() ? null : baseUrl,
+                model.isEmpty() ? null : model);
+        dirPool().clear();
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("ok", true);
+        out.put("provider", code);
+        out.put("model", cfg.getModel());
+        out.put("baseUrl", baseUrl.isEmpty() ? String.valueOf(cfg.activeProvider().getBaseUrl()) : baseUrl);
+        out.put("applied", "local-tasks-immediate");
+        json(ex, 200, out);
     }
 
     /** 桌面端 agent 目录面：内置 default 恒在；自定义条目可带 CLI 的 command/args/workingDir。 */

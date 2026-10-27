@@ -610,6 +610,13 @@ public class HttpRouteShapeTest {
                 assertNotNull("台账循环没先建会话，rowfields 会退化成空跑", seededSessionId);
                 return new RequestSpec(path, null, 200, null);
             }
+            if ("/v1/local/projects".equals(path)) {
+                // 台账循环 GET 排在 POST 之前：不先种一条带 dir 的项目，
+                // projects[] 就是空的 / dir 列对拍不出来
+                assertEquals("种子本地项目没建起来", 201, fx.call("POST", "/v1/local/projects",
+                        "{\"name\":\"p28 种项目\",\"dir\":\"" + p28TempDir() + "\"}").code);
+                return new RequestSpec(path, null, 200, null);
+            }
             return new RequestSpec(path, null, 200, null);
         }
         if ("DELETE".equals(r.method())) {
@@ -624,6 +631,11 @@ public class HttpRouteShapeTest {
                         "{\"name\":\"p28 临时 agent\",\"type\":\"jar\"}").body, "id");
                 return new RequestSpec(path + "/" + tmp, null, 200, "\"deleted\":true");
             }
+            if ("/v1/local/projects".equals(path)) {
+                String tmp = onlyText(fx.call("POST", "/v1/local/projects",
+                        "{\"name\":\"p28 临时项目\",\"dir\":\"" + p28TempDir() + "\"}").body, "id");
+                return new RequestSpec(path + "/" + tmp, null, 200, "\"deleted\":true");
+            }
             throw new AssertionError("台账新增了 DELETE 行 " + r + "，但这里没给它请求规格");
         }
         if ("/v1/sessions".equals(path)) {
@@ -631,6 +643,14 @@ public class HttpRouteShapeTest {
         }
         if ("/v1/agents".equals(path)) {
             return new RequestSpec(path, "{\"name\":\"p28 形状 agent\",\"type\":\"jar\"}", 201, null);
+        }
+        if ("/v1/local/projects".equals(path)) {
+            return new RequestSpec(path, "{\"name\":\"p28 形状项目\",\"dir\":\"" + p28TempDir() + "\"}",
+                    201, null);
+        }
+        if ("/api/local/model-config".equals(path)) {
+            return new RequestSpec(path,
+                    "{\"provider\":\"openai\",\"model\":\"p28-shape-model\"}", 200, "\"applied\"");
         }
         if ("/bot/chat".equals(path) || "/bot/chat/stream".equals(path)) {
             return new RequestSpec(path, "{\"message\":\"p28 形状对账\"}", 200, null);
@@ -722,6 +742,11 @@ public class HttpRouteShapeTest {
         JsonNode node = JSON.readTree(json).get(key);
         assertNotNull("响应里没有 " + key + " —— " + json, node);
         return node.asText();
+    }
+
+    /** 本地项目的 dir 必须是真实存在目录（服务端建项目时校验），现场造一个临时目录。 */
+    private static String p28TempDir() throws IOException {
+        return java.nio.file.Files.createTempDirectory("p28-localproj").toFile().getAbsolutePath();
     }
 
     private static int countBearingEndpoints(Map<String, JsonNode> bodies) {

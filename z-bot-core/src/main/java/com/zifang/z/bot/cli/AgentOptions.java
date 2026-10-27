@@ -115,7 +115,7 @@ public class AgentOptions {
     }
 
     /** provider code → kernel provider type；OpenAI 兼容网关（minimax/spark/glm/…）都归 openai。 */
-    static String typeOf(String code) {
+    public static String typeOf(String code) {
         String c = code.toLowerCase();
         if ("anthropic".equals(c) || "claude".equals(c)) {
             return "anthropic";

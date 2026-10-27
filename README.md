@@ -298,7 +298,7 @@ z-msg 的地址与 token **只**由 manifest / CLI 注入（`channel.<name>.conf
 ## 🔌 HTTP / SSE 路由台账
 
 路由清单是被跟踪的文件 [`_doc/005_testing/acceptance/p28/ROUTES.tsv`](_doc/005_testing/acceptance/p28/ROUTES.tsv)：
-**34 行（方法粒度）/ 27 条路径（dispatch 字面量口径）**，与代码不同源就红，不用靠人记：
+**39 行（方法粒度）/ 29 条路径（dispatch 字面量口径）**，与代码不同源就红，不用靠人记：
 
 ```bash
 mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.write=true
@@ -313,6 +313,7 @@ mvn -o test -Dtest=HttpRouteLedgerTest#routesTsvIsInSyncWithLedger -Dp28.routes.
 | 流式 | `POST /bot/chat/stream`（SSE 帧：`step` `thought` `tool_call` `tool_result` `steer` `compact` `final` `done` `error` `confirm`） |
 | OpenAI 兼容面 | `POST /v1/chat/completions`（`agent_type`/`agent_id` 缺省走内置 ReAct；`hermes`/`claude-code` 走 CLI wrapper） |
 | 桌面端适配面 | `GET /health`、`GET/POST/DELETE /v1/sessions`（单条走 `GET/DELETE /v1/sessions/{id}`，创建回 201，删除回 `{deleted:true,id}`）、`GET/POST/DELETE /v1/agents`（列表回 `{agents:[...]}`，单条走 `GET/DELETE /v1/agents/{id}`，内置 `default` 不可删）；z-bot-desk 的 `SessionInfo`/`AgentInfo` 契约；`/workspace/**` 前缀面由 classpath `web/workspace` 托管，产物名带哈希故不进字面量台账 |
+| 本地执行模式 | `GET/POST /v1/local/projects`（本地项目目录，单条删 `DELETE /v1/local/projects/{id}`；`POST /v1/chat/completions` 带 `project_id` 时路由进目录专属 agent）、`GET/PUT /api/local/model-config`（自配模型落 `config.properties`，PUT 热清目录 agent 池） |
 | 会话 | `GET/POST /api/sessions`、`GET /api/session/messages`、`POST /api/session/switch`、`POST /api/session/delete` |
 | 模型 | `GET /api/models`（`ModelCatalogCache#catalog()`，供应商 `GET /v1/models`） |
 | 技能 | `GET /api/skill/list`、`GET/POST /api/skill/sync`、`POST /api/skill/push` |
