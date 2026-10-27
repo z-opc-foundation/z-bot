@@ -1435,6 +1435,17 @@ fn open_in_browser(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 本地执行模式「选择工作文件夹」：原生目录选择框，取消返回 null。
+/// blocking_pick_folder 在主线程会死锁，标 async 让 Tauri 调度到工作线程。
+#[tauri::command(async)]
+fn pick_folder(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    match app.dialog().file().blocking_pick_folder() {
+        Some(p) => p.into_path().ok().map(|b| b.display().to_string()),
+        None => None,
+    }
+}
+
 /// 打开「插件制造 Skill」zip 下载（系统浏览器）：生产前端 publicPath 带构建
 /// 时间戳版本号（/z-team/{VERSION}/skills/...），DMG 内无法预知最新版本号，
 /// 运行时拉首页解析版本前缀；解析失败（本地 dev 根路径部署）退回根路径。
@@ -1818,6 +1829,8 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
+        // 目录选择框（本地执行模式挑工作文件夹）：前端经 __TAURI__.dialog 或 pick_folder 命令消费
+        .plugin(tauri_plugin_dialog::init())
         // 全局快捷键插件：必须注册，否则 setup 里 global_shortcut() 取不到
         // 托管状态会直接 panic（启动即崩），编译期无法发现
         .plugin(
@@ -1845,7 +1858,8 @@ pub fn run() {
             ztool_uninstall,
             ztool_open,
             http_request,
-            open_skill_package
+            open_skill_package,
+            pick_folder
         ])
         .setup(move |app| {
             // 清理 WebView HTTP 磁盘缓存：防止升级后旧版 index.html 残留导致新路由（/quicknote 等）404。
