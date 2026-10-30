@@ -1,9 +1,10 @@
 import {defineConfig} from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import {safeEmptyOutDir} from '../build-tools/safe-vite-plugin.ts'
 
 export default defineConfig({
-    plugins: [react()],
+    plugins: [safeEmptyOutDir(), react()],
     base: '/workspace/',
     clearScreen: false,
     server: {
@@ -25,6 +26,6 @@ export default defineConfig({
         minify: 'esbuild',
         sourcemap: false,
         outDir: path.resolve(__dirname, 'dist'),
-        emptyOutDir: true,
+        emptyOutDir: false,
     },
 });
