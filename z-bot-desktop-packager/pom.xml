@@ -15,7 +15,7 @@
     <version>${revision}</version>
     <packaging>pom</packaging>
 
-    <name>z-bot-desktop-packager</name>
+    <name>z-bot :: desktop-packager</name>
     <description>jpackage 桌面分发包配置: macOS .dmg / Windows .exe / Linux .deb</description>
 
     <!-- maven.compiler.source/target=8 与 project.build.sourceEncoding=UTF-8 由 z-boot-parent 下发

@@ -16,7 +16,7 @@
     <version>${revision}</version>
     <packaging>pom</packaging>
 
-    <name>z-bot-desk</name>
+    <name>z-bot :: desk</name>
     <description>桌面壳：React + Vite 前端 + Tauri 2，前端产物由 build-dmg.sh 拷进 z-bot-core 的 classpath，经 /workspace 下发</description>
 
     <!--

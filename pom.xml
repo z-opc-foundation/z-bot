@@ -31,8 +31,8 @@
     <version>${revision}</version>
     <packaging>pom</packaging>
 
-    <name>z-bot (Local Agent App, cc/Hermes style)</name>
-    <description>本地 agent 应用: CLI + HTTP 双通道 + sandbox + 内置 z-agent-kernel runtime</description>
+    <name>z-bot :: root</name>
+    <description>本地 agent 应用: CLI + HTTP 双通道 + sandbox + 内置 z-agent-kernel runtime / Local Agent App, cc/Hermes style</description>
     <url>https://github.com/z-opc-foundation/z-bot</url>
 
     <licenses>
