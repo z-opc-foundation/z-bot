@@ -25,7 +25,7 @@
           scripts/build-dmg.sh（npm build → 拷 dist 进 z-bot-core classpath → 打 fat JAR → jlink → tauri build）
 
         开发模式：
-          1. 启动后端：java -jar z-bot-core/target/z-bot-core.jar serve --port 28080
+          1. 启动后端：java -jar z-bot-core/target/z-bot-core.jar serve （端口 28080，见 CLI 参数说明）
           2. 启动前端 dev server：cd z-bot-desk && npm run dev
           3. 浏览器访问 http://localhost:5173/workspace（API 代理到 28080）
 
