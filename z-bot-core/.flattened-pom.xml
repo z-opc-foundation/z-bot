@@ -5,7 +5,7 @@
   <groupId>io.github.yuku123</groupId>
   <artifactId>z-bot-core</artifactId>
   <version>0.2.1</version>
-  <name>z-bot-core</name>
+  <name>z-bot :: core</name>
   <description>本地 agent 应用: LLM client + Agent runtime + CLI + HTTP server</description>
   <url>https://github.com/z-opc-foundation/z-bot/z-bot-core</url>
   <licenses>
