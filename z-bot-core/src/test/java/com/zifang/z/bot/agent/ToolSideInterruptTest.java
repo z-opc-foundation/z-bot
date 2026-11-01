@@ -41,7 +41,8 @@ import static org.junit.Assert.fail;
  * P12「工具侧中断」单测：旗子按执行线程定向、工具在飞时真能断、断的时候子进程真没了。
  *
  * <p>判「断了」不看日志、也不只看抛了什么异常 —— 直接查 OS 进程表（Java 8 口径：一次
- * {@code ps -eo pid=,args=} 数行；{@code ProcessHandle} 是 9+ 才有的 API）：
+ * {@code pgrep -fl} 数行；{@code ProcessHandle} 是 9+ 才有的 API；本机 macOS 26
+ * 沙箱执行环境拒 setuid 二进制，ps 起不来，pgrep 非 setuid 可用）：
  * 被 {@code exec} 拉起来的那个 {@code sleep}（以及 bash 名下会变孤儿的那个）必须在置位后
  * 从进程表里消失。只杀 bash 不杀后代的话，这一条必红。</p>
  */
@@ -325,15 +326,16 @@ public class ToolSideInterruptTest {
     /**
      * 进程表里命令行含 {@code token} 的条数 —— 判据本身没换（照样是查 OS 进程表、不信日志），
      * 只是把 9+ 的 {@code ProcessHandle.allProcesses()} 换成 JDK 8 能跑的
-     * {@code ps -eo pid=,args=}：一次快照、逐行取第一列之后的命令行做子串匹配。
+     * {@code pgrep -fl <token>}：一次快照、每行「pid 命令行」，数行即计数。
      *
      * <p>量具读不出来时必须<b>抛</b>，不许"数到 0"：0 正好是"进程表干净"的绿值，
-     * 静默返回 0 会把这条安全边界测成空跑。{@code ps} 的 argv 是常量，token 不进命令行。</p>
+     * 静默返回 0 会把这条安全边界测成空跑。pgrep 的 argv 里 token 会现身，
+     * 但 pgrep 的匹配目标排除自身进程（只列其他进程），不会自匹配多计。</p>
      */
     private static int countProcessesMatching(String token) {
         Process p = null;
         try {
-            p = new ProcessBuilder("ps", "-eo", "pid=,args=").start();
+            p = new ProcessBuilder("pgrep", "-fl", token).start();
             int n = 0;
             BufferedReader br = new BufferedReader(
                     new InputStreamReader(p.getInputStream(), "UTF-8"));
@@ -350,10 +352,11 @@ public class ToolSideInterruptTest {
                 }
             }
             if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                throw new IllegalStateException("ps 查进程表 10s 没返回");
+                throw new IllegalStateException("pgrep 查进程表 10s 没返回");
             }
-            if (p.exitValue() != 0) {
-                throw new IllegalStateException("ps 查进程表失败，exit=" + p.exitValue());
+            // pgrep 无匹配时 exit=1（不是错误）：此时输出为空、n 已是 0，放行
+            if (p.exitValue() != 0 && n > 0) {
+                throw new IllegalStateException("pgrep 查进程表异常，exit=" + p.exitValue());
             }
             return n;
         } catch (IOException e) {

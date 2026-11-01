@@ -30,6 +30,8 @@ public class OsSandboxWrapSmokeTest {
     @Test
     public void wrappedEchoReallyRunsInsideSandbox() throws Exception {
         assumeTrue(SandboxPlatform.detect() == SandboxPlatform.MACOS, "仅 macOS");
+        assumeTrue(SandboxDependencies.isSeatbeltUsable(),
+                "sandbox-exec deny default 在本机被系统拒绝（sandbox_apply: Operation not permitted）");
         File work = Files.createTempDirectory("zbot-sbx-").toFile();
         List<String> wrapped = OsSandboxWrap.wrap(config(work), Arrays.asList("echo", "zbot-sbx-ok"));
         assertTrue(wrapped.get(0).contains("sandbox-exec"), "argv 应被 sandbox-exec 包裹: " + wrapped.get(0));
@@ -41,6 +43,8 @@ public class OsSandboxWrapSmokeTest {
     @Test
     public void writeOutsideWorkdirIsDenied() throws Exception {
         assumeTrue(SandboxPlatform.detect() == SandboxPlatform.MACOS, "仅 macOS");
+        assumeTrue(SandboxDependencies.isSeatbeltUsable(),
+                "Seatbelt 不可用时本用例无意义（进程起不来也算失败，属假阳性）");
         File work = Files.createTempDirectory("zbot-sbx-").toFile();
         File probe = new File(System.getProperty("user.home"), "zbot-sbx-escape-probe");
         List<String> wrapped = OsSandboxWrap.wrap(config(work), Arrays.asList("touch", probe.getPath()));
@@ -52,6 +56,8 @@ public class OsSandboxWrapSmokeTest {
     @Test
     public void sshDirReadIsDenied() throws Exception {
         assumeTrue(SandboxPlatform.detect() == SandboxPlatform.MACOS, "仅 macOS");
+        assumeTrue(SandboxDependencies.isSeatbeltUsable(),
+                "Seatbelt 不可用时本用例无意义（进程起不来也算失败，属假阳性）");
         File sshDir = new File(System.getProperty("user.home"), ".ssh");
         assumeTrue(sshDir.isDirectory(), "无 .ssh 目录可测");
         File[] files = sshDir.listFiles();

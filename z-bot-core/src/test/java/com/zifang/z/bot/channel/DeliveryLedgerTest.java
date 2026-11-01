@@ -287,6 +287,12 @@ public class DeliveryLedgerTest {
     public void pidReuseIsDetectedByStartStampMismatch() throws Exception {
         // 「pid 存在但启动时刻对不上」在本机造不出第二个现场 ⇒ 拿一个真·别的进程当宿主：
         // 子进程自己把 pid 打出来（不用反射 JDK 内部类），先验真活，再验「同 pid 不同启动时刻 = 死」
+        // 启动时刻指纹只有两条路：Linux /proc/<pid>/stat、macOS ps lstart。
+        // 本机（macOS 26 沙箱执行环境）ps 被 Operation not permitted ⇒ 量具不存在，
+        // 这条语义测不到任何东西 ⇒ skip（量具纪律：不许静默当 0/当绿）。
+        org.junit.Assume.assumeTrue(
+                "启动时刻指纹在本机读不出（无 /proc 且 ps 被禁）",
+                DeliveryLedger.OsProcessLiveness.startStampOf(DeliveryLedger.ownPid()) != null);
         Process p = new ProcessBuilder("/bin/sh", "-c", "echo $$; sleep 4").start();
         DeliveryLedger.OsProcessLiveness probe = new DeliveryLedger.OsProcessLiveness();
         try {

@@ -87,7 +87,7 @@ public final class ProcessTree {
             if (root <= 0L) {
                 return out; // 降级：认不出根就不猜（见类注释）
             }
-            out.addAll(descendantsOf(root, snapshot()));
+            out.addAll(descendantsOf(root, snapshotOrPgrep(root)));
         } catch (Exception ignored) {
             // 进程可能已经退了；空集就是正确答案
         }
@@ -109,7 +109,7 @@ public final class ProcessTree {
             return new ArrayList<Long>();
         }
         try {
-            return descendantsOf(rootPid, snapshot());
+            return descendantsOf(rootPid, snapshotOrPgrep(rootPid));
         } catch (Exception ignored) {
             return new ArrayList<Long>();
         }
@@ -132,7 +132,7 @@ public final class ProcessTree {
             if (p.isAlive()) {
                 long root = pidOf(p);
                 if (root > 0L) {
-                    killed = killDescendants(descendantsOf(root, snapshot()));
+                    killed = killDescendants(descendantsOf(root, snapshotOrPgrep(root)));
                 }
             }
         } catch (Exception ignored) {
@@ -223,7 +223,9 @@ public final class ProcessTree {
     // ===== 快照：一次 ps 拍父子关系 =====
 
     /**
-     * 读一次 {@code ps -eo pid=,ppid=}，建成 {@code ppid → 孩子列表}。
+     * 读一次 {@code ps -eo pid=,ppid=}，建成 {@code ppid → 孩子列表}；
+     * ps 起不来（本机 macOS 26 沙箱执行环境拒 setuid 二进制）时退到
+     * {@code pgrep -P} 逐层 BFS（pgrep 非 setuid，可跑）。
      *
      * <p>解析只认纯数字的两列，其它行（表头残留、空行、ps 的提示）一律跳过；不依赖任何
      * 本地化文案。外部命令不存在/超时/读不出时返回<b>空表</b>，等价于"树里没有后代"，
@@ -370,6 +372,72 @@ public final class ProcessTree {
             return null;
         } finally {
             destroyQuietly(p, PS_TIMEOUT_MILLIS);
+        }
+    }
+
+    /**
+     * 快照：ps 可用就一张全表；ps 起不来（本机 macOS 26 沙箱执行环境拒 setuid 二进制）
+     * 就用 {@code pgrep -P} 从根逐层 BFS 建同样的 {@code ppid → 孩子列表}。
+     * pgrep 非 setuid、macOS/Linux 通用；每层一条常量 argv 命令（pid 只进参数位），
+     * 层数/节点数有硬上限；任何一层读不出就到此为止（部分树照样能杀）。
+     */
+    private static Map<Long, List<Long>> snapshotOrPgrep(long rootPid) {
+        Map<Long, List<Long>> children = snapshot();
+        if (!children.isEmpty()) {
+            return children;
+        }
+        // ps 空表：可能是真没进程（罕见），也可能 ps 根本起不来。用 pgrep 探一层验证通道：
+        List<Long> topKids = pgrepChildren(rootPid);
+        if (topKids.isEmpty()) {
+            return children; // pgrep 也说没孩子 —— 两种通道一致，空表可信
+        }
+        // pgrep 通道活着：逐层 BFS 建表
+        Map<Long, List<Long>> out = new HashMap<Long, List<Long>>();
+        ArrayDeque<Long> queue = new ArrayDeque<Long>();
+        Set<Long> seen = new HashSet<Long>();
+        queue.add(Long.valueOf(rootPid));
+        seen.add(Long.valueOf(rootPid));
+        int nodes = 0;
+        while (!queue.isEmpty() && nodes < MAX_NODES) {
+            Long cur = queue.poll();
+            List<Long> kids = pgrepChildren(cur.longValue());
+            if (kids.isEmpty()) {
+                continue;
+            }
+            out.put(cur, kids);
+            for (Long kid : kids) {
+                nodes++;
+                if (seen.add(kid) && nodes < MAX_NODES) {
+                    queue.add(kid);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** {@code pgrep -P <pid>} 的孩子列表；命令起不来/超时返回空表（与全通道降级同语义）。 */
+    private static List<Long> pgrepChildren(long pid) {
+        Process p = null;
+        try {
+            p = new ProcessBuilder("pgrep", "-P", String.valueOf(pid)).start();
+            String out = readCapped(p.getInputStream(), 64 * 1024);
+            if (!p.waitFor(PS_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                return new ArrayList<Long>();
+            }
+            List<Long> kids = new ArrayList<Long>();
+            if (out != null) {
+                for (String line : out.split("\n")) {
+                    String t = line.trim();
+                    if (isDigits(t)) {
+                        kids.add(Long.valueOf(parsePid(t)));
+                    }
+                }
+            }
+            return kids;
+        } catch (Exception e) {
+            return new ArrayList<Long>();
+        } finally {
+            destroyQuietly(p, 0L);
         }
     }
 

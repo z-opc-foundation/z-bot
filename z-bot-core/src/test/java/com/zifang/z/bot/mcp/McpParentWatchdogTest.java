@@ -213,15 +213,18 @@ public class McpParentWatchdogTest {
         long deadline = t0 + DEATH_BUDGET_MILLIS;
         // 扳机挂在"子进程自身的死活/父号"上，不挂 pgrep -P 探针 —— 探针一死它的孩子
         // 立刻被改嫁，那个计数永远先归零，会把"没带走"读成"带走了"。
+        // 注：改嫁判定用 "child 还在不在 pgrep -P 探针 的列表里"（本机 ps 被
+        // macOS 26 沙箱执行环境拒，探针原语见 McpWatchdogProbe）。
         while (System.currentTimeMillis() < deadline) {
             if (!McpWatchdogProbe.alive(child)) {
                 o.millisToGone = System.currentTimeMillis() - t0;
                 o.childStillAlive = false;
                 break;
             }
-            String pp = McpWatchdogProbe.ppidOf(child);
-            if (!String.valueOf(o.probePid).equals(pp.trim())) {
-                o.childPpidAfterAdoption = pp.trim();
+            boolean stillMine = McpWatchdogProbe.directChildrenOf(o.probePid)
+                    .contains(String.valueOf(child));
+            if (!stillMine) {
+                o.childPpidAfterAdoption = "adopted-away";
                 if (!watchdog) {
                     // 对照组：改嫁已成事实，再多看 1.5s（> 监护轮询 0.2s 的 7 个周期）
                     // 确认它不是"只是慢"，而是真的会永久留成孤儿

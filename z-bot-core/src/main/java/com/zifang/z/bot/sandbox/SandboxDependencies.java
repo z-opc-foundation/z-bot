@@ -3,6 +3,7 @@ package com.zifang.z.bot.sandbox;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 沙箱运行时依赖检查。
@@ -14,6 +15,30 @@ public final class SandboxDependencies {
 
     public static boolean isSupported() {
         return SandboxPlatform.detect() != SandboxPlatform.UNSUPPORTED;
+    }
+
+    /**
+     * Seatbelt 真正可用吗？sandbox-exec 存在不等于能用：
+     * 部分 macOS（实测 26.x，SIP 开启）对任何含 deny default 的 profile
+     * 直接 sandbox_apply: Operation not permitted（exit 71）。
+     * 用最小 profile 实跑 /bin/true 探测（约十几毫秒），失败即不可用。
+     */
+    public static boolean isSeatbeltUsable() {
+        if (SandboxPlatform.detect() != SandboxPlatform.MACOS) {
+            return false;
+        }
+        try {
+            Process p = new ProcessBuilder(
+                    "/usr/bin/sandbox-exec", "-p", "(version 1)(deny default)", "/bin/true")
+                    .redirectErrorStream(true).start();
+            if (!p.waitFor(5, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return false;
+            }
+            return p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public static List<String> check(SandboxConfig config) {

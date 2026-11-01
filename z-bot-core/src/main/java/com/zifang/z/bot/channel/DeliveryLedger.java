@@ -237,7 +237,7 @@ public final class DeliveryLedger {
             return stamp;
         }
 
-        /** 进程是否存在：Linux 先看 {@code /proc/<pid>}，没有就退到 {@code ps -p}。 */
+        /** 进程是否存在：Linux 先看 {@code /proc/<pid>}，macOS/ps 不可用退到 {@code kill -0}。 */
         static boolean exists(long pid) {
             if (pid <= 0L) {
                 return false;
@@ -249,7 +249,31 @@ public final class DeliveryLedger {
                 return false; // 有 /proc 却没有这个目录 = 进程不在（Linux 语义），不必再问 ps
             }
             String out = runPs(pid, "pid=");
-            return out != null && out.contains(String.valueOf(pid));
+            if (out != null && out.contains(String.valueOf(pid))) {
+                return true;
+            }
+            // ps 起不来（本机 macOS 26 沙箱执行环境拒 setuid 二进制）：
+            // /bin/kill -0（非 setuid）信号探活 —— rc=0 活；EPERM 也是活但同 uid 进程不会 EPERM；
+            // 进程不在时 rc=1（ESRCH）。
+            return killZeroAlive(pid);
+        }
+
+        /** {@code kill -0 <pid>} 探活：rc=0 即存在。命令本身起不来时返回 false（与 ps 死同语义）。 */
+        private static boolean killZeroAlive(long pid) {
+            Process p = null;
+            try {
+                p = new ProcessBuilder("/bin/kill", "-0", String.valueOf(pid)).start();
+                if (!p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                    return false;
+                }
+                return p.exitValue() == 0;
+            } catch (Exception e) {
+                return false;
+            } finally {
+                if (p != null) {
+                    p.destroyForcibly();
+                }
+            }
         }
 
         /** 进程启动时刻指纹（跨进程可比的同源值）；读不出来返回 {@code null}。 */

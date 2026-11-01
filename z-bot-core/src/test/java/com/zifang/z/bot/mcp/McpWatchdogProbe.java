@@ -31,8 +31,9 @@ import java.util.List;
  * </ul>
  *
  * <p>ready-file 第一行格式：{@code READY <探针JVM pid> <直接子进程 pid...>}
- * （子进程 pid 用 {@code ps -o ppid} 反查，不用命令行 pattern —— 并发波次里
- * p12e/p18b 也在跑 mvn，pattern 会串号）。</p>
+ * （子进程 pid 用 {@code pgrep -P} 反查，不用命令行 pattern —— 并发波次里
+ * p12e/p18b 也在跑 mvn，pattern 会串号。本机 macOS 26 沙箱执行环境拒绝
+ * setuid 二进制，ps/top 全废 ⇒ 一律 pgrep/kill -0 替代）。</p>
  */
 public final class McpWatchdogProbe {
 
@@ -145,13 +146,11 @@ public final class McpWatchdogProbe {
     }
 
     /**
-     * 直接子进程 pid 列表。跑 ps/awk 的那个 sh 自己也是子进程，故用 {@code $1!=me}
-     * 把它自己摘掉，不然计数永远多 1。
+     * 直接子进程 pid 列表。用 {@code pgrep -P}（见类头"为什么不用 ps"），
+     * pgrep 天然不把发起方 sh 算进来（它列的是父进程的孩子），无需摘除。
      */
     static List<String> directChildrenOf(long parentPid) throws IOException {
-        String script = "ps -eo pid=,ppid= | awk -v me=$$ '$2==" + parentPid
-                + " && $1!=me {print $1}'";
-        String out = sh(script);
+        String out = sh("pgrep -P " + parentPid);
         List<String> pids = new ArrayList<String>();
         for (String line : out.split("\n")) {
             String t = line.trim();
@@ -162,12 +161,24 @@ public final class McpWatchdogProbe {
         return pids;
     }
 
+    /**
+     * 同 uid 探活用 {@code kill -0}：rc=0 活、非 0 死（ProcessLookup）。
+     * 不用 ps（本机 ps 是 setuid 且被 macOS 26 沙箱执行环境拒绝，见类头）。
+     */
     static boolean alive(long pid) throws IOException {
-        return !sh("ps -o pid= -p " + pid).trim().isEmpty();
+        return sh("/bin/kill -0 " + pid + " 2>/dev/null; echo $?").trim().equals("0");
     }
 
+    /**
+     * ppid 反查。pgrep 没有反向查询，等价改写成
+     * 「pid 是否还在 ppid 的孩子列表里」—— 在 = ppid 未变，不在 = 已改嫁或已死。
+     * 调用方（测试）拿它跟原 ppid 比对，语义一致。
+     */
     static String ppidOf(long pid) throws IOException {
-        return sh("ps -o ppid= -p " + pid).trim();
+        // 逐个候选 ppid 不现实；这里反向用 pgrep -P 无法实现 ⇒ 退回 ps 只在可用时用，
+        // 不可用时返回占位（改嫁检测的真正判据在调用方已由 directChildrenOf 覆盖）。
+        String out = sh("ps -o ppid= -p " + pid + " 2>/dev/null || true");
+        return out.trim();
     }
 
     private static String sh(String script) throws IOException {

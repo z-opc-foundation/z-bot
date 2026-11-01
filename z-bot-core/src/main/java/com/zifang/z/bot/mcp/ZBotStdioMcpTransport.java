@@ -385,9 +385,12 @@ public final class ZBotStdioMcpTransport implements McpTransport, McpNotificatio
         StringBuilder sb = new StringBuilder();
         sb.append("me=$$").append('\n');
         sb.append("( while :; do").append('\n');
-        sb.append("  pp=`ps -o ppid= -p $me 2>/dev/null | tr -d ' '`").append('\n');
-        sb.append("  [ -z \"$pp\" ] && exit 0").append('\n');
-        sb.append("  [ \"$pp\" != \"").append(jvmPid()).append("\" ] && kill -9 $me 2>/dev/null && exit 0").append('\n');
+        // 改嫁检测原本靠 `ps -o ppid= -p $me`：ps 是 setuid，本机 macOS 26 沙箱执行
+        // 环境 Operation not permitted ⇒ 监护会瞎。改用 kill -0 <jvmPid>（非 setuid）：
+        // jvm 死 ⇒ kill -0 非零 ⇒ 自杀（kill -9 $me —— me 是主 sh 的 pid，exec 后
+        // 就是真 server/sleeper 的 pid，自杀即带走）。jvm 活着但我已被改嫁的窗口
+        // （pid 复用的几毫秒）测不到 —— 远好于监护瞎掉。
+        sb.append("  kill -0 ").append(jvmPid()).append(" 2>/dev/null || kill -9 $me 2>/dev/null").append('\n');
         sb.append("  sleep 0.2").append('\n');
         sb.append("done ) &").append('\n');
         sb.append("exec");

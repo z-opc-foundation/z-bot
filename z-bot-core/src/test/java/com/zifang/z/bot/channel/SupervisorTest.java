@@ -304,6 +304,11 @@ public class SupervisorTest {
 
     @Test
     public void staleLockIsTakenOverAndLiveLockRefusesADoubleBoot() throws Exception {
+        // pid 复用识破依赖「启动时刻指纹」：Linux /proc、macOS ps lstart。
+        // 本机 ps 被 macOS 26 沙箱执行环境拒 ⇒ 指纹读不出 ⇒ 量具不存在，skip（不许空跑当绿）。
+        org.junit.Assume.assumeTrue(
+                "启动时刻指纹在本机读不出（无 /proc 且 ps 被禁）",
+                DeliveryLedger.OsProcessLiveness.startStampOf(DeliveryLedger.ownPid()) != null);
         File configDir = tmp.newFolder("L1");
         Supervisor sup = new Supervisor(configDir);
         // 先起一个真进程拿到它的 pid，等它退出 ⇒ 陈旧锁
