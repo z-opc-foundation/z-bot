@@ -6,7 +6,7 @@
   <artifactId>z-bot-desktop-packager</artifactId>
   <version>0.2.1</version>
   <packaging>pom</packaging>
-  <name>z-bot-desktop-packager</name>
+  <name>z-bot :: desktop-packager</name>
   <description>jpackage 桌面分发包配置: macOS .dmg / Windows .exe / Linux .deb</description>
   <url>https://github.com/z-opc-foundation/z-bot/z-bot-desktop-packager</url>
   <licenses>
