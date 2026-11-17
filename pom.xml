@@ -95,7 +95,7 @@
         -->
         <z-agent-kernel.version>0.2.1</z-agent-kernel.version>
         <jline.version>3.24.1</jline.version>
-        <jackson.version>2.13.5</jackson.version>
+        <jackson.version>2.18.11</jackson.version>
     </properties>
 
     <dependencyManagement>
