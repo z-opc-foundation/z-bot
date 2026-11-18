@@ -22,7 +22,7 @@
     <parent>
         <groupId>io.github.yuku123</groupId>
         <artifactId>z-boot-parent</artifactId>
-        <version>1.2.4</version>
+        <version>1.2.6</version>
         <relativePath/>
     </parent>
 
@@ -95,7 +95,15 @@
         -->
         <z-agent-kernel.version>0.2.1</z-agent-kernel.version>
         <jline.version>3.24.1</jline.version>
-        <jackson.version>2.18.11</jackson.version>
+        <!-- 2026-11-18 第二轮：2.18.11 → 2.22.3（与 z-boot-parent 1.2.4 的 jackson.version 对齐）
+             ⚠ 本仓是 **Java 8 基线**（maven.compiler.source/target=8，由父链下发）——
+             已实测 jackson-databind 2.22.3 的 class major version 仍是 **52**（Java 8），
+             与 2.18.11 一致 ⇒ 抬版不破 Java 8 底线。
+             漏洞侧：2.18.11 经 OSV 逐条复核**并无命中**（本轮全组织扫描确认），
+             所以这次抬的是「版本口径统一」而不是「修漏洞」——
+             旧值 2.18.11 是上一轮遗留的分歧登记位，与 parent 的 2.22.3 不齐。
+             README 里写的 2.13.5 早已过期（实际生效值早就是 2.18.11），一并改齐。 -->
+        <jackson.version>2.22.3</jackson.version>
     </properties>
 
     <dependencyManagement>
@@ -235,24 +243,25 @@
             </dependency>
 
             <!--
-                Jackson 整族留在 2.13.5（地板面值 2.18.6，preflight 现读）：本仓树里的 jackson 只有
-                databind/core/annotations 三件，实测只写 databind 一条时另两件仍落 2.13.5（它们是
-                databind 的传递件），三条都写是按坐标钉死、不靠传递就近（照 z-cache 的 log4j 写法）。
+                Jackson 整族：2026-11-18 第二轮改为 **import jackson-bom**（跟 z-boot-parent 同做法），
+                不再用「三条直接条目一刀切同一个版本号」。
+                改法的原因（实测踩到的）：jackson 各坐标的**补丁线不一致** ——
+                  · jackson-databind / jackson-core：2.22 / 2.22.1 / 2.22.2 / 2.22.3 / 2.22.4 …（有 .3 补丁）
+                  · jackson-annotations：只有 2.20 / 2.21 / 2.22 / 2.23（**没有 2.22.1/2.22.3**）
+                  · jackson-datatype-* / jackson-module-*：同样只到整数版 2.22
+                ⇒ 一刀切钉 `${jackson.version}=2.22.3` 会让 jackson-annotations 去拉
+                  **不存在的 2.22.3**（repo1 上 404，构建期直接失败）。
+                import jackson-bom 之后，每个坐标各取自己那条线的最新版：
+                  databind/core → 2.22.3，annotations/datatype/module → 2.22。
+                漏洞侧：2.18.11 经 OSV 逐条复核并无命中，本轮抬的是「口径统一 + 跟 parent 对齐」，
+                不是「修漏洞」。旧值 2.13.5 / 中途的 2.18.11 都已被这轮取代。
             -->
             <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-databind</artifactId>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
                 <version>${jackson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-core</artifactId>
-                <version>${jackson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-annotations</artifactId>
-                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
             <!--
                 state.db 持久化; 3.41.x 是最后稳定支持 Java 8 的线, 再往上开始要求 Java 11+.
