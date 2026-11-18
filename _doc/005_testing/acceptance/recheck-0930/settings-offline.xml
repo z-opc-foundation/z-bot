@@ -5,7 +5,7 @@
   问题现场：~/.m2 里那批缓存的 provenance（`_remote.repositories`）分两种 id —
     org.junit:junit-bom:5.9.3            -> central        (2026-07-28 记的)
     com.squareup.okhttp3:okhttp:4.10.0   -> maven-central  (更早)
-    io.github.yuku123:z-boot-parent:1.0.21-> maven-central  (09-30 09:56 记的)
+    io.github.yuku123:z-boot-parent:1.2.4-> maven-central  (09-30 09:56 记的)
   离线（-o）时 resolver 要求"记在 provenance 里的那个 repo id 当前上下文里也有"，
   而现在 ~/.m2/settings.xml 只剩 <server id=central>、没有任何 mirror 或额外仓 ⇒
   两种 id 各自缺另一支：不带 -s 时 z-boot-parent 报 "present, but unavailable"，

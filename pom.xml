@@ -22,7 +22,7 @@
     <parent>
         <groupId>io.github.yuku123</groupId>
         <artifactId>z-boot-parent</artifactId>
-        <version>1.2.3</version>
+        <version>1.2.4</version>
         <relativePath/>
     </parent>
 
@@ -79,9 +79,9 @@
             - jackson.version=2.13.5 对地板 2.18.6：刻意的零漂移，靠下面按坐标写的三条直接条目顶住。
             - z-agent-kernel.version=0.2.1：**这格删不得**——下面 12 条 kernel 直接 DM 条目引用的就是这个
               属性，属性一没，那 12 条就解不开。它存在的理由**不是**"顶住 fleet 的旧面值"：
-              `z-boot-parent:1.0.21` 导入的是 `z-boot-fleet:1.0.1`，该 fleet 自己就供
+              `z-boot-parent:1.2.4` 导入的是 `z-boot-fleet:1.0.1`，该 fleet 自己就供
               `z-agent-kernel.version=0.2.1`（同值；fleet 1.0.0 那版才是 0.1.1）。
-              同一次现读（2026-10-01 19:1x）：`z-boot-parent:1.0.21` 的 `<z-boot-fleet.version>` 是
+              同一次现读（2026-10-01 19:1x）：`z-boot-parent:1.2.4` 的 `<z-boot-fleet.version>` 是
               **1.0.1**，该 fleet 里 `z-agent-kernel.version=0.2.1`、`z-bot.version=0.2.0`、
               `z-script.version=1.0.1`（fleet 1.0.0 那版才是 0.1.1 / 0.1.0 / 1.0.0）——此前这里写的
               "对 fleet 的 0.1.1"是 fleet 1.0.0 时代的旧读数，已作废。
@@ -305,7 +305,7 @@
                     <!-- 改 oss：z-boot-parent 那条 flatten 声明是 <inherited>false</inherited>，不下发，
                          本仓必须自己 flatten，否则发布件带着 org parent。判形状按本仓中央上那一版：
                          z-bot-0.1.0.pom 的 <parent> 计数是 0（自包含），而 resolveCiFriendliesOnly 在
-                         换 parent 之后会把 z-boot-parent:1.0.19 原样发出去，也不会解析本仓 DM 里新增的
+                         换 parent 之后会把 z-boot-parent:1.2.4 原样发出去，也不会解析本仓 DM 里新增的
                          ${project.version}（消费方按它自己的版本去解析，z-boot 那侧实测 404）。oss 两者
                          都落字面量，叶子件（中央上 z-bot-core-0.1.0.pom 带
                          <parent>z-bot:0.1.0</parent>）一并变自包含。

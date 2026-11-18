@@ -421,7 +421,7 @@ D_control|entries_after=0                                                       
 2. **在线路径这台机器上不可用**。`~/.m2/…/z-boot-parent-1.0.21.pom.lastUpdated`（09-30 20:02:10，是我那次在线尝试留下的）原文：
    `Could not transfer artifact io.github.yuku123:z-boot-parent:pom:1.0.21 from/to central (https://repo.maven.apache.org/maven2): (certificate_unknown) PKIX path building failed … unable to find valid certification path`
    —— 同一条 URL 用 `curl` 取是 200 ⇒ 这是 **JVM 信任链**断了（本机 TLS 被中间人），不是仓库没有这个件。
-3. **surefire 从 3.2.5 掉到 2.22.2，provider 件本地仓里没有**。抬 `z-boot-parent:1.0.21`（`e2b7540`）之后父链下发
+3. **surefire 从 3.2.5 掉到 2.22.2，provider 件本地仓里没有**。抬 `z-boot-parent:1.2.4`（`e2b7540`）之后父链下发
    `<maven-surefire-plugin.version>2.22.2</maven-surefire-plugin.version>`（现读 `~/.m2/…/z-boot-parent-1.0.21.pom`），
    而抬版之前 pom 没有 `<parent>` ⇒ Maven 3.9.14 用默认 3.2.5，所以 2.22.2 的 provider 一条都没被下载过
    （`bar1-0.log.attempt2-missing-provider`：`1 required artifact is missing`）。

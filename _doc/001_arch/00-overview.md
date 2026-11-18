@@ -14,7 +14,7 @@ z-bot 是 z-opc-foundation 的**本地 agent 应用**（Claude Code / hermes-age
 
 ```
 z-bot/
-├── pom.xml                       # 聚合 POM：z-boot-parent:1.0.21 + <revision>0.2.1</revision> + 12 条 kernel 直接 DM
+├── pom.xml                       # 聚合 POM：z-boot-parent:1.2.4 + <revision>0.2.1</revision> + 12 条 kernel 直接 DM
 ├── z-bot-core/                   # 唯一有代码的模块（jar / shade 件，mainClass=com.zifang.z.bot.ZBot）
 │   └── src/main/java/com/zifang/z/bot/
 │       ├── ZBot.java             # picocli 根命令，10 支顶层子命令
