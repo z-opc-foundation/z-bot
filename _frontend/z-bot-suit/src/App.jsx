@@ -50,6 +50,7 @@ function ProtectedShell() {
         <AppLayout
             menuItems={menuItems}
             appTitle="z-bot Agent 运行时"
+            appShort="z-bot"
             appVersion="0.1.0"
             appUser={user}
             appIcon={{ icon: <img src="/icon.png" alt="z-bot Agent 运行时" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} />, color: '#ef4444', label: 'z-bot Agent 运行时' }}
